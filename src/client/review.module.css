@@ -1,0 +1,442 @@
+/* dsh-git-review — Review tab chrome. All colors come from the harness's
+ * semantic aliases so light/dark themes (and the frosted-glass recipe)
+ * apply without plugin-side branching. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.centered {
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  display: flex;
+}
+
+/* ── toolbar ─────────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  flex: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.branchChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 200px;
+  padding: 3px 9px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.totals {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.totalAdded {
+  color: var(--dsw-alias-state-success-primary);
+  font-weight: 600;
+}
+
+.totalDeleted {
+  color: var(--dsw-alias-state-error-primary);
+  font-weight: 600;
+}
+
+.fileCount {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.toolbarSpacer {
+  flex: 1;
+}
+
+.toolBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toolBtn:hover {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* ── body split ──────────────────────────────────────────────────────── */
+
+.body {
+  display: flex;
+  flex: 1;
+  flex-direction: row;
+  min-height: 0;
+}
+
+/* ── file tree panel ─────────────────────────────────────────────────── */
+
+.treePanel {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 280px;
+  min-height: 0;
+  border-right: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.filterRow {
+  display: flex;
+  flex: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.filterInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+}
+
+.filterInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.treeScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 140px;
+}
+
+.treeEmpty {
+  padding: 18px 12px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12.5px;
+}
+
+.dirRow,
+.fileRow {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  padding-right: 8px;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dirRow:hover,
+.fileRow:hover {
+  background: var(--dsw-alias-fill-hover);
+}
+
+.fileRowActive {
+  background: var(--dsw-alias-fill-active);
+}
+
+.dirName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dirCount {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fileName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.badgeSuccess {
+  color: var(--dsw-alias-state-success-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 16%, transparent);
+}
+
+.badgeBusiness {
+  color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent);
+}
+
+.badgeError {
+  color: var(--dsw-alias-state-error-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 16%, transparent);
+}
+
+.badgeMuted {
+  color: var(--dsw-alias-label-tertiary);
+  background: var(--dsw-alias-fill-hover);
+}
+
+/* ── diff pane ───────────────────────────────────────────────────────── */
+
+.mainPane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.diffPane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.diffHeader {
+  display: flex;
+  flex: none;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.diffPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.diffRename {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.diffHeaderSpacer {
+  flex: 1;
+}
+
+.chip {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.noticeRow {
+  flex: none;
+  padding: 6px 12px;
+  border-bottom: 1px dashed var(--dsw-alias-border-secondary);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 12px;
+}
+
+.diffScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.hunkHeader {
+  padding: 2px 12px;
+  background: var(--dsw-alias-markdown-code-block);
+  color: var(--dsw-alias-label-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: none;
+}
+
+.gapBar {
+  display: block;
+  width: 100%;
+  padding: 3px 12px;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-style: italic;
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.gapBar:hover {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 48px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.cell {
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+}
+
+.cell:nth-child(2n) {
+  border-left: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.cellNo {
+  flex: none;
+  width: 48px;
+  padding: 0 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+.cellText {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cellHatched {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 4px,
+    color-mix(in srgb, var(--dsw-alias-border-l) 55%, transparent) 4px 5px
+  );
+}
+
+.noNewline {
+  margin-left: 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10px;
+  font-style: normal;
+  user-select: none;
+}
+
+.rowDel .cell:nth-child(-n + 2) .cellText:not(.cellHatched) {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 13%, transparent);
+}
+
+.rowAdd .cell:nth-child(n + 3) .cellText:not(.cellHatched) {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 13%, transparent);
+}
+
+.rowPair .cell:nth-child(-n + 2) .cellText:not(.cellHatched) {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 13%, transparent);
+}
+
+.rowPair .cell:nth-child(n + 3) .cellText:not(.cellHatched) {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 13%, transparent);
+}
+
+.diffBottomReserve {
+  height: 140px;
+}
+
+/* ── shared notices / empty states ───────────────────────────────────── */
+
+.paneNotice {
+  padding: 16px;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 12.5px;
+}
+
+.errorText {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.emptyState {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.emptyTitle {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.emptyHint {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}

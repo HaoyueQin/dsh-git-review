@@ -245,10 +245,11 @@ async function gitStatus(cwd: unknown): Promise<GitStatusPayload | { ok: false; 
     added += file.added
     deleted += file.deleted
   }
+  const branch = branchRaw.trim()
   return {
     ok: true,
     root: repoRoot,
-    branch: branchRaw === '' ? null : branchRaw,
+    branch: branch === '' ? null : branch,
     base,
     unbornHead,
     files,

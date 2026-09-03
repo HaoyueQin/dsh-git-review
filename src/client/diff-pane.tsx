@@ -8,7 +8,7 @@
  */
 import { Fragment, useMemo } from 'react'
 import type { ReactNode } from 'react'
-import { parseUnifiedDiff, type DiffCell, type PairRow, type ParsedDiff } from './diff-parse.ts'
+import { parseUnifiedDiff, type PairRow, type ParsedDiff } from './diff-parse.ts'
 import { ExpandIcon, CollapseIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import type { ChangedFile } from '../contract.ts'
@@ -38,7 +38,9 @@ export interface DiffPaneProps {
   t: T
 }
 
-/** One side-by-side row. */
+/** One side-by-side row: FOUR direct grid children (old no, old text,
+ *  new no, new text) — the CSS grid template addresses them by position, so
+ *  the row must not wrap them in any intermediate element. */
 function Row({ row }: { row: PairRow }) {
   const kindClass = row.kind === 'ctx' ? css.rowCtx
     : row.kind === 'del' ? css.rowDel
@@ -46,22 +48,17 @@ function Row({ row }: { row: PairRow }) {
         : css.rowPair
   return (
     <div className={css.row + ' ' + kindClass}>
-      <Cell cell={row.left} />
-      <Cell cell={row.right} />
-    </div>
-  )
-}
-
-/** One side cell: gutter number + code text (hatched placeholder when null). */
-function Cell({ cell }: { cell: DiffCell | null }) {
-  return (
-    <span className={css.cell}>
-      <span className={css.cellNo}>{cell?.no ?? ''}</span>
-      <span className={css.cellText + (cell === null ? ' ' + css.cellHatched : '')}>
-        {cell?.text ?? ''}
-        {cell?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
+      <span className={css.cellNo + (row.left === null ? ' ' + css.cellHatched : '')}>{row.left?.no ?? ''}</span>
+      <span className={css.cellText + (row.left === null ? ' ' + css.cellHatched : '')}>
+        {row.left?.text ?? ''}
+        {row.left?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
-    </span>
+      <span className={css.cellNo + (row.right === null ? ' ' + css.cellHatched : '')}>{row.right?.no ?? ''}</span>
+      <span className={css.cellText + (row.right === null ? ' ' + css.cellHatched : '')}>
+        {row.right?.text ?? ''}
+        {row.right?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
+      </span>
+    </div>
   )
 }
 

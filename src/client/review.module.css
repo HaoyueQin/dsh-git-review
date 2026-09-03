@@ -340,23 +340,13 @@
 
 .row {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) 48px minmax(0, 1fr);
+  grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
   min-width: 0;
 }
 
-.cell {
-  display: flex;
-  flex-direction: row;
-  min-width: 0;
-}
-
-.cell:nth-child(2n) {
-  border-left: 1px solid var(--dsw-alias-border-secondary);
-}
-
+/* The two text cells read as one split sheet: a hairline seam between old
+   and new, and a vertical border closing each side's gutter. */
 .cellNo {
-  flex: none;
-  width: 48px;
   padding: 0 6px;
   color: var(--dsw-alias-label-tertiary);
   font-variant-numeric: tabular-nums;
@@ -364,12 +354,19 @@
   user-select: none;
 }
 
+.cellNo:nth-child(1) {
+  border-right: 1px solid var(--dsw-alias-border-secondary);
+}
+
 .cellText {
-  flex: 1;
   min-width: 0;
   padding: 0 8px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.cellText:nth-child(4) {
+  border-left: 1px solid var(--dsw-alias-border-secondary);
 }
 
 .cellHatched {
@@ -388,20 +385,34 @@
   user-select: none;
 }
 
-.rowDel .cell:nth-child(-n + 2) .cellText:not(.cellHatched) {
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 13%, transparent);
+/* Changed-line coloring, per side, positioned by the row's FOUR direct grid
+   children (gutter 1, text 2 | gutter 3, text 4). Same 7% color-mix tint and
+   gutter color bar the stock diff window uses (theme/glass proven). Gutter
+   bars sit on the gutter's inner edge (toward its text). */
+.rowDel > .cellNo:nth-child(1),
+.rowPair > .cellNo:nth-child(1) {
+  color: var(--dsw-alias-state-error-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent);
+  box-shadow: inset -3px 0 0 0 var(--dsw-alias-state-error-primary);
 }
 
-.rowAdd .cell:nth-child(n + 3) .cellText:not(.cellHatched) {
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 13%, transparent);
+.rowDel > .cellText:nth-child(2),
+.rowPair > .cellText:nth-child(2) {
+  color: var(--dsw-alias-state-error-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent);
 }
 
-.rowPair .cell:nth-child(-n + 2) .cellText:not(.cellHatched) {
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 13%, transparent);
+.rowAdd > .cellNo:nth-child(3),
+.rowPair > .cellNo:nth-child(3) {
+  color: var(--dsw-alias-state-success-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 7%, transparent);
+  box-shadow: inset -3px 0 0 0 var(--dsw-alias-state-success-primary);
 }
 
-.rowPair .cell:nth-child(n + 3) .cellText:not(.cellHatched) {
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 13%, transparent);
+.rowAdd > .cellText:nth-child(4),
+.rowPair > .cellText:nth-child(4) {
+  color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 78%, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 7%, transparent);
 }
 
 .diffBottomReserve {

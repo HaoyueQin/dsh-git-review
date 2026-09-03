@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-review",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "A read-only Review tab for DeepSeek Harness: workspace changes vs HEAD as a filterable file tree with status badges plus per-file side-by-side diffs, served by an in-host fenced git API.",
   "keywords": [
     "deepseek-harness",

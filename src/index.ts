@@ -6,8 +6,12 @@
  * ships):
  *
  *   POST /dsh-git-review/api/status     { cwd }
- *   POST /dsh-git-review/api/file-diff  { cwd, path, untracked?, full? }
+ *   POST /dsh-git-review/api/file-diff  { cwd, path, untracked?, full?, scope? }
  *   GET  /dsh-git-review/api/ping
+ *
+ * `scope` splits the worktree-vs-HEAD diff into its porcelain halves:
+ * 'all' (default) = worktree vs HEAD, 'staged' = index vs HEAD (`--cached`),
+ * 'unstaged' = worktree vs index (plain `git diff`).
  *
  * The Remote API was evaluated first and rejected for an external plugin:
  * mounting a new client namespace requires the harness build's generated
@@ -257,8 +261,19 @@ async function gitStatus(cwd: unknown): Promise<GitStatusPayload | { ok: false; 
   }
 }
 
+/**
+ * Which half of the changes one `file-diff` answer covers. 'all' compares
+ * the worktree against HEAD; 'staged' the index against HEAD; 'unstaged' the
+ * worktree against the index.
+ */
+type DiffScope = 'all' | 'staged' | 'unstaged'
+
+function asScope(value: unknown): DiffScope {
+  return value === 'staged' || value === 'unstaged' ? value : 'all'
+}
+
 /** One `file-diff` answer: single-file unified diff, lazily fetched. */
-async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown): Promise<GitFileDiffPayload> {
+async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown): Promise<GitFileDiffPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -281,20 +296,30 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
   // Expanded view: one huge -U merges every hunk (git folds overlapping
   // context), so "show all context" is a plain re-fetch of the same diff.
   const context = full === true ? 100000 : 3
+  const diffScope = asScope(scope)
+  // 'unstaged' needs no range (worktree vs index) and therefore no fallback;
+  // the staged/all ranges hit the empty-tree literal on an unborn HEAD.
+  const usesBase = diffScope !== 'unstaged'
+  const attempt = (rangeArg: string): Promise<string> => runGit(repoRoot, [
+    'diff',
+    ...(diffScope === 'staged' ? ['--cached'] : []),
+    '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context),
+    ...(usesBase ? [rangeArg] : []),
+    '--', ...pathspecs,
+  ])
   let diffText: string
   try {
-    diffText = await runGit(repoRoot, [
-      'diff', '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context), base, '--', ...pathspecs,
-    ])
-  } catch {
+    diffText = await attempt(base)
+  } catch (error) {
+    if (!usesBase) throw error
     // A diff against the empty tree literal is the one sha256-incompatible
     // path; surface git's own words rather than a generic failure.
-    diffText = await runGit(repoRoot, [
-      'diff', '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context),
-      'HEAD', '--', ...pathspecs,
-    ])
+    diffText = await attempt('HEAD')
   }
   if (diffText === '') {
+    // A scoped fetch legitimately answers "nothing in this half" — the
+    // pseudo-diff fallback below is only about unclassified worktree drift.
+    if (diffScope !== 'all') return { ok: true, binary: false, diff: '', truncated: false }
     // No textual diff: either the file drifted untracked after its status
     // read, or the change is non-textual (mode-only). Pseudo-diff when the
     // file exists untracked; otherwise say so honestly.
@@ -378,7 +403,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'file-diff') {
-          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath']))
+          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope']))
           return
         }
         respond(res, 404, { ok: false, error: 'unknown action' })

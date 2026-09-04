@@ -7,7 +7,7 @@
  */
 import { useMemo } from 'react'
 import type { ChangedFile } from '../contract.ts'
-import { badgeFor, buildFileTree, filterFiles, type TreeEntry } from './file-tree.ts'
+import { badgesFor, buildFileTree, filterFiles, type TreeEntry } from './file-tree.ts'
 import { ChevronIcon, SearchIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
@@ -44,7 +44,7 @@ function FileRow({ entry, depth, selected, onSelect, t }: {
   onSelect: (path: string) => void
   t: T
 }) {
-  const badge = badgeFor(entry.file)
+  const badges = badgesFor(entry.file)
   return (
     <button
       type="button"
@@ -55,12 +55,15 @@ function FileRow({ entry, depth, selected, onSelect, t }: {
     >
       <FileTypeIcon path={entry.path} />
       <span className={css.fileName}>{entry.name}</span>
-      <span
-        className={css.badge + ' ' + badgeClass(badge.tone)}
-        title={t(('badge.' + badge.key) as ReviewKey)}
-      >
-        {badge.glyph}
-      </span>
+      {badges.map((badge, index) => (
+        <span
+          key={index}
+          className={css.badge + ' ' + badgeClass(badge.tone)}
+          title={(badge.staged === true ? t('badge.staged') + ' \u00b7 ' : badge.staged === false ? t('scope.unstaged') + ' \u00b7 ' : '') + t(('badge.' + badge.key) as ReviewKey)}
+        >
+          {badge.glyph}
+        </span>
+      ))}
     </button>
   )
 }

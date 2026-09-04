@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from '../src/git-parse.ts'
 import { parseUnifiedDiff } from '../src/client/diff-parse.ts'
-import { badgeFor, buildFileTree, filterFiles } from '../src/client/file-tree.ts'
+import { badgeFor, badgesFor, buildFileTree, filterFiles } from '../src/client/file-tree.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
 
@@ -198,5 +198,16 @@ assert.equal(badgeFor({ path: 'x', x: 'A', y: 'D', added: 1, deleted: 1, binary:
 assert.equal(badgeFor({ path: 'x', x: 'D', y: ' ', added: 0, deleted: 2, binary: false, untracked: false }).glyph, '\u2212')
 assert.equal(badgeFor({ path: 'x', x: 'R', y: ' ', added: 0, deleted: 0, binary: false, untracked: false }).key, 'renamed')
 assert.equal(badgeFor({ path: 'x', x: ' ', y: 'M', added: 1, deleted: 1, binary: false, untracked: false }).glyph, '\u00b1')
+
+// 17. badgesFor: staged (X) and unstaged (Y) halves render as ordered badges;
+//     untracked stays a single muted '?'; an inactive/inactive row falls back
+//     to one modified badge.
+const dual = badgesFor({ path: 'x', x: 'M', y: 'M', added: 1, deleted: 1, binary: false, untracked: false })
+assert.deepEqual(dual.map(b => [b.glyph, b.staged]), [['\u00b1', true], ['\u00b1', false]])
+const addDelete = badgesFor({ path: 'x', x: 'A', y: 'D', added: 1, deleted: 1, binary: false, untracked: false })
+assert.deepEqual(addDelete.map(b => b.glyph), ['+', '\u2212'])
+assert.deepEqual(addDelete.map(b => b.staged), [true, false])
+assert.deepEqual(badgesFor({ path: 'x', x: ' ', y: ' ', added: 0, deleted: 0, binary: false, untracked: false }).map(b => b.key), ['modified'])
+assert.deepEqual(badgesFor({ ...treeFiles[2] }).map(b => [b.key, b.staged]), [['untracked', undefined]])
 
 console.log('check-parse: all assertions passed')

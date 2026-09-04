@@ -90,20 +90,39 @@ export interface FileBadge {
   key: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked'
   /** CSS tone class suffix in the module (badgeSuccess/badgeBusiness/badgeError/badgeMuted). */
   tone: 'Success' | 'Business' | 'Error' | 'Muted'
+  /** true = staged (index) half, false = unstaged (worktree) half; absent for untracked. */
+  staged?: boolean
+}
+
+/** Map one porcelain status letter to its badge (null = inactive column). */
+function badgeForCode(code: string): FileBadge | null {
+  switch (code) {
+    case 'A': return { glyph: '+', key: 'added', tone: 'Success' }
+    case 'D': return { glyph: '\u2212', key: 'deleted', tone: 'Error' }
+    case 'R': return { glyph: 'R', key: 'renamed', tone: 'Business' }
+    case 'C': return { glyph: 'C', key: 'copied', tone: 'Business' }
+    case 'M':
+    case 'T': return { glyph: '\u00b1', key: 'modified', tone: 'Business' }
+    default: return null
+  }
 }
 
 /**
- * Derive one badge per file from the porcelain columns. Porcelain reports
- * staged (X) and unstaged (Y) separately; the panel shows the loudest state:
- * untracked → added → deleted → renamed/copied → modified.
+ * Derive the badges per file from the porcelain columns: porcelain reports
+ * staged (X) and unstaged (Y) separately, so a file changed in both halves
+ * renders TWO badges (staged first). Untracked renders its single '?'.
  */
+export function badgesFor(file: ChangedFile): FileBadge[] {
+  if (file.untracked) return [{ glyph: '?', key: 'untracked', tone: 'Muted' }]
+  const out: FileBadge[] = []
+  const x = badgeForCode(file.x)
+  if (x !== null) out.push({ ...x, staged: true })
+  const y = badgeForCode(file.y)
+  if (y !== null) out.push({ ...y, staged: false })
+  return out.length > 0 ? out : [{ glyph: '\u00b1', key: 'modified', tone: 'Business' }]
+}
+
+/** The loudest single badge (first of {@link badgesFor}). */
 export function badgeFor(file: ChangedFile): FileBadge {
-  if (file.untracked) return { glyph: '?', key: 'untracked', tone: 'Muted' }
-  const x = file.x
-  const y = file.y
-  if (x === 'A' || y === 'A') return { glyph: '+', key: 'added', tone: 'Success' }
-  if (x === 'D' || y === 'D') return { glyph: '\u2212', key: 'deleted', tone: 'Error' }
-  if (x === 'R') return { glyph: 'R', key: 'renamed', tone: 'Business' }
-  if (x === 'C') return { glyph: 'C', key: 'copied', tone: 'Business' }
-  return { glyph: '\u00b1', key: 'modified', tone: 'Business' }
+  return badgesFor(file)[0] ?? { glyph: '\u00b1', key: 'modified', tone: 'Business' }
 }

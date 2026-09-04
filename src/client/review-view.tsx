@@ -12,7 +12,7 @@ import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { GitFileDiffPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
 import { hostCall } from './api.ts'
 import { BranchIcon, RefreshIcon } from './icons.tsx'
-import { DiffPane } from './diff-pane.tsx'
+import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { TreePanel } from './tree-panel.tsx'
 import type { NS } from './locales.ts'
 import css from './review.module.css'
@@ -51,8 +51,8 @@ async function loadStatus(cwd: string): Promise<Exclude<StatusState, { kind: 'lo
 }
 
 /** Fetch one file's diff; keeps non-ok payloads as explicit failures. */
-async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean): Promise<Exclude<DiffState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full })
+async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean, scope: DiffScope): Promise<Exclude<DiffState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full, scope })
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
@@ -74,6 +74,7 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   const [filter, setFilter] = useState('')
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [diffFull, setDiffFull] = useState(false)
+  const [diffScope, setDiffScope] = useState<DiffScope>('all')
   const [diff, setDiff] = useState<DiffState>({ kind: 'idle' })
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
@@ -99,7 +100,8 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   )
 
   // Diff lifecycle: whenever the selected file, its untracked-ness (a status
-  // refresh may reclassify it), or the context depth changes.
+  // refresh may reclassify it), the context depth, or the staged/unstaged
+  // scope changes.
   useEffect(() => {
     if (cwd === undefined || selected === null || selectedFile === null) {
       setDiff({ kind: 'idle' })
@@ -107,11 +109,11 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     }
     let alive = true
     setDiff({ kind: 'loading' })
-    void loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull).then(next => {
+    void loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope).then(next => {
       if (alive) setDiff(next)
     })
     return () => { alive = false }
-  }, [cwd, selected, selectedFile?.untracked, selectedFile?.origPath, diffFull])
+  }, [cwd, selected, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope])
 
   const toggleDir = useCallback((path: string) => {
     setCollapsed(previous => {
@@ -124,6 +126,12 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
 
   const refresh = useCallback(() => {
     setReloadTick(tick => tick + 1)
+  }, [])
+
+  /** Select a tree file; the staged/unstaged scope resets per selection. */
+  const selectFile = useCallback((path: string) => {
+    setSelected(path)
+    setDiffScope('all')
   }, [])
 
   if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'notRepo' || status.kind === 'error') {
@@ -172,6 +180,8 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
                   size={diff.kind === 'binary' ? diff.size : 0}
                   full={diffFull}
                   onToggleFull={() => { setDiffFull(value => !value) }}
+                  scope={diffScope}
+                  onScopeChange={setDiffScope}
                   t={t}
                 />
               )}
@@ -180,7 +190,7 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
           <TreePanel
             files={data.files}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={selectFile}
             filter={filter}
             onFilterChange={setFilter}
             collapsed={collapsed}

@@ -13,13 +13,16 @@ import { ExpandIcon, CollapseIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import type { ChangedFile } from '../contract.ts'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { NS } from './locales.ts'
+import type { NS, ReviewKey } from './locales.ts'
 import css from './review.module.css'
 
 type T = PropsLocale<typeof NS>['t']
 
 /** Above this row count the pane renders a prefix (with a notice). */
 export const MAX_RENDER_ROWS = 20_000
+
+/** Which half of a file's changes the diff covers (mirrors the host param). */
+export type DiffScope = 'all' | 'staged' | 'unstaged'
 
 /** Props of the diff pane. */
 export interface DiffPaneProps {
@@ -35,6 +38,9 @@ export interface DiffPaneProps {
   /** Whether the pane currently shows expanded (full) context. */
   full: boolean
   onToggleFull: () => void
+  /** Active staged/unstaged scope (tracked files only). */
+  scope: DiffScope
+  onScopeChange: (next: DiffScope) => void
   t: T
 }
 
@@ -66,7 +72,7 @@ function Row({ row }: { row: PairRow }) {
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -86,6 +92,20 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           <span className={css.diffRename}>{t('diff.renamedFrom', { path: file.origPath })}</span>
         )}
         <span className={css.diffHeaderSpacer} />
+        {!file.untracked && (
+          <span className={css.scopeSwitch} role="group" aria-label={t('scope.label')}>
+            {(['all', 'staged', 'unstaged'] as const).map(candidate => (
+              <button
+                key={candidate}
+                type="button"
+                className={css.scopeBtn + (scope === candidate ? ' ' + css.scopeBtnActive : '')}
+                onClick={() => { onScopeChange(candidate) }}
+              >
+                {t(('scope.' + candidate) as ReviewKey)}
+              </button>
+            ))}
+          </span>
+        )}
         <button type="button" className={css.toolBtn} onClick={onToggleFull} title={full ? t('collapseAll') : t('expandAll')}>
           {full ? <CollapseIcon /> : <ExpandIcon />}
           <span>{full ? t('collapseAll') : t('expandAll')}</span>

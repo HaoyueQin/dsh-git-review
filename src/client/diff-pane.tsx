@@ -75,7 +75,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
       ? t('diff.truncated')
       : null
   return (
-    <div className={css.diffPane}>
+    <div className={css.diffPane} data-git-review-diff="">
       <div className={css.diffHeader}>
         <FileTypeIcon path={file.path} />
         <span className={css.diffPath}>{file.path}</span>

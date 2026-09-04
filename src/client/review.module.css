@@ -1,6 +1,11 @@
 /* dsh-git-review — Review tab chrome. All colors come from the harness's
- * semantic aliases so light/dark themes (and the frosted-glass recipe)
- * apply without plugin-side branching. */
+ * semantic aliases so light/dark themes apply without plugin-side branching.
+ * Frosted glass (deepseek-harness-background v1, fill mode) targets
+ * [data-git-review-toolbar] / [data-git-review-tree] / [data-git-review-diff]:
+ * the registry takes over their background-color + blur chain while the glass
+ * is on, and every surface falls back to this stylesheet when it is off.
+ * Keep fills in this stylesheet (never inline style backgrounds) so the fill
+ * takeover wins the cascade. */
 
 .root {
   display: flex;

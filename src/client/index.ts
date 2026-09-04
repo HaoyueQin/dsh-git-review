@@ -24,6 +24,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { ReviewView, type ReviewInjected } from './review-view.tsx'
 import { en, NS, zh, type ReviewKey } from './locales.ts'
+import { subscribeGlassReady } from './glass.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -43,6 +44,28 @@ export const inject = ['slots', 'sessions', 'locale']
  */
 export function apply(ctx: ClientContext & { sessions: ISessions }): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-git-review: dictionaries')
+  // Frosted-glass surfaces (deepseek-harness-background v1 bridge, fill mode:
+  // the review root paints --dsw-alias-bg-layer-1, outside the auto-transparency
+  // table, so the registry takes over the fill as well as the blur chain).
+  // Zero-dependency: absent bridge means no registration, UI unchanged.
+  ctx.effect(() => {
+    let unregister: (() => void) | undefined
+    let disposed = false
+    const unsubscribe = subscribeGlassReady(glass => {
+      if (disposed) return
+      unregister?.()
+      unregister = glass.register({
+        plugin: 'dsh-git-review',
+        selectors: ['[data-git-review-toolbar]', '[data-git-review-tree]', '[data-git-review-diff]'],
+        mode: 'fill',
+      })
+    })
+    return () => {
+      disposed = true
+      unsubscribe()
+      unregister?.()
+    }
+  }, 'dsh-git-review: frosted-glass surfaces')
   // Registration-time text (the view tab label) reads through the bound
   // translate as a thunk, so it follows the active locale without
   // re-registration.

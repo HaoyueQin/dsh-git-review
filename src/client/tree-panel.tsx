@@ -117,7 +117,7 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
   const tree = useMemo(() => buildFileTree(visible), [visible])
   const flat = filter.trim() !== ''
   return (
-    <div className={css.treePanel}>
+    <div className={css.treePanel} data-git-review-tree="">
       <label className={css.filterRow}>
         <SearchIcon />
         <input

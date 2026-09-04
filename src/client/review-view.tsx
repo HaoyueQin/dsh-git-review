@@ -133,7 +133,7 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   const data = ready
   return (
     <div className={css.root} data-conversation-composer-overlay="">
-      <header className={css.toolbar}>
+      <header className={css.toolbar} data-git-review-toolbar="">
         <span className={css.branchChip} title={t('branch')}>
           <BranchIcon />
           {data?.branch ?? '\u2014'}

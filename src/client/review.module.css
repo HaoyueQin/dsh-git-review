@@ -5,7 +5,14 @@
  * the registry takes over their background-color + blur chain while the glass
  * is on, and every surface falls back to this stylesheet when it is off.
  * Keep fills in this stylesheet (never inline style backgrounds) so the fill
- * takeover wins the cascade. */
+ * takeover wins the cascade.
+ *
+ * Glass gate root override (the actual frosted-glass fix): the background
+ * painter makes the app shell base transparent while the glass is on, but
+ * .root repaints opaque bg-layer-1 (a token the painter deliberately leaves
+ * alone), sealing the wallpaper out and reducing every registered surface
+ * to blurred solid color. Under the gate the root stays transparent so the
+ * toolbar/tree/diff fills + blur chain have real wallpaper to frost. */
 
 .root {
   display: flex;
@@ -24,6 +31,10 @@
   justify-content: center;
   gap: 10px;
   display: flex;
+}
+
+body[data-dsh-bg-glass] .root {
+  background-color: transparent;
 }
 
 /* ── toolbar ─────────────────────────────────────────────────────────── */

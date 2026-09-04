@@ -4,8 +4,8 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from '../src/git-parse.ts'
-import { parseUnifiedDiff } from '../src/client/diff-parse.ts'
+import { countOccurrences, mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, splitDiffSections } from '../src/git-parse.ts'
+import { parseUnifiedDiff, splitByMatch } from '../src/client/diff-parse.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
@@ -221,5 +221,36 @@ assert.deepEqual(merged.map(f => [f.path, f.unchanged === true]), [
 assert.deepEqual(badgesFor(merged[1]), [])
 // treeFiles[2] is the untracked readme.md — its row (x='?') passes through.
 assert.equal(merged[2].x, '?')
+
+// 19. countOccurrences: case-insensitive, non-overlapping, empty needle = 0.
+assert.equal(countOccurrences('aBc AbC abc', 'abc'), 3)
+assert.equal(countOccurrences('abc', ''), 0)
+assert.equal(countOccurrences('', 'abc'), 0)
+
+// 20. splitDiffSections: path from +++ (b/ stripped), deletion falls back to
+//     --- (a/ stripped), body starts at @@ (headers never match queries).
+const fullDiff = [
+  'diff --git a/one.ts b/one.ts',
+  'index 111..222 100644',
+  '--- a/one.ts',
+  '+++ b/one.ts',
+  '@@ -1 +1 @@',
+  '-alpha',
+  '+ALPHA beta',
+  'diff --git a/gone.md b/gone.md',
+  '--- a/gone.md',
+  '+++ /dev/null',
+  '@@ -1 +0,0 @@',
+  '-gamma',
+].join('\n')
+const sections = splitDiffSections(fullDiff)
+assert.deepEqual(sections.map(s => s.path), ['one.ts', 'gone.md'])
+assert.equal(countOccurrences(sections[0].body, 'alpha'), 2)
+assert.equal(countOccurrences(sections[0].body, 'index'), 0)
+assert.equal(countOccurrences(sections[1].body, 'gamma'), 1)
+
+// 21. splitByMatch: odd indices are the matched substrings; no match = [text].
+assert.deepEqual(splitByMatch('x Foo y FOO z', 'foo'), ['x ', 'Foo', ' y ', 'FOO', ' z'])
+assert.deepEqual(splitByMatch('nothing', 'foo'), ['nothing'])
 
 console.log('check-parse: all assertions passed')

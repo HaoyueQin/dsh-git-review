@@ -9,9 +9,9 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
+import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
 import { hostCall } from './api.ts'
-import { BranchIcon, RefreshIcon } from './icons.tsx'
+import { BranchIcon, RefreshIcon, SearchIcon } from './icons.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { mergeAllFiles } from './file-tree.ts'
@@ -94,6 +94,11 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   const [allFiles, setAllFiles] = useState<string[] | null>(null)
   const [allFilesFailed, setAllFilesFailed] = useState(false)
   const [viewMode, setViewMode] = useState<FileViewMode>('diff')
+  // Content search: the draft debounces into the committed query; matches map
+  // drives the tree's per-file count chips and the diff pane's highlighting.
+  const [searchDraft, setSearchDraft] = useState('')
+  const [search, setSearch] = useState('')
+  const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
   // workspace changes. A refresh keeps the previous list visible (loading
@@ -128,6 +133,33 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     })
     return () => { alive = false }
   }, [treeMode, cwd, reloadTick])
+
+  // Search lifecycle: 400ms debounce on the draft, then one host call per
+  // committed query (re-run on refresh; cleared with the draft).
+  useEffect(() => {
+    const trimmed = searchDraft.trim()
+    if (trimmed === '') {
+      setSearch('')
+      return
+    }
+    const timer = setTimeout(() => { setSearch(trimmed) }, 400)
+    return () => { clearTimeout(timer) }
+  }, [searchDraft])
+
+  useEffect(() => {
+    if (search === '' || cwd === undefined) {
+      setSearchMatches(null)
+      return
+    }
+    let alive = true
+    void hostCall<GitSearchPayload>('search', { cwd, query: search }).then(payload => {
+      if (!alive) return
+      setSearchMatches(payload !== null && payload.ok
+        ? new Map(payload.matches.map(match => [match.path, match.count] as const))
+        : null)
+    })
+    return () => { alive = false }
+  }, [search, cwd, reloadTick])
 
   const ready = status.kind === 'ready' ? status.data : null
   /** Every repository row in all-files mode (changed rows merged in); null in changes mode. */
@@ -207,6 +239,20 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
             <span className={css.fileCount}>{t('filesChanged', { count: data.files.length })}</span>
           </span>
         )}
+        <label className={css.searchBox}>
+          <SearchIcon />
+          <input
+            className={css.searchInput}
+            value={searchDraft}
+            onChange={event => { setSearchDraft(event.target.value) }}
+            onKeyDown={event => { if (event.key === 'Escape') setSearchDraft('') }}
+            placeholder={t('search.placeholder')}
+            spellCheck={false}
+          />
+          {search !== '' && (
+            <span className={css.searchMeta}>{searchMatches === null ? '\u2026' : t('search.files', { count: searchMatches.size })}</span>
+          )}
+        </label>
         <span className={css.toolbarSpacer} />
         <button type="button" className={css.toolBtn} onClick={refresh} title={t('refresh')}>
           <RefreshIcon />
@@ -253,6 +299,7 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
                     onScopeChange={setDiffScope}
                     view={effectiveView}
                     onViewChange={setViewMode}
+                    search={search}
                     t={t}
                   />
                 )}
@@ -269,6 +316,7 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
             mode={treeMode}
             onModeChange={changeTreeMode}
             listFailed={allFilesFailed}
+            matchCounts={searchMatches ?? undefined}
             t={t}
           />
         )}

@@ -107,3 +107,17 @@ export interface GitListFilesPayload {
   /** True when the list was cut at the host's entry cap. */
   truncated: boolean
 }
+
+/** One per-file content-search result. */
+export interface GitSearchMatch {
+  path: string
+  count: number
+}
+
+/** Successful `search` payload: per-file case-insensitive match counts, loudest first. */
+export interface GitSearchPayload {
+  ok: true
+  matches: GitSearchMatch[]
+  /** True when part of the workspace was skipped (untracked cap) — results partial. */
+  truncated: boolean
+}

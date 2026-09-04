@@ -107,6 +107,67 @@ export function numstatIndex(rows: readonly NumstatRow[]): Map<string, NumstatRo
   return index
 }
 
+/** Case-insensitive occurrence count of `needle` in `haystack` (empty needle → 0). */
+export function countOccurrences(haystack: string, needle: string): number {
+  if (needle === '') return 0
+  const lower = haystack.toLowerCase()
+  const q = needle.toLowerCase()
+  let count = 0
+  let at = lower.indexOf(q)
+  while (at !== -1) {
+    count += 1
+    at = lower.indexOf(q, at + q.length)
+  }
+  return count
+}
+
+/** One per-file section of a full `git diff` text. */
+export interface DiffSection {
+  /** Path parsed from the +++ (or ---) header line; null when unclear. */
+  path: string | null
+  /** Hunk body (everything from the first @@ of the section onward). */
+  body: string
+}
+
+/**
+ * Split a full `git diff` output into per-file sections. The path comes from
+ * the `+++ b/<path>` line (deletions fall back to `--- a/<path>`); the body
+ * starts at the section's first `@@` so header noise (index/mode lines) never
+ * matches a user query.
+ */
+export function splitDiffSections(diffText: string): DiffSection[] {
+  const sections: DiffSection[] = []
+  let current: (DiffSection & { started: boolean }) | null = null
+  const flush = (): void => {
+    if (current !== null) sections.push({ path: current.path, body: current.body })
+    current = null
+  }
+  for (const line of diffText.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      flush()
+      current = { path: null, body: '', started: false }
+      continue
+    }
+    if (current === null) continue
+    if (!current.started) {
+      if (line.startsWith('+++ ')) {
+        const field = line.slice(4).trim()
+        if (field !== '/dev/null') current.path = field.startsWith('b/') ? field.slice(2) : field
+      } else if (line.startsWith('--- ') && current.path === null) {
+        const field = line.slice(4).trim()
+        if (field !== '/dev/null') current.path = field.startsWith('a/') ? field.slice(2) : field
+      } else if (line.startsWith('@@')) {
+        current.started = true
+        current.body = line + '\n'
+      }
+      continue
+    }
+    current.body += line + '\n'
+  }
+  flush()
+  return sections
+}
+
 /**
  * Merge porcelain entries with the numstat index into the rendered rows.
  * Untracked files never appear in `diff HEAD` output — their callers pass

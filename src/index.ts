@@ -9,6 +9,7 @@
  *   POST /dsh-git-review/api/file-diff    { cwd, path, untracked?, full?, scope? }
  *   POST /dsh-git-review/api/file-content { cwd, path }
  *   POST /dsh-git-review/api/list-files   { cwd }
+ *   POST /dsh-git-review/api/search       { cwd, query }
  *   GET  /dsh-git-review/api/ping
  *
  * `scope` splits the worktree-vs-HEAD diff into its porcelain halves:
@@ -38,7 +39,8 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
-import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitStatusPayload } from './contract.ts'
+import { countOccurrences, splitDiffSections } from './git-parse.ts'
+import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitSearchPayload, GitStatusPayload } from './contract.ts'
 
 export const name = 'dsh-git-review'
 
@@ -381,6 +383,59 @@ async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
   return { ok: true, files: sorted.slice(0, LIST_FILES_CAP), truncated: sorted.length > LIST_FILES_CAP }
 }
 
+/** Untracked files scanned by `search` (bounded: 64 files × 256 KiB). */
+const SEARCH_UNTRACKED_CAP = 64
+const SEARCH_READ_CAP = 256 * 1024
+
+/** One `search` answer: case-insensitive per-file match counts over the full
+ *  worktree-vs-HEAD diff plus untracked file content (bounded). The response
+ *  sorts loudest-first so the tree's top hit is the most-changed file. */
+async function gitSearch(cwd: unknown, query: unknown): Promise<GitSearchPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  if (typeof query !== 'string' || query.trim() === '') return { ok: true, matches: [], truncated: false }
+  const needle = query.slice(0, 200)
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const { base } = await diffBase(repoRoot)
+  let diffText: string
+  try {
+    diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', base])
+  } catch {
+    // The empty-tree literal is the one sha256-incompatible path; git's own
+    // words surface if the retry fails too.
+    diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', 'HEAD'])
+  }
+  const counts = new Map<string, number>()
+  for (const section of splitDiffSections(diffText)) {
+    if (section.path === null || section.body === '') continue
+    const count = countOccurrences(section.body, needle)
+    if (count > 0) counts.set(section.path, count)
+  }
+  // Untracked content never appears in `git diff` — scan bounded prefixes.
+  let untracked: string[] = []
+  try {
+    const porcelain = await runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+    untracked = parsePorcelainV1(porcelain).filter(entry => entry.x === '?').map(entry => entry.path)
+  } catch { /* no untracked scan on status failure */ }
+  let truncated = untracked.length > SEARCH_UNTRACKED_CAP
+  for (const relPath of untracked.slice(0, SEARCH_UNTRACKED_CAP)) {
+    const absPath = resolve(repoRoot, relPath)
+    if (!inside(repoRoot, absPath)) continue
+    try {
+      const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
+      if (bytes.includes(0)) continue
+      const count = countOccurrences(bytes.toString('utf8'), needle)
+      if (count > 0) counts.set(relPath, (counts.get(relPath) ?? 0) + count)
+    } catch {
+      truncated = true
+    }
+  }
+  const matches = [...counts.entries()]
+    .map(([path, count]) => ({ path, count }))
+    .sort((a, b) => b.count - a.count)
+  return { ok: true, matches, truncated }
+}
+
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
 function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -455,6 +510,10 @@ export function apply(ctx: Context): void {
         }
         if (action === 'list-files') {
           respond(res, 200, await gitListFiles(body['cwd']))
+          return
+        }
+        if (action === 'search') {
+          respond(res, 200, await gitSearch(body['cwd'], body['query']))
           return
         }
         respond(res, 404, { ok: false, error: 'unknown action' })

@@ -10,6 +10,7 @@
  * No I/O and no React — the check script imports this file directly under
  * Node's native TS type stripping (Node >= 23.6).
  */
+import { countOccurrences } from '../git-parse.ts'
 
 /** Above this row count any pane renders a prefix (with a notice). */
 export const MAX_RENDER_ROWS = 20_000
@@ -183,4 +184,45 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
   }
   flushRun(hunk)
   return result
+}
+
+/**
+ * Split `text` around case-insensitive occurrences of `search`: odd-index
+ * entries are the matched substrings, even-index the gaps between them.
+ * An empty query (or no match) yields `[text]`.
+ */
+export function splitByMatch(text: string, search: string): string[] {
+  if (search === '') return [text]
+  const q = search.toLowerCase()
+  if (q === '') return [text]
+  const lower = text.toLowerCase()
+  const parts: string[] = []
+  let cursor = 0
+  let at = lower.indexOf(q)
+  while (at !== -1) {
+    parts.push(text.slice(cursor, at), text.slice(at, at + q.length))
+    cursor = at + q.length
+    at = lower.indexOf(q, cursor)
+  }
+  parts.push(text.slice(cursor))
+  return parts
+}
+
+/** Whether either side of the row contains the query (case-insensitive). */
+export function rowHasMatch(row: PairRow, search: string): boolean {
+  if (search === '') return false
+  return (row.left !== null && countOccurrences(row.left.text, search) > 0)
+    || (row.right !== null && countOccurrences(row.right.text, search) > 0)
+}
+
+/** Rows (across all hunks) containing at least one match — the navigation count. */
+export function countMatchRows(parsed: ParsedDiff, search: string): number {
+  if (search === '') return 0
+  let count = 0
+  for (const hunk of parsed.hunks) {
+    for (const row of hunk.rows) {
+      if (rowHasMatch(row, search)) count += 1
+    }
+  }
+  return count
 }

@@ -138,3 +138,13 @@ export interface GitSearchPayload {
   /** True when part of the workspace was skipped (untracked cap) — results partial. */
   truncated: boolean
 }
+
+/** `commit`/`push` answer. Failures carry git's own human-readable words
+ *  (stderr, or stdout for commit's "nothing to commit") verbatim. */
+export interface GitWritePayload {
+  ok: boolean
+  /** Git's stdout on success (e.g. the commit summary). */
+  output?: string
+  /** Failure reason, verbatim from git. */
+  error?: string
+}

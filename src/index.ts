@@ -11,6 +11,8 @@
  *   POST /dsh-git-review/api/list-files   { cwd }
  *   POST /dsh-git-review/api/search       { cwd, query }
  *   POST /dsh-git-review/api/refs         { cwd }
+ *   POST /dsh-git-review/api/commit       { cwd, message, mode?, confirm: true }
+ *   POST /dsh-git-review/api/push         { cwd, confirm: true }
  *   GET  /dsh-git-review/api/ping
  *
  * `status`/`file-diff` accept an optional `base` ref name (validated by
@@ -46,7 +48,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
 import { countOccurrences, normalizeBaseRef, parseNameStatusZ, splitDiffSections } from './git-parse.ts'
-import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload } from './contract.ts'
+import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload } from './contract.ts'
 
 export const name = 'dsh-git-review'
 
@@ -523,6 +525,71 @@ async function gitSearch(cwd: unknown, query: unknown): Promise<GitSearchPayload
   return { ok: true, matches, truncated }
 }
 
+/** Push is a network operation: it outlives the local-git timeout. */
+const PUSH_TIMEOUT_MS = 120_000
+
+/**
+ * Run one git command and resolve BOTH streams plus the exit code — never
+ * rejects. Commit's "nothing to commit" lands on stdout with exit 1: that is
+ * an answer to surface verbatim, not a transport failure, so the write
+ * endpoints need the raw streams rather than runGit's reject-with-stderr.
+ */
+function runGitCapture(root: string, args: readonly string[], timeoutMs: number = GIT_TIMEOUT_MS): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolvePromise) => {
+    execFile('git', ['-C', root, '--no-optional-locks', '-c', 'core.quotepath=false', ...args], {
+      timeout: timeoutMs,
+      maxBuffer: GIT_MAX_BUFFER,
+      windowsHide: true,
+      encoding: 'utf8',
+    }, (error, stdout, stderr) => {
+      const code = error === null
+        ? 0
+        : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : 1
+      resolvePromise({ code, stdout: String(stdout), stderr: String(stderr) })
+    })
+  })
+}
+
+/** One `commit` answer. Write operation: guarded by the explicit confirm flag
+ *  (set by the client's two-step dialog), a non-empty bounded message, and
+ *  `mode` ('all' = `git add -A` first; 'staged' = commit the index as-is). */
+async function gitCommit(cwd: unknown, message: unknown, mode: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'commit requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const trimmed = typeof message === 'string' ? message.trim() : ''
+  if (trimmed === '') return { ok: false, error: 'commit message is required' }
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  if (mode === 'all') {
+    const staged = await runGitCapture(repoRoot, ['add', '-A'])
+    if (staged.code !== 0) {
+      return { ok: false, error: staged.stderr.trim() || staged.stdout.trim() || 'git add failed' }
+    }
+  }
+  // A lone '-' message would parse as an option; '-'-leading messages are
+  // impossible to pass safely, so normalize one leading dash away.
+  const safeMessage = trimmed.startsWith('-') ? ' ' + trimmed : trimmed
+  const result = await runGitCapture(repoRoot, ['commit', '-m', safeMessage.slice(0, 2000)])
+  if (result.code !== 0) {
+    return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git commit failed (exit ' + result.code + ')' }
+  }
+  return { ok: true, output: result.stdout.trim() }
+}
+
+/** One `push` answer: `git push` of the current branch, guarded by the
+ *  explicit confirm flag; git's network diagnostics surface verbatim. */
+async function gitPush(cwd: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'push requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const result = await runGitCapture(repoRoot, ['push'], PUSH_TIMEOUT_MS)
+  if (result.code !== 0) {
+    return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git push failed (exit ' + result.code + ')' }
+  }
+  return { ok: true, output: result.stdout.trim() }
+}
+
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
 function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -593,6 +660,14 @@ export function apply(ctx: Context): void {
         }
         if (action === 'refs') {
           respond(res, 200, await gitRefs(body['cwd']))
+          return
+        }
+        if (action === 'commit') {
+          respond(res, 200, await gitCommit(body['cwd'], body['message'], body['mode'], body['confirm']))
+          return
+        }
+        if (action === 'push') {
+          respond(res, 200, await gitPush(body['cwd'], body['confirm']))
           return
         }
         if (action === 'file-content') {

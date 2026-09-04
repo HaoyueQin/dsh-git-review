@@ -9,11 +9,12 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { countMatchRows, parseUnifiedDiff, rowHasMatch, splitByMatch, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff } from './diff-parse.ts'
-import { ExpandIcon, CollapseIcon } from './icons.tsx'
+import { CommentIcon, ExpandIcon, CollapseIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
 import type { ChangedFile } from '../contract.ts'
-import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InputActions, InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { PropsLocale, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS, ReviewKey } from './locales.ts'
 import css from './review.module.css'
 
@@ -48,6 +49,9 @@ export interface DiffPaneProps {
   search: string
   /** True while a base-branch override is active (scope chips are hidden). */
   baseActive: boolean
+  /** Session input channels for inline comments (absent = feature hidden). */
+  useInput: SnapshotSelectorHook<InputState> | undefined
+  inputActions: InputActions | undefined
   t: T
 }
 
@@ -66,7 +70,7 @@ function renderCellText(cell: DiffCell | null, search: string): ReactNode {
  *  the row must not wrap them in any intermediate element. Rows containing a
  *  search match carry data-diff-match (the navigation target), in document
  *  order equal to their match ordinal. */
-function Row({ row, search, matchOrdinal, active }: { row: PairRow; search: string; matchOrdinal: number | undefined; active: boolean }) {
+function Row({ row, search, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; search: string; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
   const kindClass = row.kind === 'ctx' ? css.rowCtx
     : row.kind === 'del' ? css.rowDel
       : row.kind === 'add' ? css.rowAdd
@@ -87,6 +91,64 @@ function Row({ row, search, matchOrdinal, active }: { row: PairRow; search: stri
         {renderCellText(row.right, search)}
         {row.right?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
+      {onComment !== undefined && (
+        <button
+          type="button"
+          className={css.rowCommentBtn}
+          title={commentTitle}
+          aria-label={commentTitle}
+          onClick={() => { onComment(row.right !== null ? row.right.no : 0) }}
+        >
+          <CommentIcon />
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One row's inline comment editor: appending reads the composer draft INSIDE
+ * this tiny component's render (a draft subscription at the review-view level
+ * would re-render the whole diff on every composer keystroke).
+ */
+function CommentEditor({ path, line, useInput, inputActions, onClose, t }: {
+  path: string
+  line: number
+  useInput: SnapshotSelectorHook<InputState>
+  inputActions: InputActions
+  onClose: () => void
+  t: T
+}) {
+  const [text, setText] = useState('')
+  const draft = useInput((s: InputState) => s.draft)
+  return (
+    <div className={css.commentEditor}>
+      <textarea
+        className={css.commentTextarea}
+        value={text}
+        onChange={event => { setText(event.target.value) }}
+        onKeyDown={event => { if (event.key === 'Escape') onClose() }}
+        placeholder={t('comment.placeholder')}
+        rows={2}
+        autoFocus
+      />
+      <div className={css.commentActions}>
+        <button
+          type="button"
+          className={css.commitBtn}
+          disabled={text.trim() === ''}
+          onClick={() => {
+            const comment = path + ':' + line + ' \u2014 ' + text.trim()
+            const current = draft.replace(/\s+$/, '')
+            inputActions.setDraft(current === '' ? comment : current + '\n\n' + comment)
+            onClose()
+          }}
+        >
+          {t('comment.write')}
+        </button>
+        <button type="button" className={css.commitBtn} onClick={onClose}>{t('comment.cancel')}</button>
+        <span className={css.commentLine}>{path + ':' + line}</span>
+      </div>
     </div>
   )
 }
@@ -95,7 +157,7 @@ function Row({ row, search, matchOrdinal, active }: { row: PairRow; search: stri
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, search, baseActive, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, search, baseActive, useInput, inputActions, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -122,6 +184,8 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
       return ((previous + delta) % matchRowCount + matchRowCount) % matchRowCount
     })
   }, [matchRowCount])
+  // Inline comment editor target: hunk/row coordinates plus the new-side line.
+  const [commentTarget, setCommentTarget] = useState<{ hi: number; ri: number; line: number } | null>(null)
   return (
     <div className={css.diffPane} data-git-review-diff="">
       <div className={css.diffHeader}>
@@ -171,7 +235,21 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
         {!loading && !showBinary && parsed.hunks.length === 0 && (
           <div className={css.paneNotice}>{t('diff.noTextChanges')}</div>
         )}
-        {!loading && renderHunks(parsed, { full, onToggleFull, t, search, activeMatch })}
+        {!loading && renderHunks(parsed, {
+          full,
+          onToggleFull,
+          t,
+          search,
+          activeMatch,
+          file,
+          commentTarget,
+          onCommentStart: useInput !== undefined && inputActions !== undefined
+            ? (hi, ri, line) => { setCommentTarget({ hi, ri, line }) }
+            : undefined,
+          onCommentClose: () => { setCommentTarget(null) },
+          useInput,
+          inputActions,
+        })}
         {/* Seat overlay reserve: the composer card floats over the pane's bottom. */}
         <div className={css.diffBottomReserve} />
       </div>
@@ -182,7 +260,19 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
 /** Render the hunks (with inter-hunk collapse bars) under the global row cap. */
 function renderHunks(
   parsed: ParsedDiff,
-  ui: { full: boolean; onToggleFull: () => void; t: T; search: string; activeMatch: number },
+  ui: {
+    full: boolean
+    onToggleFull: () => void
+    t: T
+    search: string
+    activeMatch: number
+    file: ChangedFile
+    commentTarget: { hi: number; ri: number; line: number } | null
+    onCommentStart: ((hi: number, ri: number, line: number) => void) | undefined
+    onCommentClose: () => void
+    useInput: SnapshotSelectorHook<InputState> | undefined
+    inputActions: InputActions | undefined
+  },
 ): readonly ReactNode[] {
   let budget = MAX_RENDER_ROWS
   let matchCounter = 0
@@ -212,7 +302,31 @@ function renderHunks(
         {rows.map((row, ri) => {
           const matched = rowHasMatch(row, ui.search)
           const ordinal = matched ? matchCounter++ : undefined
-          return <Row key={ri} row={row} search={ui.search} matchOrdinal={ordinal} active={ordinal === ui.activeMatch} />
+          return (
+            <Fragment key={ri}>
+              <Row
+                row={row}
+                search={ui.search}
+                matchOrdinal={ordinal}
+                active={ordinal === ui.activeMatch}
+                commentTitle={ui.t('comment.add')}
+                onComment={ui.onCommentStart !== undefined && row.right !== null
+                  ? (line: number) => { ui.onCommentStart!(hi, ri, line) }
+                  : undefined}
+              />
+              {ui.commentTarget !== null && ui.commentTarget.hi === hi && ui.commentTarget.ri === ri
+                && ui.useInput !== undefined && ui.inputActions !== undefined && (
+                <CommentEditor
+                  path={ui.file.path}
+                  line={ui.commentTarget.line}
+                  useInput={ui.useInput}
+                  inputActions={ui.inputActions}
+                  onClose={ui.onCommentClose}
+                  t={ui.t}
+                />
+              )}
+            </Fragment>
+          )
         })}
       </Fragment>,
     )

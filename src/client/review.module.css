@@ -15,6 +15,7 @@
  * toolbar/tree/diff fills + blur chain have real wallpaper to frost. */
 
 .root {
+  position: relative;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -484,9 +485,160 @@ body[data-dsh-bg-glass] .root {
 }
 
 .row {
+  position: relative;
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) 44px minmax(0, 1fr);
   min-width: 0;
+}
+
+/* Hover comment button: absolutely positioned so it never joins the grid
+   track layout (abspos grid children are out of flow). */
+.rowCommentBtn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.row:hover .rowCommentBtn {
+  opacity: 1;
+}
+
+.rowCommentBtn:hover {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.commentEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px dashed var(--dsw-alias-border-secondary);
+  border-bottom: 1px dashed var(--dsw-alias-border-secondary);
+  background: var(--dsw-alias-fill-hover);
+}
+
+.commentTextarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.commentActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.commentLine {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.commitToggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.commitPop {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+.commitInput {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.commitCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.commitActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.commitBtn {
+  padding: 4px 10px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.commitBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-fill-hover);
+}
+
+.commitBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.commitBtnArmed {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.commitNote {
+  max-height: 140px;
+  overflow: auto;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* The two text cells read as one split sheet: a hairline seam between old

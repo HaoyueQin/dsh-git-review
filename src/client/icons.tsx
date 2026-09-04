@@ -63,3 +63,20 @@ export function BranchIcon({ size = 13 }: IconProps) {
     </svg>
   )
 }
+
+export function CommitIcon({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.6" />
+      <path d="M1.5 8h3.9M10.6 8h3.9" />
+    </svg>
+  )
+}
+
+export function CommentIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+      <path d="M2.5 3.5h11v7h-6l-3 3v-3h-2z" strokeLinejoin="round" />
+    </svg>
+  )
+}

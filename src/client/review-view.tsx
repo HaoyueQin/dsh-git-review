@@ -8,10 +8,11 @@
  * review→agent feedback loop stays one keystroke away.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
+import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload } from '../contract.ts'
 import { hostCall } from './api.ts'
-import { BranchIcon, RefreshIcon, SearchIcon } from './icons.tsx'
+import { BranchIcon, CommitIcon, RefreshIcon, SearchIcon } from './icons.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { mergeAllFiles } from './file-tree.ts'
@@ -77,10 +78,15 @@ function fmtCount(value: number): string {
 }
 
 /**
- * The resident Review view for one session.
- * @param props - injected cwd plus the locale dictionary.
+ * The resident Review view for one session. The session-scope standard kit
+ * (useSession/useInput/inputActions) is assembled by the conversation shell;
+ * typed optional so a kit change degrades instead of crashing.
+ * @param props - injected cwd, locale dictionary and the session standard kit.
  */
-export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<typeof NS>) {
+export function ReviewView({ cwd, t, useSession, useInput, inputActions }: InjectFace<ReviewInjected> & PropsLocale<typeof NS> & Partial<SessionStandardProps>) {
+  // Agent-running gate for the write actions (commit/push) — a boolean
+  // selector keeps re-renders to the running flip only.
+  const running = useSession !== undefined ? (useSession((s: SessionSnapshot) => s.running) ?? false) : false
   const [status, setStatus] = useState<StatusState>({ kind: 'loading' })
   const [reloadTick, setReloadTick] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
@@ -103,6 +109,12 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   // dropdown (fetched alongside each status refresh).
   const [baseRef, setBaseRef] = useState<string | null>(null)
   const [refs, setRefs] = useState<GitRefEntry[] | null>(null)
+  // Commit/push popover state: two-step armed buttons, verbatim git output.
+  const [commitOpen, setCommitOpen] = useState(false)
+  const [commitMessage, setCommitMessage] = useState('')
+  const [stageAll, setStageAll] = useState(true)
+  const [armed, setArmed] = useState<'commit' | 'commitPush' | 'push' | null>(null)
+  const [writeState, setWriteState] = useState<{ kind: 'idle' } | { kind: 'busy' } | { kind: 'result'; ok: boolean; text: string }>({ kind: 'idle' })
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
   // workspace changes. A refresh keeps the previous list visible (loading
@@ -244,6 +256,40 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     setDiffScope('all')
   }, [])
 
+  /** Execute one armed write (commit / commit+push / push) against the host. */
+  const executeWrite = useCallback(async (kind: 'commit' | 'commitPush' | 'push') => {
+    if (cwd === undefined) return
+    setWriteState({ kind: 'busy' })
+    const pushBody = { cwd, confirm: true }
+    const pushCall = async (): Promise<{ ok: boolean; text: string }> => {
+      const payload = await hostCall<GitWritePayload>('push', pushBody)
+      if (payload === null) return { ok: false, text: t('state.hostUnavailable') }
+      return payload.ok ? { ok: true, text: payload.output ?? '' } : { ok: false, text: payload.error ?? 'unknown error' }
+    }
+    let outcome: { ok: boolean; text: string }
+    if (kind === 'push') {
+      outcome = await pushCall()
+    } else {
+      const commitResult = await hostCall<GitWritePayload>('commit', { cwd, message: commitMessage, mode: stageAll ? 'all' : 'staged', confirm: true })
+      if (commitResult === null) {
+        outcome = { ok: false, text: t('state.hostUnavailable') }
+      } else if (!commitResult.ok) {
+        outcome = { ok: false, text: commitResult.error ?? 'unknown error' }
+      } else if (kind === 'commit') {
+        outcome = { ok: true, text: commitResult.output ?? '' }
+      } else {
+        const pushed = await pushCall()
+        outcome = pushed.ok ? { ok: true, text: (commitResult.output ?? '') + '\n' + pushed.text } : pushed
+      }
+    }
+    setWriteState({ kind: 'result', ok: outcome.ok, text: outcome.text })
+    setArmed(null)
+    if (outcome.ok) {
+      if (kind !== 'push') setCommitMessage('')
+      refresh()
+    }
+  }, [cwd, commitMessage, stageAll, refresh, t])
+
   if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'notRepo' || status.kind === 'error') {
     return <CenteredState t={t} status={status} onRetry={refresh} />
   }
@@ -292,7 +338,64 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
           <RefreshIcon />
           <span>{status.kind === 'loading' ? t('refreshing') : t('refresh')}</span>
         </button>
+        <button
+          type="button"
+          className={css.toolBtn + ' ' + css.commitToggle}
+          disabled={data === null || running}
+          title={running ? t('commit.running') : t('commit.title')}
+          onClick={() => { setCommitOpen(value => !value); setArmed(null) }}
+        >
+          <CommitIcon />
+          <span>{t('commit.title')}</span>
+        </button>
       </header>
+      {commitOpen && data !== null && (
+        <div className={css.commitPop}>
+          <textarea
+            className={css.commitInput}
+            value={commitMessage}
+            onChange={event => { setCommitMessage(event.target.value) }}
+            onKeyDown={event => { if (event.key === 'Escape') setCommitOpen(false) }}
+            placeholder={t('commit.message')}
+            rows={3}
+            autoFocus
+          />
+          <label className={css.commitCheck}>
+            <input type="checkbox" checked={stageAll} onChange={event => { setStageAll(event.target.checked) }} />
+            <span>{t('commit.stageAll')}</span>
+          </label>
+          <div className={css.commitActions}>
+            <button
+              type="button"
+              className={css.commitBtn + (armed === 'commit' ? ' ' + css.commitBtnArmed : '')}
+              disabled={running || writeState.kind === 'busy' || commitMessage.trim() === ''}
+              onClick={() => { if (armed === 'commit') void executeWrite('commit'); else setArmed('commit') }}
+            >
+              {armed === 'commit' ? t('commit.confirmCommit') : t('commit.commit')}
+            </button>
+            <button
+              type="button"
+              className={css.commitBtn + (armed === 'commitPush' ? ' ' + css.commitBtnArmed : '')}
+              disabled={running || writeState.kind === 'busy' || commitMessage.trim() === ''}
+              onClick={() => { if (armed === 'commitPush') void executeWrite('commitPush'); else setArmed('commitPush') }}
+            >
+              {armed === 'commitPush' ? t('commit.confirmCommitPush') : t('commit.commitPush')}
+            </button>
+            <button
+              type="button"
+              className={css.commitBtn + (armed === 'push' ? ' ' + css.commitBtnArmed : '')}
+              disabled={running || writeState.kind === 'busy'}
+              onClick={() => { if (armed === 'push') void executeWrite('push'); else setArmed('push') }}
+            >
+              {armed === 'push' ? t('commit.confirmPush') : t('commit.push')}
+            </button>
+          </div>
+          {writeState.kind === 'busy' && <div className={css.commitNote}>{t('commit.busy')}</div>}
+          {writeState.kind === 'result' && (
+            <div className={css.commitNote + (writeState.ok ? '' : ' ' + css.errorText)}>{writeState.text}</div>
+          )}
+        </div>
+      )}
       <div className={css.body}>
         <main className={css.mainPane}>
           {selected === null || selectedFile === null || diff.kind === 'idle'
@@ -335,6 +438,8 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
                     onViewChange={setViewMode}
                     search={search}
                     baseActive={baseRef !== null}
+                    useInput={useInput}
+                    inputActions={inputActions}
                     t={t}
                   />
                 )}

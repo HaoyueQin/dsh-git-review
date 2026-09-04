@@ -4,7 +4,7 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countOccurrences, mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, splitDiffSections } from '../src/git-parse.ts'
+import { countOccurrences, mergeStatus, normalizeBaseRef, numstatIndex, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, splitDiffSections } from '../src/git-parse.ts'
 import { parseUnifiedDiff, splitByMatch } from '../src/client/diff-parse.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 
@@ -252,5 +252,31 @@ assert.equal(countOccurrences(sections[1].body, 'gamma'), 1)
 // 21. splitByMatch: odd indices are the matched substrings; no match = [text].
 assert.deepEqual(splitByMatch('x Foo y FOO z', 'foo'), ['x ', 'Foo', ' y ', 'FOO', ' z'])
 assert.deepEqual(splitByMatch('nothing', 'foo'), ['nothing'])
+
+// 22. normalizeBaseRef: rejects option/range/metacharacter injection, keeps
+//     plain names (dots, dashes, slashes, CJK).
+assert.equal(normalizeBaseRef('feature/foo-1.2'), 'feature/foo-1.2')
+assert.equal(normalizeBaseRef('中文分支'), '中文分支')
+assert.equal(normalizeBaseRef('  main  '), 'main')
+assert.equal(normalizeBaseRef('-oProxyCommand=evil'), null)
+assert.equal(normalizeBaseRef('a..b'), null)
+assert.equal(normalizeBaseRef('a b'), null)
+assert.equal(normalizeBaseRef('a~1'), null)
+assert.equal(normalizeBaseRef('a^2'), null)
+assert.equal(normalizeBaseRef('a:b'), null)
+assert.equal(normalizeBaseRef('a{b'), null)
+assert.equal(normalizeBaseRef(42), null)
+assert.equal(normalizeBaseRef(''), null)
+
+// 23. parseNameStatusZ: plain records take one path token; R/C records take
+//     source then destination (with the score kept from the letter token).
+let nsRows = parseNameStatusZ('M\x00a.ts\x00D\x00b.ts\x00')
+assert.deepEqual(nsRows, [
+  { letter: 'M', path: 'a.ts' },
+  { letter: 'D', path: 'b.ts' },
+])
+nsRows = parseNameStatusZ('R100\x00old.ts\x00new.ts\x00')
+assert.deepEqual(nsRows, [{ letter: 'R', score: '100', path: 'new.ts', origPath: 'old.ts' }])
+assert.deepEqual(parseNameStatusZ(''), [])
 
 console.log('check-parse: all assertions passed')

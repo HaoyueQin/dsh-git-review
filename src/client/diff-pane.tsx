@@ -46,6 +46,8 @@ export interface DiffPaneProps {
   onViewChange: (next: FileViewMode) => void
   /** Active content search query ('' = none); highlights rows + navigation. */
   search: string
+  /** True while a base-branch override is active (scope chips are hidden). */
+  baseActive: boolean
   t: T
 }
 
@@ -93,7 +95,7 @@ function Row({ row, search, matchOrdinal, active }: { row: PairRow; search: stri
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, search, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, search, baseActive, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -144,7 +146,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           </span>
         )}
         <ViewSwitch active={view} onViewChange={onViewChange} t={t} />
-        {!file.untracked && (
+        {!file.untracked && !baseActive && (
           <span className={css.scopeSwitch} role="group" aria-label={t('scope.label')}>
             {(['all', 'staged', 'unstaged'] as const).map(candidate => (
               <button

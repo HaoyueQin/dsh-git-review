@@ -121,6 +121,73 @@ export function countOccurrences(haystack: string, needle: string): number {
   return count
 }
 
+/**
+ * Normalize a request-supplied diff-base ref, or null when it is absent or
+ * unsafe. ExecFile passes argv literally, so git would otherwise parse a
+ * leading '-' as its own option and '..' as a range; this blacklist keeps
+ * every accepted value a plain single ref name (CJK/space-free names only —
+ * space-containing branch names are rejected rather than escaped).
+ */
+export function normalizeBaseRef(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const ref = value.trim()
+  if (ref === '' || ref.length > 256) return null
+  if (ref.startsWith('-') || ref.includes('..') || ref.includes('@{')) return null
+  if (/[\s~^:?*\[\\{}]/.test(ref)) return null
+  return ref
+}
+
+/** One `diff --name-status -z` record. */
+export interface NameStatusRow {
+  /** Status letter: A | C | D | M | R | T (U/X never reach a clean diff). */
+  letter: string
+  /** Rename/copy similarity score (e.g. '100' from 'R100'), when present. */
+  score?: string
+  path: string
+  origPath?: string
+}
+
+/**
+ * Parse `git diff --name-status -z`: records are `X<score?>\0path\0`, with
+ * rename/copy records carrying TWO paths (source, then destination) — the
+ * same companion-token shape porcelain renames use.
+ */
+export function parseNameStatusZ(raw: string): NameStatusRow[] {
+  if (raw === '') return []
+  const tokens = raw.split('\0')
+  const rows: NameStatusRow[] = []
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (token === undefined || token === '') continue
+    const letter = token[0]!
+    const score = token.length > 1 ? token.slice(1) : undefined
+    const firstPath = tokens[i + 1]
+    if (firstPath === undefined || firstPath === '') continue
+    if (letter === 'R' || letter === 'C') {
+      const newPath = tokens[i + 2]
+      i += 2
+      if (newPath !== undefined && newPath !== '') {
+        rows.push(score === undefined
+          ? { letter, path: newPath, origPath: firstPath }
+          : { letter, score, path: newPath, origPath: firstPath })
+      }
+    } else {
+      i += 1
+      rows.push(score === undefined
+        ? { letter, path: firstPath }
+        : { letter, score, path: firstPath })
+    }
+  }
+  return rows
+}
+
+/** Index name-status rows by destination path. */
+export function nameStatusIndex(rows: readonly NameStatusRow[]): Map<string, NameStatusRow> {
+  const index = new Map<string, NameStatusRow>()
+  for (const row of rows) index.set(row.path, row)
+  return index
+}
+
 /** One per-file section of a full `git diff` text. */
 export interface DiffSection {
   /** Path parsed from the +++ (or ---) header line; null when unclear. */

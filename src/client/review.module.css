@@ -65,6 +65,23 @@ body[data-dsh-bg-glass] .root {
   text-overflow: ellipsis;
 }
 
+.branchSelect {
+  max-width: 150px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.baseArrow {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
 .totals {
   display: inline-flex;
   align-items: center;

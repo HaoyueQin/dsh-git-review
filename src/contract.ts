@@ -39,8 +39,25 @@ export interface GitStatusPayload {
   base: string
   /** True when HEAD points at no commit yet (fresh repository). */
   unbornHead: boolean
+  /** Active diff-base override ref name (absent/null = compare against HEAD). */
+  baseRef?: string | null
   files: ChangedFile[]
   totals: { added: number; deleted: number }
+}
+
+/** One selectable ref for the diff-base dropdown. */
+export interface GitRefEntry {
+  /** Short ref name ('main', 'origin/dev', 'v1.0'). */
+  name: string
+  kind: 'branch' | 'remote' | 'tag'
+}
+
+/** Successful `refs` payload: selectable diff-base refs, capped. */
+export interface GitRefsPayload {
+  ok: true
+  refs: GitRefEntry[]
+  /** True when the list was cut at the host's ref cap. */
+  truncated: boolean
 }
 
 /** Failed `status` payload; `isRepository` drives the tab's guidance copy. */

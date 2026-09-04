@@ -10,7 +10,13 @@
  *   POST /dsh-git-review/api/file-content { cwd, path }
  *   POST /dsh-git-review/api/list-files   { cwd }
  *   POST /dsh-git-review/api/search       { cwd, query }
+ *   POST /dsh-git-review/api/refs         { cwd }
  *   GET  /dsh-git-review/api/ping
+ *
+ * `status`/`file-diff` accept an optional `base` ref name (validated by
+ * normalizeBaseRef, re-verified via `rev-parse --verify --end-of-options`):
+ * when it resolves to a commit other than HEAD the comparison runs against
+ * that commit (worktree vs base) instead of HEAD.
  *
  * `scope` splits the worktree-vs-HEAD diff into its porcelain halves:
  * 'all' (default) = worktree vs HEAD, 'staged' = index vs HEAD (`--cached`),
@@ -39,8 +45,8 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
-import { countOccurrences, splitDiffSections } from './git-parse.ts'
-import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitSearchPayload, GitStatusPayload } from './contract.ts'
+import { countOccurrences, normalizeBaseRef, parseNameStatusZ, splitDiffSections } from './git-parse.ts'
+import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload } from './contract.ts'
 
 export const name = 'dsh-git-review'
 
@@ -107,6 +113,16 @@ async function resolveRepository(cwd: string): Promise<string | null> {
   }
   try {
     return (await runGit(workspace, ['rev-parse', '--show-toplevel'])).trim() || null
+  } catch {
+    return null
+  }
+}
+
+/** Resolve a validated base ref to a commit id, or null when it fails. */
+async function resolveBaseCommit(repoRoot: string, ref: string): Promise<string | null> {
+  try {
+    const commit = (await runGit(repoRoot, ['rev-parse', '--verify', '--end-of-options', ref + '^{commit}'])).trim()
+    return commit === '' ? null : commit
   } catch {
     return null
   }
@@ -224,29 +240,54 @@ function capDiff(diffText: string): { diff: string; truncated: boolean } {
   return { diff: cut === -1 ? '' : diffText.slice(0, cut), truncated: true }
 }
 
-/** One `status` answer: repo detection, porcelain + numstat in one shot. */
-async function gitStatus(cwd: unknown): Promise<GitStatusPayload | { ok: false; isRepository: false; error: string }> {
+/** One `status` answer: repo detection, porcelain + numstat in one shot.
+ *  With a validated `base` override the tracked rows come from a
+ *  worktree-vs-base name-status/numstat pair instead (untracked unchanged). */
+async function gitStatus(cwd: unknown, base: unknown): Promise<GitStatusPayload | { ok: false; isRepository: false; error: string }> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) {
     return { ok: false, isRepository: false, error: 'not a git repository (or git is unavailable)' }
   }
-  const { base, unbornHead } = await diffBase(repoRoot)
-  const [branchRaw, porcelainRaw, numstatRaw] = await Promise.all([
+  const { base: headCommit, unbornHead } = await diffBase(repoRoot)
+  const baseRef = normalizeBaseRef(base)
+  const overrideCommit = baseRef === null
+    ? null
+    : await resolveBaseCommit(repoRoot, baseRef).then(commit => (commit !== null && commit !== headCommit ? commit : null))
+  const [branchRaw, porcelainRaw, numstatRaw, nameStatusRaw] = await Promise.all([
     runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ''),
     runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
-    runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', unbornHead ? EMPTY_TREE : 'HEAD']),
+    overrideCommit !== null
+      ? runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', overrideCommit])
+      : runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', unbornHead ? EMPTY_TREE : 'HEAD']),
+    overrideCommit !== null
+      ? runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', overrideCommit])
+      : Promise.resolve(''),
   ])
-  const entries = parsePorcelainV1(porcelainRaw)
+  const porcelainEntries = parsePorcelainV1(porcelainRaw)
   const numstat = numstatIndex(parseNumstatZ(numstatRaw))
+  // Tracked rows: name-status vs base when overridden, porcelain otherwise —
+  // both normalize into PorcelainEntry shapes for mergeStatus. Untracked
+  // ('?') rows always come from porcelain: git diff never lists them.
+  const finalEntries = overrideCommit !== null
+    ? [
+      ...parseNameStatusZ(nameStatusRaw).map(row => ({
+        x: row.letter,
+        y: ' ',
+        path: row.path,
+        origPath: row.origPath,
+      })),
+      ...porcelainEntries.filter(entry => entry.x === '?'),
+    ]
+    : porcelainEntries
   // Untracked files have no numstat row: probe each once (bounded reads).
   const untrackedCounts = new Map<string, { added: number; binary: boolean }>()
-  for (const entry of entries) {
+  for (const entry of finalEntries) {
     if (entry.x !== '?') continue
     const probe = await probeUntracked(repoRoot, entry.path)
     if (probe !== null) untrackedCounts.set(entry.path, probe)
   }
-  const files: ChangedFile[] = mergeStatus(entries, numstat, untrackedCounts)
+  const files: ChangedFile[] = mergeStatus(finalEntries, numstat, untrackedCounts)
   let added = 0
   let deleted = 0
   for (const file of files) {
@@ -258,8 +299,9 @@ async function gitStatus(cwd: unknown): Promise<GitStatusPayload | { ok: false; 
     ok: true,
     root: repoRoot,
     branch: branch === '' ? null : branch,
-    base,
+    base: overrideCommit ?? headCommit,
     unbornHead,
+    baseRef: overrideCommit !== null ? baseRef : null,
     files,
     totals: { added, deleted },
   }
@@ -276,8 +318,10 @@ function asScope(value: unknown): DiffScope {
   return value === 'staged' || value === 'unstaged' ? value : 'all'
 }
 
-/** One `file-diff` answer: single-file unified diff, lazily fetched. */
-async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown): Promise<GitFileDiffPayload> {
+/** One `file-diff` answer: single-file unified diff, lazily fetched. When a
+ *  validated `base` override resolves to a non-HEAD commit, the diff runs
+ *  worktree-vs-base and the staged/unstaged scope is ignored. */
+async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown, base: unknown): Promise<GitFileDiffPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -296,26 +340,32 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
   }
   // diffBase already resolves HEAD → hash, falling back to the empty tree id
   // on an unborn HEAD, so `base` alone is the right range argument.
-  const { base } = await diffBase(repoRoot)
+  const { base: headCommit } = await diffBase(repoRoot)
   // Expanded view: one huge -U merges every hunk (git folds overlapping
   // context), so "show all context" is a plain re-fetch of the same diff.
   const context = full === true ? 100000 : 3
   const diffScope = asScope(scope)
+  const baseRef = normalizeBaseRef(base)
+  const requestedCommit = baseRef === null ? null : await resolveBaseCommit(repoRoot, baseRef)
+  // The override applies only when it actually differs from HEAD; otherwise
+  // the scope semantics (staged/unstaged halves) stay meaningful.
+  const overrideCommit = requestedCommit !== null && requestedCommit !== headCommit ? requestedCommit : null
   // 'unstaged' needs no range (worktree vs index) and therefore no fallback;
-  // the staged/all ranges hit the empty-tree literal on an unborn HEAD.
-  const usesBase = diffScope !== 'unstaged'
-  const attempt = (rangeArg: string): Promise<string> => runGit(repoRoot, [
+  // the staged/all/override ranges hit the empty-tree literal on an unborn HEAD.
+  const usesRange = overrideCommit !== null || diffScope !== 'unstaged'
+  const rangeArg = overrideCommit ?? headCommit
+  const attempt = (range: string): Promise<string> => runGit(repoRoot, [
     'diff',
-    ...(diffScope === 'staged' ? ['--cached'] : []),
+    ...(overrideCommit === null && diffScope === 'staged' ? ['--cached'] : []),
     '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context),
-    ...(usesBase ? [rangeArg] : []),
+    ...(usesRange ? [range] : []),
     '--', ...pathspecs,
   ])
   let diffText: string
   try {
-    diffText = await attempt(base)
+    diffText = await attempt(rangeArg)
   } catch (error) {
-    if (!usesBase) throw error
+    if (!usesRange) throw error
     // A diff against the empty tree literal is the one sha256-incompatible
     // path; surface git's own words rather than a generic failure.
     diffText = await attempt('HEAD')
@@ -323,7 +373,7 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
   if (diffText === '') {
     // A scoped fetch legitimately answers "nothing in this half" — the
     // pseudo-diff fallback below is only about unclassified worktree drift.
-    if (diffScope !== 'all') return { ok: true, binary: false, diff: '', truncated: false }
+    if (diffScope !== 'all' || overrideCommit !== null) return { ok: true, binary: false, diff: '', truncated: false }
     // No textual diff: either the file drifted untracked after its status
     // read, or the change is non-textual (mode-only). Pseudo-diff when the
     // file exists untracked; otherwise say so honestly.
@@ -386,6 +436,43 @@ async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
 /** Untracked files scanned by `search` (bounded: 64 files × 256 KiB). */
 const SEARCH_UNTRACKED_CAP = 64
 const SEARCH_READ_CAP = 256 * 1024
+
+/** Ref cap for the base-branch dropdown (a review tab is not a ref browser). */
+const REFS_CAP = 500
+
+/** One `refs` answer: selectable diff-base refs (branches, remotes, tags).
+ *  Remote HEAD aliases (a `/HEAD` suffix) are skipped: they are pointers,
+ *  not review targets. */
+async function gitRefs(cwd: unknown): Promise<GitRefsPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const raw = await runGit(repoRoot, [
+    'for-each-ref',
+    '--format=%(refname)',
+    'refs/heads',
+    'refs/remotes',
+    'refs/tags',
+  ])
+  const refs: GitRefsPayload['refs'] = []
+  for (const refname of raw.split('\n')) {
+    if (refname === '') continue
+    const entry = refname.startsWith('refs/heads/')
+      ? { name: refname.slice('refs/heads/'.length), kind: 'branch' as const }
+      : refname.startsWith('refs/remotes/')
+        ? { name: refname.slice('refs/remotes/'.length), kind: 'remote' as const }
+          : refname.startsWith('refs/tags/')
+            ? { name: refname.slice('refs/tags/'.length), kind: 'tag' as const }
+              : null
+    if (entry === null || entry.name === '' || entry.name.endsWith('/HEAD')) continue
+    refs.push(entry)
+  }
+  const order = { branch: 0, remote: 1, tag: 2 } as const
+  refs.sort((a, b) => order[a.kind] !== order[b.kind]
+    ? order[a.kind] - order[b.kind]
+    : a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  return { ok: true, refs: refs.slice(0, REFS_CAP), truncated: refs.length > REFS_CAP }
+}
 
 /** One `search` answer: case-insensitive per-file match counts over the full
  *  worktree-vs-HEAD diff plus untracked file content (bounded). The response
@@ -497,11 +584,15 @@ export function apply(ctx: Context): void {
         const action = route.startsWith(API_PREFIX + '/') ? route.slice(API_PREFIX.length + 1) : (route.startsWith('/') ? route.slice(1) : route)
         const body = await readJsonBody(req, res)
         if (action === 'status') {
-          respond(res, 200, await gitStatus(body['cwd']))
+          respond(res, 200, await gitStatus(body['cwd'], body['base']))
           return
         }
         if (action === 'file-diff') {
-          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope']))
+          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope'], body['base']))
+          return
+        }
+        if (action === 'refs') {
+          respond(res, 200, await gitRefs(body['cwd']))
           return
         }
         if (action === 'file-content') {

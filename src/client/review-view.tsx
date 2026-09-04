@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
+import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
 import { hostCall } from './api.ts'
 import { BranchIcon, RefreshIcon, SearchIcon } from './icons.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
@@ -46,16 +46,16 @@ type DiffState =
   | { kind: 'failed'; message: string }
 
 /** Fetch one status snapshot; maps every failure onto an explicit state. */
-async function loadStatus(cwd: string): Promise<Exclude<StatusState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitStatusPayload | GitStatusFailure>('status', { cwd })
+async function loadStatus(cwd: string, base: string | null): Promise<Exclude<StatusState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitStatusPayload | GitStatusFailure>('status', { cwd, base })
   if (payload === null) return { kind: 'hostUnavailable' }
   if (!payload.ok) return payload.isRepository === false ? { kind: 'notRepo' } : { kind: 'error', message: payload.error }
   return { kind: 'ready', data: payload }
 }
 
 /** Fetch one file's diff; keeps non-ok payloads as explicit failures. */
-async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean, scope: DiffScope): Promise<Exclude<DiffState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full, scope })
+async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean, scope: DiffScope, base: string | null): Promise<Exclude<DiffState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full, scope, base })
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
@@ -99,6 +99,10 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
   const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
+  // Diff-base override: null compares against HEAD; the refs list feeds the
+  // dropdown (fetched alongside each status refresh).
+  const [baseRef, setBaseRef] = useState<string | null>(null)
+  const [refs, setRefs] = useState<GitRefEntry[] | null>(null)
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
   // workspace changes. A refresh keeps the previous list visible (loading
@@ -110,8 +114,21 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     }
     let alive = true
     setStatus(previous => (previous.kind === 'ready' || previous.kind === 'error' ? previous : { kind: 'loading' }))
-    void loadStatus(cwd).then(next => {
+    void loadStatus(cwd, baseRef).then(next => {
       if (alive) setStatus(next)
+    })
+    return () => { alive = false }
+  }, [cwd, reloadTick, baseRef])
+
+  // Selectable diff-base refs (branches, remotes, tags).
+  useEffect(() => {
+    if (cwd === undefined) {
+      setRefs(null)
+      return
+    }
+    let alive = true
+    void hostCall<GitRefsPayload>('refs', { cwd }).then(payload => {
+      if (alive) setRefs(payload !== null && payload.ok ? payload.refs : null)
     })
     return () => { alive = false }
   }, [cwd, reloadTick])
@@ -188,12 +205,12 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     const wantFile = selectedFile.unchanged === true || effectiveView === 'file'
     const loader = wantFile
       ? loadFileContent(cwd, selected)
-      : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope)
+      : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope, baseRef)
     void loader.then(next => {
       if (alive) setDiff(next)
     })
     return () => { alive = false }
-  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView])
+  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef])
 
   const toggleDir = useCallback((path: string) => {
     setCollapsed(previous => {
@@ -220,6 +237,13 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     if (mode === 'changes') setAllFiles(null)
   }, [])
 
+  /** Pick a new diff base; the selection resets (the file list changes). */
+  const changeBase = useCallback((ref: string | null) => {
+    setBaseRef(ref)
+    setSelected(null)
+    setDiffScope('all')
+  }, [])
+
   if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'notRepo' || status.kind === 'error') {
     return <CenteredState t={t} status={status} onRetry={refresh} />
   }
@@ -228,10 +252,20 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   return (
     <div className={css.root} data-conversation-composer-overlay="">
       <header className={css.toolbar} data-git-review-toolbar="">
-        <span className={css.branchChip} title={t('branch')}>
+        <label className={css.branchChip} title={t('base.label')}>
           <BranchIcon />
-          {data?.branch ?? '\u2014'}
-        </span>
+          <select
+            className={css.branchSelect}
+            value={baseRef ?? ''}
+            onChange={event => { changeBase(event.target.value === '' ? null : event.target.value) }}
+          >
+            <option value="">{data?.branch ?? 'HEAD'}</option>
+            {(refs ?? []).map(ref => (
+              <option key={ref.kind + ':' + ref.name} value={ref.name}>{ref.name}</option>
+            ))}
+          </select>
+          {baseRef !== null && <span className={css.baseArrow}>{'\u2192'}</span>}
+        </label>
         {data !== null && (
           <span className={css.totals}>
             <span className={css.totalAdded}>{'+' + fmtCount(data.totals.added)}</span>
@@ -300,6 +334,7 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
                     view={effectiveView}
                     onViewChange={setViewMode}
                     search={search}
+                    baseActive={baseRef !== null}
                     t={t}
                   />
                 )}

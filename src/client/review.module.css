@@ -402,33 +402,34 @@ body[data-dsh-bg-glass] .root {
 }
 
 /* Changed-line coloring, per side, positioned by the row's FOUR direct grid
-   children (gutter 1, text 2 | gutter 3, text 4). Same 7% color-mix tint and
-   gutter color bar the stock diff window uses (theme/glass proven). Gutter
-   bars sit on the gutter's inner edge (toward its text). */
+   children (gutter 1, text 2 | gutter 3, text 4). Gutter color bar + inset
+   edge marker, text tint at 14% color-mix — Codex-strength visibility while
+   still deriving every color from the theme's semantic tokens. Gutter bars
+   sit on the gutter's inner edge (toward its text). */
 .rowDel > .cellNo:nth-child(1),
 .rowPair > .cellNo:nth-child(1) {
   color: var(--dsw-alias-state-error-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
   box-shadow: inset -3px 0 0 0 var(--dsw-alias-state-error-primary);
 }
 
 .rowDel > .cellText:nth-child(2),
 .rowPair > .cellText:nth-child(2) {
-  color: var(--dsw-alias-state-error-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent);
+  color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 88%, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
 }
 
 .rowAdd > .cellNo:nth-child(3),
 .rowPair > .cellNo:nth-child(3) {
   color: var(--dsw-alias-state-success-primary);
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
   box-shadow: inset -3px 0 0 0 var(--dsw-alias-state-success-primary);
 }
 
 .rowAdd > .cellText:nth-child(4),
 .rowPair > .cellText:nth-child(4) {
-  color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 78%, var(--dsw-alias-label-primary));
-  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 7%, transparent);
+  color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 82%, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
 }
 
 .diffBottomReserve {

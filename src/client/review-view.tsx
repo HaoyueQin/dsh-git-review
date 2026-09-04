@@ -152,18 +152,6 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
         </button>
       </header>
       <div className={css.body}>
-        {data !== null && (
-          <TreePanel
-            files={data.files}
-            selected={selected}
-            onSelect={setSelected}
-            filter={filter}
-            onFilterChange={setFilter}
-            collapsed={collapsed}
-            onToggleDir={toggleDir}
-            t={t}
-          />
-        )}
         <main className={css.mainPane}>
           {selected === null || selectedFile === null || diff.kind === 'idle'
             ? (
@@ -188,6 +176,18 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
                 />
               )}
         </main>
+        {data !== null && (
+          <TreePanel
+            files={data.files}
+            selected={selected}
+            onSelect={setSelected}
+            filter={filter}
+            onFilterChange={setFilter}
+            collapsed={collapsed}
+            onToggleDir={toggleDir}
+            t={t}
+          />
+        )}
       </div>
     </div>
   )

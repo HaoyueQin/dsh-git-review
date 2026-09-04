@@ -11,6 +11,9 @@
  * Node's native TS type stripping (Node >= 23.6).
  */
 
+/** Above this row count any pane renders a prefix (with a notice). */
+export const MAX_RENDER_ROWS = 20_000
+
 /** One side's cell: 1-based file line number, content, EOF-newline flag. */
 export interface DiffCell {
   no: number

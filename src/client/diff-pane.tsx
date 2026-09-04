@@ -8,9 +8,10 @@
  */
 import { Fragment, useMemo } from 'react'
 import type { ReactNode } from 'react'
-import { parseUnifiedDiff, type PairRow, type ParsedDiff } from './diff-parse.ts'
+import { parseUnifiedDiff, MAX_RENDER_ROWS, type PairRow, type ParsedDiff } from './diff-parse.ts'
 import { ExpandIcon, CollapseIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
+import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
 import type { ChangedFile } from '../contract.ts'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS, ReviewKey } from './locales.ts'
@@ -18,8 +19,7 @@ import css from './review.module.css'
 
 type T = PropsLocale<typeof NS>['t']
 
-/** Above this row count the pane renders a prefix (with a notice). */
-export const MAX_RENDER_ROWS = 20_000
+export { MAX_RENDER_ROWS }
 
 /** Which half of a file's changes the diff covers (mirrors the host param). */
 export type DiffScope = 'all' | 'staged' | 'unstaged'
@@ -41,6 +41,9 @@ export interface DiffPaneProps {
   /** Active staged/unstaged scope (tracked files only). */
   scope: DiffScope
   onScopeChange: (next: DiffScope) => void
+  /** Active main view ('diff' here); the header hosts the switch. */
+  view: FileViewMode
+  onViewChange: (next: FileViewMode) => void
   t: T
 }
 
@@ -72,7 +75,7 @@ function Row({ row }: { row: PairRow }) {
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -92,6 +95,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           <span className={css.diffRename}>{t('diff.renamedFrom', { path: file.origPath })}</span>
         )}
         <span className={css.diffHeaderSpacer} />
+        <ViewSwitch active={view} onViewChange={onViewChange} t={t} />
         {!file.untracked && (
           <span className={css.scopeSwitch} role="group" aria-label={t('scope.label')}>
             {(['all', 'staged', 'unstaged'] as const).map(candidate => (

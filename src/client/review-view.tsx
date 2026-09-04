@@ -9,10 +9,12 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { GitFileDiffPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
+import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitStatusFailure, GitStatusPayload } from '../contract.ts'
 import { hostCall } from './api.ts'
 import { BranchIcon, RefreshIcon } from './icons.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
+import { FilePane, type FileViewMode } from './file-pane.tsx'
+import { mergeAllFiles } from './file-tree.ts'
 import { TreePanel } from './tree-panel.tsx'
 import type { NS } from './locales.ts'
 import css from './review.module.css'
@@ -40,6 +42,7 @@ type DiffState =
   | { kind: 'loading' }
   | { kind: 'text'; diff: string; truncated: boolean }
   | { kind: 'binary'; size: number }
+  | { kind: 'content'; content: string; truncated: boolean; size: number }
   | { kind: 'failed'; message: string }
 
 /** Fetch one status snapshot; maps every failure onto an explicit state. */
@@ -56,6 +59,16 @@ async function loadFileDiff(cwd: string, path: string, origPath: string | undefi
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
+}
+
+/** Fetch one file's full content; keeps non-ok payloads as explicit failures. */
+async function loadFileContent(cwd: string, path: string): Promise<Exclude<DiffState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitFileContentPayload & { error?: string }>('file-content', { cwd, path })
+  if (payload === null) return { kind: 'failed', message: 'host unavailable' }
+  if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
+  return payload.binary
+    ? { kind: 'binary', size: payload.size }
+    : { kind: 'content', content: payload.content, truncated: payload.truncated, size: payload.size }
 }
 
 /** Total-render formatting: thousands separators, like Codex's toolbar. */
@@ -76,6 +89,11 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   const [diffFull, setDiffFull] = useState(false)
   const [diffScope, setDiffScope] = useState<DiffScope>('all')
   const [diff, setDiff] = useState<DiffState>({ kind: 'idle' })
+  // All-files tree mode: the whole repository file list (lazily fetched).
+  const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
+  const [allFiles, setAllFiles] = useState<string[] | null>(null)
+  const [allFilesFailed, setAllFilesFailed] = useState(false)
+  const [viewMode, setViewMode] = useState<FileViewMode>('diff')
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
   // workspace changes. A refresh keeps the previous list visible (loading
@@ -93,15 +111,41 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     return () => { alive = false }
   }, [cwd, reloadTick])
 
-  const ready = status.kind === 'ready' ? status.data : null
-  const selectedFile = useMemo(
-    () => ready?.files.find(file => file.path === selected) ?? null,
-    [ready, selected],
-  )
+  // All-files list lifecycle: fetched when the tree switches to 'all' mode
+  // (and again on refresh while that mode is active).
+  useEffect(() => {
+    if (treeMode !== 'all' || cwd === undefined) return
+    let alive = true
+    void hostCall<GitListFilesPayload>('list-files', { cwd }).then(payload => {
+      if (!alive) return
+      if (payload === null || !payload.ok) {
+        setAllFiles([])
+        setAllFilesFailed(true)
+        return
+      }
+      setAllFiles(payload.files)
+      setAllFilesFailed(false)
+    })
+    return () => { alive = false }
+  }, [treeMode, cwd, reloadTick])
 
-  // Diff lifecycle: whenever the selected file, its untracked-ness (a status
-  // refresh may reclassify it), the context depth, or the staged/unstaged
-  // scope changes.
+  const ready = status.kind === 'ready' ? status.data : null
+  /** Every repository row in all-files mode (changed rows merged in); null in changes mode. */
+  const allRows = useMemo(
+    () => (treeMode === 'all' && allFiles !== null ? mergeAllFiles(allFiles, ready?.files ?? []) : null),
+    [treeMode, allFiles, ready],
+  )
+  const selectedFile = useMemo(() => {
+    const source = allRows ?? ready?.files
+    return source?.find(file => file.path === selected) ?? null
+  }, [allRows, ready, selected])
+  /** Unchanged rows have no diff — the file view is their only view. */
+  const effectiveView: FileViewMode = selectedFile?.unchanged === true ? 'file' : viewMode
+
+  // Diff/content lifecycle: whenever the selected file, its untracked-ness
+  // (a status refresh may reclassify it), the context depth, the staged/
+  // unstaged scope, or the diff/file view changes. Unchanged rows and the
+  // file view load whole-file content instead of a diff.
   useEffect(() => {
     if (cwd === undefined || selected === null || selectedFile === null) {
       setDiff({ kind: 'idle' })
@@ -109,11 +153,15 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
     }
     let alive = true
     setDiff({ kind: 'loading' })
-    void loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope).then(next => {
+    const wantFile = selectedFile.unchanged === true || effectiveView === 'file'
+    const loader = wantFile
+      ? loadFileContent(cwd, selected)
+      : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope)
+    void loader.then(next => {
       if (alive) setDiff(next)
     })
     return () => { alive = false }
-  }, [cwd, selected, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope])
+  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView])
 
   const toggleDir = useCallback((path: string) => {
     setCollapsed(previous => {
@@ -132,6 +180,12 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
   const selectFile = useCallback((path: string) => {
     setSelected(path)
     setDiffScope('all')
+  }, [])
+
+  /** Switch the tree between changed files and the whole repository. */
+  const changeTreeMode = useCallback((mode: 'changes' | 'all') => {
+    setTreeMode(mode)
+    if (mode === 'changes') setAllFiles(null)
   }, [])
 
   if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'notRepo' || status.kind === 'error') {
@@ -170,31 +224,51 @@ export function ReviewView({ cwd, t }: InjectFace<ReviewInjected> & PropsLocale<
             )
             : diff.kind === 'failed'
               ? <div className={css.paneNotice + ' ' + css.errorText}>{diff.message}</div>
-              : (
-                <DiffPane
-                  file={selectedFile}
-                  diff={diff.kind === 'text' ? diff.diff : ''}
-                  truncated={diff.kind === 'text' && diff.truncated}
-                  loading={diff.kind === 'loading'}
-                  binary={diff.kind === 'binary'}
-                  size={diff.kind === 'binary' ? diff.size : 0}
-                  full={diffFull}
-                  onToggleFull={() => { setDiffFull(value => !value) }}
-                  scope={diffScope}
-                  onScopeChange={setDiffScope}
-                  t={t}
-                />
-              )}
+              : effectiveView === 'file'
+                ? (
+                  <FilePane
+                    file={selectedFile}
+                    content={diff.kind === 'content' ? diff.content : ''}
+                    truncated={diff.kind === 'content' && diff.truncated}
+                    binary={diff.kind === 'binary'}
+                    size={diff.kind === 'binary' || diff.kind === 'content' ? diff.size : 0}
+                    loading={diff.kind === 'loading'}
+                    canShowDiff={selectedFile.unchanged !== true}
+                    view={effectiveView}
+                    onViewChange={setViewMode}
+                    t={t}
+                  />
+                )
+                : (
+                  <DiffPane
+                    file={selectedFile}
+                    diff={diff.kind === 'text' ? diff.diff : ''}
+                    truncated={diff.kind === 'text' && diff.truncated}
+                    loading={diff.kind === 'loading'}
+                    binary={diff.kind === 'binary'}
+                    size={diff.kind === 'binary' ? diff.size : 0}
+                    full={diffFull}
+                    onToggleFull={() => { setDiffFull(value => !value) }}
+                    scope={diffScope}
+                    onScopeChange={setDiffScope}
+                    view={effectiveView}
+                    onViewChange={setViewMode}
+                    t={t}
+                  />
+                )}
         </main>
         {data !== null && (
           <TreePanel
-            files={data.files}
+            files={allRows ?? data.files}
             selected={selected}
             onSelect={selectFile}
             filter={filter}
             onFilterChange={setFilter}
             collapsed={collapsed}
             onToggleDir={toggleDir}
+            mode={treeMode}
+            onModeChange={changeTreeMode}
+            listFailed={allFilesFailed}
             t={t}
           />
         )}

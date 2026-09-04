@@ -130,6 +130,14 @@ body[data-dsh-bg-glass] .root {
   border-left: 1px solid var(--dsw-alias-border-secondary);
 }
 
+.treeModeRow {
+  display: flex;
+  flex: none;
+  flex-direction: row;
+  align-items: center;
+  padding: 7px 10px;
+}
+
 .filterRow {
   display: flex;
   flex: none;
@@ -417,6 +425,22 @@ body[data-dsh-bg-glass] .root {
 
 .cellText:nth-child(4) {
   border-left: 1px solid var(--dsw-alias-border-secondary);
+}
+
+/* Full-file view rows: two-column grid (gutter + text). */
+.fileRowGrid {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.fileNo {
+  padding: 0 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid var(--dsw-alias-border-secondary);
 }
 
 .cellHatched {

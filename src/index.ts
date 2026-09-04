@@ -5,8 +5,10 @@
  * this plugin's own prefix route (the same webServer pattern dsh-diff-stat
  * ships):
  *
- *   POST /dsh-git-review/api/status     { cwd }
- *   POST /dsh-git-review/api/file-diff  { cwd, path, untracked?, full?, scope? }
+ *   POST /dsh-git-review/api/status       { cwd }
+ *   POST /dsh-git-review/api/file-diff    { cwd, path, untracked?, full?, scope? }
+ *   POST /dsh-git-review/api/file-content { cwd, path }
+ *   POST /dsh-git-review/api/list-files   { cwd }
  *   GET  /dsh-git-review/api/ping
  *
  * `scope` splits the worktree-vs-HEAD diff into its porcelain halves:
@@ -36,7 +38,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
-import type { ChangedFile, GitFileDiffPayload, GitStatusPayload } from './contract.ts'
+import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitStatusPayload } from './contract.ts'
 
 export const name = 'dsh-git-review'
 
@@ -338,6 +340,47 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
   return { ok: true, binary: false, diff: capped.diff, truncated: capped.truncated }
 }
 
+/** One `file-content` answer: fenced full-file read for the file view. The
+ *  cap matches the untracked pseudo-diff read cap; larger files truncate at
+ *  that prefix (flagged via `size`), and a NUL byte routes to the binary form. */
+async function gitFileContent(cwd: unknown, path: unknown): Promise<GitFileContentPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
+  let size: number
+  try {
+    const stat = await lstat(absPath)
+    if (!stat.isFile()) throw new Error('not a regular file')
+    size = stat.size
+  } catch (error) {
+    throw new Error('cannot read file: ' + String((error as Error).message ?? error))
+  }
+  const { bytes } = await readPrefix(absPath, READ_CAP)
+  const truncated = size > READ_CAP
+  if (bytes.includes(0)) return { ok: true, binary: true, content: '', truncated, size }
+  return { ok: true, binary: false, content: bytes.toString('utf8'), truncated, size }
+}
+
+/** Entry cap for the all-files tree (a review tab is not a file manager). */
+const LIST_FILES_CAP = 20_000
+
+/** One `list-files` answer: tracked + untracked repository files, sorted, deduped. */
+async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const [trackedRaw, othersRaw] = await Promise.all([
+    runGit(repoRoot, ['ls-files', '-z']),
+    runGit(repoRoot, ['ls-files', '-z', '--others', '--exclude-standard']),
+  ])
+  const files = new Set<string>()
+  for (const chunk of trackedRaw.split('\0')) if (chunk !== '') files.add(chunk)
+  for (const chunk of othersRaw.split('\0')) if (chunk !== '') files.add(chunk)
+  const sorted = [...files].sort()
+  return { ok: true, files: sorted.slice(0, LIST_FILES_CAP), truncated: sorted.length > LIST_FILES_CAP }
+}
+
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
 function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -404,6 +447,14 @@ export function apply(ctx: Context): void {
         }
         if (action === 'file-diff') {
           respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope']))
+          return
+        }
+        if (action === 'file-content') {
+          respond(res, 200, await gitFileContent(body['cwd'], body['path']))
+          return
+        }
+        if (action === 'list-files') {
+          respond(res, 200, await gitListFiles(body['cwd']))
           return
         }
         respond(res, 404, { ok: false, error: 'unknown action' })

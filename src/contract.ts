@@ -23,6 +23,9 @@ export interface ChangedFile {
   binary: boolean
   /** The file is untracked (porcelain '??'). */
   untracked: boolean
+  /** Client-synthesis marker for all-files tree mode (the host never sets it):
+   *  the row stands for a repository file with no local changes. */
+  unchanged?: boolean
 }
 
 /** Successful `status` payload: everything the tab needs in one shot. */
@@ -73,4 +76,34 @@ export type GitFileDiffPayload = GitFileDiffText | GitFileDiffBinary
 export interface GitFileDiffFailure {
   ok: false
   error: string
+}
+
+/** Successful `file-content` payload (text form): the whole file for the file view. */
+export interface GitFileContentText {
+  ok: true
+  binary: false
+  content: string
+  /** True when the file exceeds the host's read cap (content is a prefix). */
+  truncated: boolean
+  /** File size in bytes. */
+  size: number
+}
+
+/** Successful `file-content` payload (binary form): no text is served. */
+export interface GitFileContentBinary {
+  ok: true
+  binary: true
+  content: ''
+  truncated: boolean
+  size: number
+}
+
+export type GitFileContentPayload = GitFileContentText | GitFileContentBinary
+
+/** Successful `list-files` payload: every repository file for all-files mode. */
+export interface GitListFilesPayload {
+  ok: true
+  files: string[]
+  /** True when the list was cut at the host's entry cap. */
+  truncated: boolean
 }

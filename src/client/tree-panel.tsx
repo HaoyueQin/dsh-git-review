@@ -26,6 +26,11 @@ export interface TreePanelProps {
   /** Collapsed directory paths (repo-relative). */
   collapsed: ReadonlySet<string>
   onToggleDir: (path: string) => void
+  /** 'changes' = uncommitted files only; 'all' = the whole repository list. */
+  mode: 'changes' | 'all'
+  onModeChange: (next: 'changes' | 'all') => void
+  /** True when the all-files list fetch failed. */
+  listFailed: boolean
   t: T
 }
 
@@ -115,12 +120,26 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, t }: {
  * The panel body: filter box above, tree (or flat filtered list) below.
  * @param props - files, selection, filter/collapse state and callbacks, locale.
  */
-export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, t }: TreePanelProps) {
+export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, listFailed, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
   const tree = useMemo(() => buildFileTree(visible), [visible])
   const flat = filter.trim() !== ''
   return (
     <div className={css.treePanel} data-git-review-tree="">
+      <div className={css.treeModeRow}>
+        <span className={css.scopeSwitch} role="group" aria-label={t('tree.mode.label')}>
+          {(['changes', 'all'] as const).map(candidate => (
+            <button
+              key={candidate}
+              type="button"
+              className={css.scopeBtn + (mode === candidate ? ' ' + css.scopeBtnActive : '')}
+              onClick={() => { onModeChange(candidate) }}
+            >
+              {t(('tree.mode.' + candidate) as ReviewKey)}
+            </button>
+          ))}
+        </span>
+      </div>
       <label className={css.filterRow}>
         <SearchIcon />
         <input
@@ -133,7 +152,7 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
       </label>
       <div className={css.treeScroll}>
         {visible.length === 0
-          ? <div className={css.treeEmpty}>{t(files.length === 0 ? 'tree.noChanges' : 'tree.empty')}</div>
+          ? <div className={css.treeEmpty}>{t(listFailed ? 'tree.listFailed' : mode === 'all' ? 'tree.empty' : files.length === 0 ? 'tree.noChanges' : 'tree.empty')}</div>
           : flat
             ? visible.map(file => (
               <FileRow

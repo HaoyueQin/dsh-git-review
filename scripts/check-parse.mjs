@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from '../src/git-parse.ts'
 import { parseUnifiedDiff } from '../src/client/diff-parse.ts'
-import { badgeFor, badgesFor, buildFileTree, filterFiles } from '../src/client/file-tree.ts'
+import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
 
@@ -209,5 +209,17 @@ assert.deepEqual(addDelete.map(b => b.glyph), ['+', '\u2212'])
 assert.deepEqual(addDelete.map(b => b.staged), [true, false])
 assert.deepEqual(badgesFor({ path: 'x', x: ' ', y: ' ', added: 0, deleted: 0, binary: false, untracked: false }).map(b => b.key), ['modified'])
 assert.deepEqual(badgesFor({ ...treeFiles[2] }).map(b => [b.key, b.staged]), [['untracked', undefined]])
+
+// 18. mergeAllFiles: changed rows pass through, other paths become unchanged
+//     rows with no badge; input order is preserved.
+const merged = mergeAllFiles(['lib/a.ts', 'other/x.ts', 'readme.md'], treeFiles)
+assert.deepEqual(merged.map(f => [f.path, f.unchanged === true]), [
+  ['lib/a.ts', false],
+  ['other/x.ts', true],
+  ['readme.md', false],
+])
+assert.deepEqual(badgesFor(merged[1]), [])
+// treeFiles[2] is the untracked readme.md — its row (x='?') passes through.
+assert.equal(merged[2].x, '?')
 
 console.log('check-parse: all assertions passed')

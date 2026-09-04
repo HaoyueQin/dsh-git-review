@@ -82,6 +82,25 @@ export function filterFiles(files: readonly ChangedFile[], query: string): Chang
   return files.filter(file => file.path.toLowerCase().includes(q))
 }
 
+/**
+ * Merge the whole-repository file list with the changed rows for all-files
+ * tree mode: changed files keep their rows, every other path becomes an
+ * `unchanged` row (no badge, file view only). Order follows the input list.
+ */
+export function mergeAllFiles(allFiles: readonly string[], changed: readonly ChangedFile[]): ChangedFile[] {
+  const index = new Map(changed.map(file => [file.path, file]))
+  return allFiles.map(path => index.get(path) ?? {
+    path,
+    x: ' ',
+    y: ' ',
+    added: 0,
+    deleted: 0,
+    binary: false,
+    untracked: false,
+    unchanged: true,
+  })
+}
+
 /** The badge the panel shows for one file. */
 export interface FileBadge {
   /** Glyph rendered in the badge square. */
@@ -113,6 +132,7 @@ function badgeForCode(code: string): FileBadge | null {
  * renders TWO badges (staged first). Untracked renders its single '?'.
  */
 export function badgesFor(file: ChangedFile): FileBadge[] {
+  if (file.unchanged === true) return []
   if (file.untracked) return [{ glyph: '?', key: 'untracked', tone: 'Muted' }]
   const out: FileBadge[] = []
   const x = badgeForCode(file.x)

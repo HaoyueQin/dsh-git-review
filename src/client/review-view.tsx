@@ -18,6 +18,7 @@ import { BranchIcon, CheckIcon, ChevronIcon, CommitIcon, FileIcon, GraphIcon, Op
 import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
+import { PREFS_EVENT, readPrefs, writePrefs } from './prefs.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
 import { mergeAllFiles } from './file-tree.ts'
@@ -116,7 +117,12 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
   const [allFiles, setAllFiles] = useState<string[] | null>(null)
   const [allFilesFailed, setAllFilesFailed] = useState(false)
-  const [viewMode, setViewMode] = useState<FileViewMode>('split')
+  // The layout/search/graph defaults come from the persisted prefs (the
+  // settings card edits the same store); flips inside the tab write back so
+  // the user's last choice survives a reload (GitHub/GitLab/VS Code all
+  // persist the split/unified choice this way).
+  const initialPrefs = useMemo(() => readPrefs(), [])
+  const [viewMode, setViewMode] = useState<FileViewMode>(initialPrefs.viewMode)
   // Content search: the draft debounces into the committed query; matches map
   // drives the tree's per-file count chips and the diff pane's highlighting.
   // The scope decides what is searched — file names (client-side tree
@@ -124,9 +130,9 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   // and case/regex are optional toggles, both off by default.
   const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
-  const [searchScope, setSearchScope] = useState<'path' | 'diff' | 'content'>('diff')
-  const [searchCS, setSearchCS] = useState(false)
-  const [searchRegex, setSearchRegex] = useState(false)
+  const [searchScope, setSearchScope] = useState<'path' | 'diff' | 'content'>(initialPrefs.searchScope)
+  const [searchCS, setSearchCS] = useState(initialPrefs.searchCS)
+  const [searchRegex, setSearchRegex] = useState(initialPrefs.searchRegex)
   const [searchMenu, setSearchMenu] = useState<'scope' | 'match' | null>(null)
   const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
   // Diff-base override: null compares against HEAD; the refs list feeds the
@@ -148,7 +154,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [graphFile, setGraphFile] = useState<string | null>(null)
   const [graphFilter, setGraphFilter] = useState('')
   const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
-  const [graphListCollapsed, setGraphListCollapsed] = useState(false)
+  const [graphListCollapsed, setGraphListCollapsed] = useState(initialPrefs.graphCollapsed)
   const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null)
   const [commitTotals, setCommitTotals] = useState<{ added: number; deleted: number } | null>(null)
   const [copiedHash, setCopiedHash] = useState(false)
@@ -190,6 +196,23 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     document.addEventListener('mousedown', onDown)
     return () => { document.removeEventListener('mousedown', onDown) }
   }, [searchMenu])
+  // Persist the remembered controls on every flip, and follow edits made in
+  // the settings card while this tab is open (same-window CustomEvent).
+  useEffect(() => {
+    writePrefs({ viewMode: viewMode === 'file' ? 'split' : viewMode, searchScope, graphCollapsed: graphListCollapsed, searchCS, searchRegex })
+  }, [viewMode, searchScope, graphListCollapsed, searchCS, searchRegex])
+  useEffect(() => {
+    const onPrefs = (): void => {
+      const prefs = readPrefs()
+      setViewMode(prefs.viewMode)
+      setSearchScope(prefs.searchScope)
+      setGraphListCollapsed(prefs.graphCollapsed)
+      setSearchCS(prefs.searchCS)
+      setSearchRegex(prefs.searchRegex)
+    }
+    window.addEventListener(PREFS_EVENT, onPrefs)
+    return () => { window.removeEventListener(PREFS_EVENT, onPrefs) }
+  }, [])
   const [branchName, setBranchName] = useState('')
   const [branchStart, setBranchStart] = useState('')
   const [branchBusy, setBranchBusy] = useState(false)

@@ -790,6 +790,11 @@ body[data-dsh-bg-glass] .root {
 }
 
 .scopeBtn {
+  /* Inline-flex centering: a bare block button lays the icon out on the text
+     baseline and the svg rides high (the misaligned switch buttons). */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: none;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
@@ -1735,4 +1740,65 @@ body[data-dsh-bg-glass] .commitHeader {
 .emptyHint {
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
+}
+
+/* Preference card in Settings → Plugins: one row per remembered control
+   (label + hint on the left, the same segmented switch the toolbar uses on
+   the right). */
+.prefCard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  max-width: 640px;
+  padding: 14px 16px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.prefCardHead {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.prefTitle {
+  color: var(--dsw-alias-label-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.prefDescription {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.prefRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.prefRowText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prefLabel {
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+}
+
+.prefHint {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+}
+
+.prefNote {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
 }

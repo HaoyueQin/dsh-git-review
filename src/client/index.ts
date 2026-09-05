@@ -23,6 +23,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { ReviewView, type ReviewInjected } from './review-view.tsx'
+import { SettingsCard } from './settings-card.tsx'
 import { en, NS, zh, type ReviewKey } from './locales.ts'
 import { subscribeGlassReady } from './glass.ts'
 
@@ -30,6 +31,14 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Review tab copy. */
     'git-review': ReviewKey
+  }
+  interface SlotMap {
+    /** Own settings section in the settings modal's nav. Declared here
+     *  because the owning ui-settings package is not in our dependency
+     *  tree; `settings.plugin.item` was rejected — that tab renders the
+     *  intersection with the host-served settings namespaces, which a
+     *  localStorage-backed card has no row in. */
+    'settings.section': { kind: 'list'; scope: 'root' }
   }
 }
 
@@ -80,4 +89,15 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
       cwd: ctx.sessions.list.getSnapshot().byId[sessionId as SessionId]?.cwd,
     }),
   }, ReviewView))
+  // Own settings section in the settings modal's nav (the review-checkout
+  // precedent): the plugins-configuration tab filters cards by host-served
+  // settings namespaces, which a localStorage-backed card has no row in.
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'git-review',
+    order: 25,
+    locale: NS,
+    label: () => t('settings.title'),
+    inject: () => ({}),
+  }, SettingsCard))
 }

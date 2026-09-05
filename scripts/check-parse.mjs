@@ -8,6 +8,7 @@ import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStat
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
+import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
 
@@ -427,5 +428,14 @@ const pairDiff = parseUnifiedDiff([
 ].join('\n'))
 const pairEngine = makeSearchEngine({ query: 'alpha' })
 assert.equal(countUnifiedMatches(pairDiff, pairEngine), 2)
+
+// 34. Preferences normalization: junk store falls back to defaults, valid
+// values survive, unknown keys drop (a hand-edited localStorage must never
+// crash the tab).
+assert.deepEqual(normalizePrefs(null), DEFAULT_PREFS)
+assert.deepEqual(normalizePrefs('not json'), DEFAULT_PREFS)
+assert.deepEqual(normalizePrefs({ viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, junk: 1 }),
+  { viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true })
+assert.deepEqual(normalizePrefs({ viewMode: 'bogus', searchScope: 'nope' }), DEFAULT_PREFS)
 
 console.log('check-parse: all assertions passed')

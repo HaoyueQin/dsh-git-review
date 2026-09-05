@@ -137,6 +137,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [graphFile, setGraphFile] = useState<string | null>(null)
   const [graphFilter, setGraphFilter] = useState('')
   const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const [graphListCollapsed, setGraphListCollapsed] = useState(false)
   const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null)
   const [commitTotals, setCommitTotals] = useState<{ added: number; deleted: number } | null>(null)
   const [copiedHash, setCopiedHash] = useState(false)
@@ -269,6 +270,9 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
       if (payload !== null && payload.ok) {
         setCommitFiles(payload.files)
         setCommitTotals(payload.totals)
+        // Auto-select the first changed file: the diff is what the user came
+        // for (merge commits with no rows show the empty notice instead).
+        setGraphFile(payload.files.length > 0 ? payload.files[0]!.path : null)
       } else {
         setCommitFiles([])
       }
@@ -412,13 +416,27 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     setSelected(null)
     setSelectedCommit(null)
     setGraphFile(null)
+    setGraphListCollapsed(false)
   }, [])
 
-  /** Select a graph commit; its file list and the file selection reset. */
+  /** Select a graph commit; the list folds to the topology rail so the
+   *  detail gets the width (the rail keeps every commit one click away).
+   *  Clicking the selected commit again deselects and unfolds the list. */
   const selectCommit = useCallback((hash: string) => {
+    if (selectedCommit === hash) {
+      setSelectedCommit(null)
+      setGraphFile(null)
+      setGraphListCollapsed(false)
+      return
+    }
     setSelectedCommit(hash)
     setGraphFile(null)
     setDiffScope('all')
+    setGraphListCollapsed(true)
+  }, [selectedCommit])
+
+  const toggleGraphList = useCallback(() => {
+    setGraphListCollapsed(value => !value)
   }, [])
 
   const selectGraphFile = useCallback((path: string) => {
@@ -787,7 +805,17 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
       <div className={css.body}>
         {viewTab === 'graph' ? (
           <>
-            <section className={css.graphList} data-git-review-graph="">
+            <section className={css.graphList + (graphListCollapsed ? ' ' + css.graphListNarrow : '')} data-git-review-graph="">
+              <div className={css.graphToggleRow}>
+                <button
+                  type="button"
+                  className={css.graphToggle}
+                  title={graphListCollapsed ? t('graph.expandList') : t('graph.collapseList')}
+                  onClick={toggleGraphList}
+                >
+                  {graphListCollapsed ? '\u25b8' : '\u25c2'}
+                </button>
+              </div>
               {logState.kind === 'loading' && <div className={css.paneNotice}>{t('graph.loading')}</div>}
               {logState.kind === 'failed' && <div className={css.paneNotice + ' ' + css.errorText}>{logState.message}</div>}
               {logState.kind === 'ready' && graphCommits.length === 0 && (
@@ -804,6 +832,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                         lanes={visibleGraph.map(row => row.lane)}
                         selected={selectedCommit}
                         onSelect={selectCommit}
+                        collapsed={graphListCollapsed}
                         t={t}
                       />
                     )}

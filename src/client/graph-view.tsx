@@ -32,11 +32,20 @@ export function fmtGraphDate(timestamp: number): string {
 }
 
 /** One row's SVG topology cell (pass lines, half-row arcs, node dot). The
- *  canvas width is the WHOLE list's max lane count so grid columns align. */
+ *  canvas width is the WHOLE list's max lane count so grid columns align.
+ *  Cross-lane moves are cubic S-curves whose control points keep BOTH end
+ *  tangents vertical — lines fall into and out of every node straight down
+ *  (the vscode-git-graph shape), never hooking in sideways. */
 function GraphCell({ row, width }: { row: GraphLaneRow | undefined; width: number }) {
   if (row === undefined) return <span className={css.graphCell} style={{ width, height: ROW_H }} />
   const mid = ROW_H / 2
+  const halfUp = mid / 2
+  const halfDown = mid + (ROW_H - mid) / 2
   const x = (lane: number): number => lane * LANE_W + LANE_W / 2
+  const curve = (x1: number, y0: number, x2: number, y1: number, ym: number): string =>
+    x1 === x2
+      ? 'M ' + x1 + ' ' + y0 + ' L ' + x1 + ' ' + y1
+      : 'M ' + x1 + ' ' + y0 + ' C ' + x1 + ' ' + ym + ' ' + x2 + ' ' + ym + ' ' + x2 + ' ' + y1
   return (
     <svg className={css.graphCell} width={width} height={ROW_H} aria-hidden="true">
       {row.pass.map((line, index) => (
@@ -49,18 +58,18 @@ function GraphCell({ row, width }: { row: GraphLaneRow | undefined; width: numbe
       {row.inEdges.map((edge, index) => (
         <path
           key={'i' + index}
-          d={'M ' + x(edge.from) + ' 0 Q ' + x(edge.from) + ' ' + mid + ' ' + x(edge.to) + ' ' + mid}
+          d={curve(x(edge.from), 0, x(edge.to), mid, halfUp)}
           fill="none" stroke={laneColor(edge.color)} strokeWidth={1.5}
         />
       ))}
       {row.outEdges.map((edge, index) => (
         <path
           key={'o' + index}
-          d={'M ' + x(edge.from) + ' ' + mid + ' Q ' + x(edge.to) + ' ' + mid + ' ' + x(edge.to) + ' ' + ROW_H}
+          d={curve(x(edge.from), mid, x(edge.to), ROW_H, halfDown)}
           fill="none" stroke={laneColor(edge.color)} strokeWidth={1.5}
         />
       ))}
-      <circle cx={x(row.lane)} cy={mid} r={3.5} fill={laneColor(row.color)} />
+      <circle cx={x(row.lane)} cy={mid} r={row.inEdges.length > 1 ? 4.2 : 3.5} fill={laneColor(row.color)} />
     </svg>
   )
 }
@@ -84,16 +93,37 @@ export interface CommitGraphProps {
   lanes: ReadonlyArray<GraphLaneRow | undefined>
   selected: string | null
   onSelect: (hash: string) => void
+  /** Narrow rail: topology column only, still clickable per commit. */
+  collapsed?: boolean
   t: T
 }
 
 /** The scrollable commit list: a header row, then one grid row per commit
  *  (topology | badges+subject | date | author | hash), all columns aligned
- *  via the shared --graph-w variable (the widest lane canvas). */
-export function CommitGraph({ commits, lanes, selected, onSelect, t }: CommitGraphProps) {
+ *  via the shared --graph-w variable (the widest lane canvas). Collapsed, it
+ *  degrades to the topology rail so the detail pane gets the width while
+ *  commits stay one click away. */
+export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = false, t }: CommitGraphProps) {
   const maxLanes = lanes.reduce((width, row) => Math.max(width, row !== undefined ? row.laneCount : 1), 1)
   const graphWidth = Math.max(maxLanes * LANE_W, LANE_W * 2)
   const columns = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px'
+  if (collapsed) {
+    return (
+      <div className={css.commitList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
+        {commits.map((commit, index) => (
+          <button
+            key={commit.hash}
+            type="button"
+            className={css.commitRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
+            title={commit.subject + ' \u00b7 ' + commit.hash.slice(0, 7)}
+            onClick={() => { onSelect(commit.hash) }}
+          >
+            <GraphCell row={lanes[index]} width={graphWidth} />
+          </button>
+        ))}
+      </div>
+    )
+  }
   return (
     <div className={css.commitList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
       <div className={css.commitHeader} style={{ gridTemplateColumns: columns }} aria-hidden="true">

@@ -8,10 +8,11 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { countMatchRows, countUnifiedMatches, makeSearchEngine, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec } from './diff-parse.ts'
+import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec, type WordHighlighter, type WordSpans } from './diff-parse.ts'
 import { CommentIcon, ExpandIcon, CollapseIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
+import type { CommentDraft } from './comment-drafts.ts'
 import type { ChangedFile } from '../contract.ts'
 import type { InputActions, InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
@@ -50,6 +51,9 @@ export interface DiffPaneProps {
   /** False drops the file option from the switch (a commit diff has no
    *  worktree copy to read); split/unified stay available. */
   allowFileView?: boolean
+  /** Whether whitespace-only edits are hidden (host `--ignore-all-space`). */
+  wsIgnore: boolean
+  onToggleWs: () => void
   /** Active content search spec (query '' = none); highlights + navigation. */
   search: SearchSpec
   /** True while a base-branch override is active (scope chips are hidden). */
@@ -57,29 +61,55 @@ export interface DiffPaneProps {
   /** Session input channels for inline comments (absent = feature hidden). */
   useInput: SnapshotSelectorHook<InputState> | undefined
   inputActions: InputActions | undefined
+  /** Park a comment in the pending draft box (absent = draft entry hidden). */
+  onDraftAdd: ((draft: CommentDraft) => void) | undefined
   t: T
 }
 
 /** One cell's text with search matches wrapped in <mark> (odd split parts). */
-function renderCellText(cell: DiffCell | null, engine: SearchEngine): ReactNode {
-  if (cell === null) return ''
-  const parts = engine.parts(cell.text)
+function searchParts(text: string, engine: SearchEngine): ReactNode {
+  const parts = engine.parts(text)
   if (parts.length === 1) return parts[0]
   return parts.map((part, index) =>
     index % 2 === 1 ? <mark key={index} className={css.matchMark}>{part}</mark> : part,
   )
 }
 
+/** One cell's text: word-level changed spans (when the row is a replacement
+ *  pair the highlighter computed) wrapped in a tinted span, each span still
+ *  searchable. `spans` null renders the plain (search-highlighted) text. */
+function renderCellText(cell: DiffCell | null, engine: SearchEngine, spans: WordSpans | null, changedClass: string): ReactNode {
+  if (cell === null) return ''
+  const text = cell.text
+  if (spans === null || spans.length === 0) return searchParts(text, engine)
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  for (const [start, end] of spans) {
+    if (start > cursor) nodes.push(searchParts(text.slice(cursor, start), engine))
+    if (end > start) {
+      nodes.push(<span key={start} className={changedClass}>{searchParts(text.slice(start, end), engine)}</span>)
+    }
+    cursor = Math.max(cursor, end)
+  }
+  if (cursor < text.length) nodes.push(searchParts(text.slice(cursor), engine))
+  return nodes
+}
+
 /** One unified (single-column) line: gutter number + sign + text. */
-function UnifiedRow({ line, engine, ordinal, active, commentTitle, onComment }: {
+function UnifiedRow({ line, engine, words, ordinal, active, commentTitle, onComment }: {
   line: { kind: 'ctx' | 'del' | 'add'; no: number; text: string; noNewline?: boolean; pair: PairRow }
   engine: SearchEngine
+  words: WordHighlighter
   ordinal: number | undefined
   active: boolean
   commentTitle: string
   onComment: ((line: number) => void) | undefined
 }) {
   const kindClass = line.kind === 'ctx' ? css.rowUCtx : line.kind === 'del' ? css.rowUDel : css.rowUAdd
+  const regions = line.kind === 'ctx' ? null : words.pair(line.pair)
+  const spans = regions === null ? null
+    : line.kind === 'del' ? regions.old : regions.new
+  const changedClass = line.kind === 'del' ? css.wordDel : css.wordAdd
   const matched = ordinal !== undefined
   return (
     <div
@@ -90,7 +120,7 @@ function UnifiedRow({ line, engine, ordinal, active, commentTitle, onComment }: 
         {line.kind === 'del' ? '−' : line.kind === 'add' ? '+' : ''} {line.no}
       </span>
       <span className={css.cellText + (line.kind === 'del' ? ' ' + css.cellTextDel : line.kind === 'add' ? ' ' + css.cellTextAdd : '')}>
-        {renderCellText({ no: line.no, text: line.text, noNewline: line.noNewline }, engine)}
+        {renderCellText({ no: line.no, text: line.text, noNewline: line.noNewline }, engine, spans, changedClass)}
         {line.noNewline === true && <em className={css.noNewline}>{'↩'}</em>}
       </span>
       {onComment !== undefined && (line.kind === 'ctx' || line.kind === 'add')
@@ -114,11 +144,12 @@ function UnifiedRow({ line, engine, ordinal, active, commentTitle, onComment }: 
  *  the row must not wrap them in any intermediate element. Rows containing a
  *  search match carry data-diff-match (the navigation target), in document
  *  order equal to their match ordinal. */
-function Row({ row, engine, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; engine: SearchEngine; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
+function Row({ row, engine, words, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; engine: SearchEngine; words: WordHighlighter; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
   const kindClass = row.kind === 'ctx' ? css.rowCtx
     : row.kind === 'del' ? css.rowDel
       : row.kind === 'add' ? css.rowAdd
         : css.rowPair
+  const regions = words.pair(row)
   const matched = matchOrdinal !== undefined
   return (
     <div
@@ -127,12 +158,12 @@ function Row({ row, engine, matchOrdinal, active, commentTitle, onComment }: { r
     >
       <span className={css.cellNo + (row.left === null ? ' ' + css.cellHatched : '')}>{row.left?.no ?? ''}</span>
       <span className={css.cellText + (row.left === null ? ' ' + css.cellHatched : '')}>
-        {renderCellText(row.left, engine)}
+        {renderCellText(row.left, engine, regions?.old ?? null, css.wordDel)}
         {row.left?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
       <span className={css.cellNo + (row.right === null ? ' ' + css.cellHatched : '')}>{row.right?.no ?? ''}</span>
       <span className={css.cellText + (row.right === null ? ' ' + css.cellHatched : '')}>
-        {renderCellText(row.right, engine)}
+        {renderCellText(row.right, engine, regions?.new ?? null, css.wordAdd)}
         {row.right?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
       {onComment !== undefined && (
@@ -153,18 +184,26 @@ function Row({ row, engine, matchOrdinal, active, commentTitle, onComment }: { r
 /**
  * One row's inline comment editor: appending reads the composer draft INSIDE
  * this tiny component's render (a draft subscription at the review-view level
- * would re-render the whole diff on every composer keystroke).
+ * would re-render the whole diff on every composer keystroke). Two exits:
+ * write straight into the composer, or park in the pending draft box.
  */
-function CommentEditor({ path, line, useInput, inputActions, onClose, t }: {
+function CommentEditor({ path, line, useInput, inputActions, onDraftAdd, onClose, t }: {
   path: string
   line: number
   useInput: SnapshotSelectorHook<InputState>
   inputActions: InputActions
+  onDraftAdd: ((draft: CommentDraft) => void) | undefined
   onClose: () => void
   t: T
 }) {
   const [text, setText] = useState('')
   const draft = useInput((s: InputState) => s.draft)
+  const comment = path + ':' + line + ' \u2014 ' + text.trim()
+  const write = (): void => {
+    const current = draft.replace(/\s+$/, '')
+    inputActions.setDraft(current === '' ? comment : current + '\n\n' + comment)
+    onClose()
+  }
   return (
     <div className={css.commentEditor}>
       <textarea
@@ -181,15 +220,23 @@ function CommentEditor({ path, line, useInput, inputActions, onClose, t }: {
           type="button"
           className={css.commitBtn}
           disabled={text.trim() === ''}
-          onClick={() => {
-            const comment = path + ':' + line + ' \u2014 ' + text.trim()
-            const current = draft.replace(/\s+$/, '')
-            inputActions.setDraft(current === '' ? comment : current + '\n\n' + comment)
-            onClose()
-          }}
+          onClick={write}
         >
           {t('comment.write')}
         </button>
+        {onDraftAdd !== undefined && (
+          <button
+            type="button"
+            className={css.commitBtn}
+            disabled={text.trim() === ''}
+            onClick={() => {
+              onDraftAdd({ path, line, text: text.trim() })
+              onClose()
+            }}
+          >
+            {t('comment.saveDraft')}
+          </button>
+        )}
         <button type="button" className={css.commitBtn} onClick={onClose}>{t('comment.cancel')}</button>
         <span className={css.commentLine}>{path + ':' + line}</span>
       </div>
@@ -201,7 +248,7 @@ function CommentEditor({ path, line, useInput, inputActions, onClose, t }: {
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, search, baseActive, useInput, inputActions, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, search, baseActive, useInput, inputActions, onDraftAdd, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -213,6 +260,9 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   // (unified) are ordinals in document order; prev/next cycles and scrolls
   // the active one into view. The engine honors case/regex options.
   const engine = useMemo(() => makeSearchEngine(search), [search])
+  // Word-level highlight: one budgeted pass per parse (re-renders never
+  // recompute a row — the highlighter memoizes by row identity).
+  const words = useMemo(() => makeWordHighlighter(), [parsed])
   const unified = view === 'unified'
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [activeMatch, setActiveMatch] = useState(0)
@@ -260,6 +310,17 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           </span>
         )}
         {showViewSwitch && <ViewSwitch active={view} onViewChange={onViewChange} allowFileView={allowFileView} t={t} />}
+        {/* Whitespace toggle: the loudest review noise (formatting-only hunks)
+            hides behind it; active state follows the persisted preference. */}
+        <button
+          type="button"
+          className={css.toolBtn + (wsIgnore ? ' ' + css.toolBtnActive : '')}
+          aria-pressed={wsIgnore}
+          onClick={onToggleWs}
+          title={t('diff.wsHint')}
+        >
+          <span>{t('diff.ws')}</span>
+        </button>
         {!file.untracked && !baseActive && (
           <span className={css.scopeSwitch} role="group" aria-label={t('scope.label')}>
             {(['all', 'staged', 'unstaged'] as const).map(candidate => (
@@ -290,6 +351,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           onToggleFull,
           t,
           engine,
+          words,
           unified,
           activeMatch,
           file,
@@ -300,6 +362,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           onCommentClose: () => { setCommentTarget(null) },
           useInput,
           inputActions,
+          onDraftAdd,
         })}
         {/* Seat overlay reserve: the composer card floats over the pane's bottom. */}
         <div className={css.diffBottomReserve} />
@@ -316,6 +379,7 @@ function renderHunks(
     onToggleFull: () => void
     t: T
     engine: SearchEngine
+    words: WordHighlighter
     unified: boolean
     activeMatch: number
     file: ChangedFile
@@ -324,6 +388,7 @@ function renderHunks(
     onCommentClose: () => void
     useInput: SnapshotSelectorHook<InputState> | undefined
     inputActions: InputActions | undefined
+    onDraftAdd: ((draft: CommentDraft) => void) | undefined
   },
 ): readonly ReactNode[] {
   let budget = MAX_RENDER_ROWS
@@ -360,6 +425,7 @@ function renderHunks(
                 <UnifiedRow
                   line={line}
                   engine={ui.engine}
+                  words={ui.words}
                   ordinal={ordinal}
                   active={ordinal === ui.activeMatch}
                   commentTitle={ui.t('comment.add')}
@@ -374,6 +440,7 @@ function renderHunks(
                     line={ui.commentTarget.line}
                     useInput={ui.useInput}
                     inputActions={ui.inputActions}
+                    onDraftAdd={ui.onDraftAdd}
                     onClose={ui.onCommentClose}
                     t={ui.t}
                   />
@@ -389,6 +456,7 @@ function renderHunks(
                 <Row
                   row={row}
                   engine={ui.engine}
+                  words={ui.words}
                 matchOrdinal={ordinal}
                 active={ordinal === ui.activeMatch}
                 commentTitle={ui.t('comment.add')}
@@ -403,6 +471,7 @@ function renderHunks(
                   line={ui.commentTarget.line}
                   useInput={ui.useInput}
                   inputActions={ui.inputActions}
+                  onDraftAdd={ui.onDraftAdd}
                   onClose={ui.onCommentClose}
                   t={ui.t}
                 />

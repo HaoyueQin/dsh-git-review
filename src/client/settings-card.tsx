@@ -48,13 +48,14 @@ function PrefRow({ label, hint, value, options, disabled, onChange }: {
         <span className={css.pluginPrefLabel}>{label}</span>
         <span className={css.pluginPrefHint}>{hint}</span>
       </div>
-      <span className={css.scopeSwitch} role="group" aria-label={label}>
+      <span className={css.pluginPrefGroup} role="group" aria-label={label}>
         {options.map(option => (
           <button
             key={option.key}
             type="button"
             disabled={disabled}
-            className={css.scopeBtn + (value === option.key ? ' ' + css.scopeBtnActive : '')}
+            className={css.pluginPrefBtn + (value === option.key ? ' ' + css.pluginPrefBtnActive : '')}
+            aria-pressed={value === option.key}
             onClick={() => { onChange(option.key) }}
           >
             {option.label}
@@ -133,15 +134,16 @@ export function SettingsCard({ t, reviewSettings, set }: SettingsCardProps) {
               <span className={css.pluginPrefLabel}>{t('settings.matching')}</span>
               <span className={css.pluginPrefHint}>{t('settings.matchingHint')}</span>
             </div>
-            <span className={css.scopeSwitch} role="group" aria-label={t('settings.matching')}>
-              {([['cs', t('search.flagCS')], ['rx', t('search.flagRegex')]] as const).map(([key, label]) => {
+            <span className={css.pluginPrefGroup} role="group" aria-label={t('settings.matching')}>
+              {([['cs', t('settings.matchCS')], ['rx', t('settings.matchRx')]] as const).map(([key, label]) => {
                 const active = key === 'cs' ? prefs.searchCS : prefs.searchRegex
                 return (
                   <button
                     key={key}
                     type="button"
                     disabled={disabled}
-                    className={css.scopeBtn + (active ? ' ' + css.scopeBtnActive : '')}
+                    aria-pressed={active}
+                    className={css.pluginPrefBtn + (active ? ' ' + css.pluginPrefBtnActive : '')}
                     onClick={() => { update(key === 'cs' ? { searchCS: !prefs.searchCS } : { searchRegex: !prefs.searchRegex }) }}
                   >
                     {label}
@@ -150,6 +152,17 @@ export function SettingsCard({ t, reviewSettings, set }: SettingsCardProps) {
               })}
             </span>
           </div>
+          <PrefRow
+            label={t('settings.ws')}
+            hint={t('settings.wsHint')}
+            value={prefs.wsIgnore ? 'ignore' : 'show'}
+            disabled={disabled}
+            options={[
+              { key: 'show', label: t('settings.wsShow') },
+              { key: 'ignore', label: t('settings.wsIgnore') },
+            ]}
+            onChange={key => { update({ wsIgnore: key === 'ignore' }) }}
+          />
           {state.status === 'ready' && <p className={css.pluginCardNote}>{t('settings.instantNote')}</p>}
         </div>
       )}

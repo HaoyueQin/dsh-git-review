@@ -89,6 +89,7 @@ function prefsEqual(a: ReviewPrefs, b: ReviewPrefs): boolean {
     && a.graphCollapsed === b.graphCollapsed
     && a.searchCS === b.searchCS
     && a.searchRegex === b.searchRegex
+    && a.wsIgnore === b.wsIgnore
 }
 
 function parseJson(raw: string): unknown {

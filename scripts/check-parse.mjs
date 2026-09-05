@@ -5,11 +5,13 @@
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
 import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, refRange, splitDiffSections } from '../src/git-parse.ts'
-import { countMatchRows, countUnifiedMatches, makeSearchEngine, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
+import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
+import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
+import { createDraftBox, draftsKey, parseDrafts } from '../src/client/comment-drafts.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
 
@@ -435,22 +437,93 @@ assert.equal(countUnifiedMatches(pairDiff, pairEngine), 2)
 // crash the tab).
 assert.deepEqual(normalizePrefs(null), DEFAULT_PREFS)
 assert.deepEqual(normalizePrefs('not json'), DEFAULT_PREFS)
-assert.deepEqual(normalizePrefs({ viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, junk: 1 }),
-  { viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true })
+assert.deepEqual(normalizePrefs({ viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, wsIgnore: true, junk: 1 }),
+  { viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, wsIgnore: true })
 assert.deepEqual(normalizePrefs({ viewMode: 'bogus', searchScope: 'nope' }), DEFAULT_PREFS)
 
 // 35. Settings-scope store helpers: section reads normalize, a default
 //     section reads as default, and the legacy-store migration carries only
 //     a user-written store (defaults or junk stay put; shapes clean up).
 assert.deepEqual(prefsFromSection({ viewMode: 'unified', junk: 1 }),
-  { viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false })
-assert.equal(sectionIsDefault({ viewMode: 'split', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false }), true)
-assert.equal(sectionIsDefault({ viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false }), false)
+  { viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false })
+assert.equal(sectionIsDefault({ viewMode: 'split', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false }), true)
+assert.equal(sectionIsDefault({ viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false }), false)
 assert.equal(migrationFields(null), null)
 assert.equal(migrationFields('not json'), null)
 assert.equal(migrationFields(JSON.stringify(DEFAULT_PREFS)), null)
 const legacy = JSON.stringify({ viewMode: 'unified', searchScope: 'content' })
 assert.deepEqual(migrationFields(legacy),
-  { viewMode: 'unified', searchScope: 'content', graphCollapsed: false, searchCS: false, searchRegex: false })
+  { viewMode: 'unified', searchScope: 'content', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false })
+
+// 36. Word-level highlight: a replacement pair's changed spans come out of a
+//     character-level LCS; non-pairs, rewrites (low similarity) and exhausted
+//     budget all degrade to null (plain row rendering).
+const words = makeWordHighlighter()
+assert.equal(words.pair({ kind: 'ctx', left: { no: 1, text: 'a' }, right: { no: 1, text: 'a' } }), null)
+const wordPair = words.pair({
+  kind: 'pair',
+  left: { no: 3, text: 'const x = foo(a, b);' },
+  right: { no: 3, text: 'const x = foo(a, c);' },
+})
+assert.ok(wordPair !== null)
+assert.deepEqual(wordPair.old, [[17, 18]])
+assert.deepEqual(wordPair.new, [[17, 18]])
+assert.equal(words.pair({
+  kind: 'pair',
+  left: { no: 4, text: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+  right: { no: 4, text: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' },
+}), null)
+const tiny = makeWordHighlighter(1)
+assert.equal(tiny.pair({ kind: 'pair', left: { no: 1, text: 'ab' }, right: { no: 1, text: 'ax' } }), null)
+
+// 37. Viewed store: toggling round-trips through a memory storage, junk
+//     stored values degrade to empty, and the cap evicts the oldest.
+function memoryStorage(initial) {
+  const map = new Map(Object.entries(initial ?? {}))
+  return {
+    getItem: key => map.get(key) ?? null,
+    setItem: (key, value) => { map.set(key, value) },
+    removeItem: key => { map.delete(key) },
+  }
+}
+assert.deepEqual(parseViewed(null), [])
+assert.deepEqual(parseViewed('not json'), [])
+assert.deepEqual(parseViewed('{"a":1}'), [])
+assert.deepEqual(parseViewed(JSON.stringify(['b1', 2, '', 'b2', 'b1'])), ['b1', 'b2'])
+const viewedStorage = memoryStorage()
+const viewed = createViewedStore(viewedStorage)
+assert.equal(viewed.toggle('hash1'), true)
+assert.equal(viewed.toggle('hash2'), true)
+assert.ok(viewed.has('hash1'))
+assert.ok(viewed.has('hash2'))
+assert.equal(viewed.toggle('hash1'), false)
+assert.ok(!viewed.has('hash1'))
+assert.deepEqual(parseViewed(viewedStorage.getItem('dsh-git-review.viewed')), ['hash2'])
+const capped = createViewedStore(memoryStorage({ 'dsh-git-review.viewed': JSON.stringify(Array.from({ length: 2000 }, (_, i) => 'h' + i)) }))
+capped.toggle('newest')
+assert.ok(capped.has('newest'))
+assert.ok(!capped.has('h1999'))
+
+// 38. Comment draft box: per-workspace key, junk degrades to empty, and the
+//     add/remove/clear round-trips persist into the storage.
+assert.equal(draftsKey('D:\\repo'), 'dsh-git-review.drafts:' + encodeURIComponent('D:\\repo'))
+assert.deepEqual(parseDrafts(null), [])
+assert.deepEqual(parseDrafts('nope'), [])
+assert.deepEqual(parseDrafts('[{"path":"a.ts","line":3,"text":"hi"},{"path":"","line":1,"text":"x"},{"bad":1}]'),
+  [{ path: 'a.ts', line: 3, text: 'hi' }])
+const draftStorage = memoryStorage()
+const box = createDraftBox('D:\\repo', draftStorage)
+box.add({ path: 'src/a.ts', line: 12, text: 'rename this' })
+box.add({ path: 'src/b.ts', line: 4, text: 'check null' })
+assert.deepEqual(box.list(), [
+  { path: 'src/a.ts', line: 12, text: 'rename this' },
+  { path: 'src/b.ts', line: 4, text: 'check null' },
+])
+box.remove(0)
+assert.deepEqual(box.list(), [{ path: 'src/b.ts', line: 4, text: 'check null' }])
+assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [{ path: 'src/b.ts', line: 4, text: 'check null' }])
+box.clear()
+assert.deepEqual(box.list(), [])
+assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [])
 
 console.log('check-parse: all assertions passed')

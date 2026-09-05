@@ -47,17 +47,24 @@ body[data-dsh-bg-glass] .root {
  * painted under the tree/diff glass surfaces that come later in the DOM and
  * blurred behind their backdrop-filter. Ranking the toolbar above the body's
  * auto contexts lifts every toolbar popout with it. The popovers that hang
- * off the root (commit/branch z-40, file menu z-90) already outrank them. */
+ * off the root (commit/branch z-40, file menu z-90) already outrank them.
+ *
+ * The toolbar WRAPS instead of squeezing: a side-by-side session view with
+ * the sidebar open leaves far less width than the content needs, and a
+ * squeezed flex row renders the totals as a one-character-per-line column
+ * that overflows this header and paints over the tab bar and sidebar. Every
+ * child is flex:none + nowrap so wrap moves whole controls, never glyphs. */
 .toolbar {
   position: relative;
   z-index: 30;
   display: flex;
   flex: none;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
-  height: 40px;
-  padding: 0 12px;
+  gap: 6px 10px;
+  min-height: 40px;
+  padding: 4px 12px;
   border-bottom: 1px solid var(--dsw-alias-border-secondary);
 }
 
@@ -159,6 +166,7 @@ body[data-dsh-bg-glass] .root {
   display: flex;
   flex-direction: column;
   width: 340px;
+  max-width: calc(100vw - 48px);
   max-height: 420px;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 8px;
@@ -272,10 +280,12 @@ body[data-dsh-bg-glass] .root {
 
 .totals {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 8px;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .totalAdded {
@@ -290,6 +300,7 @@ body[data-dsh-bg-glass] .root {
 
 .fileCount {
   color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
 }
 
 .toolbarSpacer {
@@ -298,10 +309,10 @@ body[data-dsh-bg-glass] .root {
 
 .searchBox {
   display: inline-flex;
-  flex: none;
+  flex: 1;
   align-items: center;
   gap: 6px;
-  max-width: 380px;
+  min-width: 0;
   padding: 3px 9px;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 999px;
@@ -316,8 +327,8 @@ body[data-dsh-bg-glass] .root {
 
 .searchInput {
   flex: 1;
-  width: 170px;
-  min-width: 0;
+  width: auto;
+  min-width: 60px;
   border: none;
   outline: none;
   background: transparent;
@@ -341,9 +352,14 @@ body[data-dsh-bg-glass] .root {
 .searchWrap {
   position: relative;
   display: inline-flex;
-  flex: none;
+  /* Elastic: grows into spare width, yields (whole control, glyphs intact)
+     when the row is tight — the sidebar and a right-side panel both cut the
+     toolbar's budget, so fixed search width would squeeze other controls. */
+  flex: 1 1 240px;
   align-items: center;
   gap: 4px;
+  min-width: 210px;
+  max-width: 480px;
 }
 
 .searchScope {
@@ -388,6 +404,7 @@ body[data-dsh-bg-glass] .root {
   display: flex;
   flex-direction: column;
   width: 220px;
+  max-width: calc(100vw - 48px);
   padding: 4px;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 8px;
@@ -452,6 +469,7 @@ body[data-dsh-bg-glass] .root {
 }
 
 .toolBtn {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -462,6 +480,7 @@ body[data-dsh-bg-glass] .root {
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   cursor: pointer;
+  white-space: nowrap;
   white-space: nowrap;
 }
 
@@ -590,9 +609,51 @@ body[data-dsh-bg-glass] .root {
   display: flex;
   flex: none;
   flex-direction: column;
-  width: 280px;
+  /* Shrinks with the view: a session with the sidebar open AND a right-side
+     panel (DSH-better-sidebar & friends) can cut the body width below the
+     old fixed 280px, squeezing the diff pane to nothing. */
+  width: clamp(200px, 26%, 280px);
   min-height: 0;
   border-left: 1px solid var(--dsw-alias-border-secondary);
+}
+
+/* Pending-review chip above the tree (the Viewed workflow's counter). */
+.treePending {
+  flex: none;
+  padding: 6px 12px;
+  border-bottom: 1px dashed var(--dsw-alias-border-secondary);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 12px;
+}
+
+/* The reviewed marker: a small circle before the file icon; done state fills
+   with the success token. A span (rows are buttons — nesting is illegal). */
+.viewedDot {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  border: 1.5px solid var(--dsw-alias-border-secondary);
+  border-radius: 50%;
+  color: transparent;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.viewedDot:hover {
+  border-color: var(--dsw-alias-state-success-primary);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.viewedDotDone {
+  border-color: var(--dsw-alias-state-success-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 22%, transparent);
+  color: var(--dsw-alias-state-success-primary);
 }
 
 .treeModeRow {
@@ -752,8 +813,9 @@ body[data-dsh-bg-glass] .root {
   display: flex;
   flex: none;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 4px 8px;
   padding: 7px 12px;
   border-bottom: 1px solid var(--dsw-alias-border-secondary);
 }
@@ -803,6 +865,7 @@ body[data-dsh-bg-glass] .root {
   /* Inline-flex centering: a bare block button lays the icon out on the text
      baseline and the svg rides high (the misaligned switch buttons). */
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 4px;
   border: none;
@@ -835,6 +898,12 @@ body[data-dsh-bg-glass] .root {
 
 .scopeBtn:disabled:hover {
   background: transparent;
+}
+
+/* A toggled tool button (ignore-whitespace etc.) reads pressed. */
+.toolBtnActive {
+  background: var(--dsw-alias-fill-active);
+  color: var(--dsw-alias-label-primary);
 }
 
 .noticeRow {
@@ -989,8 +1058,9 @@ body[data-dsh-bg-glass] .root {
 
 .branchPop {
   position: absolute;
-  top: 44px;
+  top: calc(100% + 6px);
   left: 12px;
+  max-width: calc(100% - 24px);
   z-index: 40;
   display: flex;
   flex-direction: column;
@@ -1135,8 +1205,9 @@ body[data-dsh-bg-glass] .root {
 
 .commitPop {
   position: absolute;
-  top: 44px;
+  top: calc(100% + 6px);
   right: 12px;
+  max-width: calc(100% - 24px);
   z-index: 40;
   display: flex;
   flex-direction: column;
@@ -1147,6 +1218,81 @@ body[data-dsh-bg-glass] .root {
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
   box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+/* Comment draft box (shares .commitPop's anchored-popover chrome). */
+.draftPop {
+  max-height: 420px;
+  max-width: calc(100% - 24px);
+}
+
+.draftHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.draftClear {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.draftClear:hover {
+  color: var(--dsw-alias-label-error);
+}
+
+.draftEmpty {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.draftList {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.draftRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.draftRow + .draftRow {
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.draftRowText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.draftRowPath {
+  color: var(--dsw-alias-state-business-primary);
+  font-family: var(--dsw-font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+}
+
+.draftRowBody {
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .commitInput {
@@ -1344,6 +1490,22 @@ body[data-dsh-bg-glass] .root {
 .rowPair > .cellText:nth-child(4) {
   color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 82%, var(--dsw-alias-label-primary));
   background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
+}
+
+/* Word-level highlight inside a replacement pair: the changed characters
+   deepen the row's own 14% tint (34% + stronger color) so an agent's whole-line
+   rewrite still shows WHICH words moved. Derived from the same two tokens,
+   so both themes and both view modes stay consistent. */
+.wordDel {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 30%, transparent);
+  color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 75%, var(--dsw-alias-label-primary));
+}
+
+.wordAdd {
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 30%, transparent);
+  color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 68%, var(--dsw-alias-label-primary));
 }
 
 .diffBottomReserve {
@@ -1842,6 +2004,43 @@ body[data-dsh-bg-glass] .commitHeader {
 
 .pluginPrefRow + .pluginPrefRow {
   border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+/* The card's option buttons: individually bordered (the toolbar's bare
+   segmented switch reads as unlabeled text inside the card). */
+.pluginPrefGroup {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.pluginPrefBtn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 4px 12px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-3);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .16s, background .16s, color .16s;
+}
+
+.pluginPrefBtn:hover:not(:disabled) {
+  border-color: var(--dsw-alias-label-dimmed);
+  color: var(--dsw-alias-label-primary);
+}
+
+.pluginPrefBtnActive {
+  border-color: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 9%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
 }
 
 .pluginPrefText {

@@ -23,6 +23,10 @@ export interface ChangedFile {
   binary: boolean
   /** The file is untracked (porcelain '??'). */
   untracked: boolean
+  /** Worktree blob hash (status worktree mode only, existing files only):
+   *  the reviewed-marker's identity — the marker rides the hash, so an
+   *  agent's new edit (new hash) auto-unmarks the file. */
+  blob?: string
   /** Client-synthesis marker for all-files tree mode (the host never sets it):
    *  the row stands for a repository file with no local changes. */
   unchanged?: boolean

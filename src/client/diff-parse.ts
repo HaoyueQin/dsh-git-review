@@ -383,3 +383,135 @@ export function countUnifiedMatches(parsed: ParsedDiff, engine: SearchEngine): n
   }
   return count
 }
+
+/* ── word-level (in-line) highlight ──────────────────────────────────── */
+
+/** Half-open [start, end) changed spans of one side's text, ascending. */
+export type WordSpans = ReadonlyArray<readonly [number, number]>
+
+/** Changed spans of a replacement pair: `old` indexes the deletion side,
+ *  `new` the addition side. */
+export interface WordRegions {
+  old: WordSpans
+  new: WordSpans
+}
+
+/** Rows longer than this skip the word highlight (LCS cost grows with the
+ *  product of the lengths; real rewrites are usually single long lines). */
+export const WORD_HIGHLIGHT_MAX_LEN = 240
+
+/** Total character-pair DP budget one parsed diff may spend (roughly 300
+ *  typical replacement rows) — the hard bound that keeps a 20k-row diff's
+ *  worst case off the render path. */
+export const WORD_HIGHLIGHT_BUDGET = 2_000_000
+
+/** Whether a pair is worth a DP: quick shared-character ratio over the
+ *  multiset intersection (O(n+m)), below it the line is a rewrite and
+ *  intra-line spans would render nearly everything as changed anyway. */
+const WORD_HIGHLIGHT_MIN_RATIO = 0.3
+
+/** Character-level LCS changed spans for one replacement pair, or null when
+ *  the pair is too long, too dissimilar, or budget is exhausted — null means
+ *  "render the plain row" and is always safe. */
+function lcsWordRegions(a: string, b: string): WordRegions | null {
+  if (a.length === 0 || b.length === 0) return null
+  if (a.length > WORD_HIGHLIGHT_MAX_LEN || b.length > WORD_HIGHLIGHT_MAX_LEN) return null
+  if (a === b) return null
+  const rows = a.length + 1
+  const cols = b.length + 1
+  const dp = new Uint16Array(rows * cols)
+  for (let i = 1; i < rows; i++) {
+    const ca = a.charCodeAt(i - 1)
+    for (let j = 1; j < cols; j++) {
+      dp[i * cols + j] = ca === b.charCodeAt(j - 1)
+        ? dp[(i - 1) * cols + j - 1] + 1
+        : Math.max(dp[(i - 1) * cols + j], dp[i * cols + j - 1])
+    }
+  }
+  const lcs = dp[rows * cols - 1]
+  if (lcs / Math.max(a.length, b.length) < WORD_HIGHLIGHT_MIN_RATIO) return null
+  // Walk the DP backwards marking changed characters per side, then sweep
+  // the marks into ascending half-open spans.
+  const oldMarks = new Uint8Array(a.length)
+  const newMarks = new Uint8Array(b.length)
+  let i = a.length
+  let j = b.length
+  while (i > 0 && j > 0) {
+    if (a.charCodeAt(i - 1) === b.charCodeAt(j - 1)) {
+      i -= 1
+      j -= 1
+      continue
+    }
+    if (dp[(i - 1) * cols + j] >= dp[i * cols + j - 1]) {
+      oldMarks[i - 1] = 1
+      i -= 1
+    } else {
+      newMarks[j - 1] = 1
+      j -= 1
+    }
+  }
+  while (i > 0) {
+    oldMarks[i - 1] = 1
+    i -= 1
+  }
+  while (j > 0) {
+    newMarks[j - 1] = 1
+    j -= 1
+  }
+  const spansOf = (marks: Uint8Array): WordSpans => {
+    const spans: [number, number][] = []
+    let start = -1
+    for (let k = 0; k < marks.length; k++) {
+      if (marks[k] === 1 && start === -1) start = k
+      if (marks[k] === 0 && start !== -1) {
+        spans.push([start, k])
+        start = -1
+      }
+    }
+    if (start !== -1) spans.push([start, marks.length])
+    return spans
+  }
+  return { old: spansOf(oldMarks), new: spansOf(newMarks) }
+}
+
+/**
+ * Budgeted, memoized word-highlight pass over one parsed diff.
+ *
+ * Created once per parse (DiffPane), consumed per row: `pair(row)` returns
+ * the pair's regions (or null) and never recomputes a row (WeakSet guard),
+ * so re-renders — search flutters, selection changes — stay DP-free. When
+ * the budget runs out later rows degrade to plain rendering, the same
+ * philosophy that caps render rows.
+ */
+export interface WordHighlighter {
+  /** Changed spans for one replacement row (null = render plain). */
+  pair(row: PairRow): WordRegions | null
+}
+
+export function makeWordHighlighter(budget: number = WORD_HIGHLIGHT_BUDGET): WordHighlighter {
+  let remaining = budget
+  const memo = new WeakMap<PairRow, WordRegions | null>()
+  return {
+    pair(row: PairRow): WordRegions | null {
+      if (row.kind !== 'pair' || row.left === null || row.right === null) return null
+      const cached = memo.get(row)
+      if (cached !== undefined) return cached
+      let regions: WordRegions | null = null
+      const left = row.left.text
+      const right = row.right.text
+      // Cheap rejection before any DP: empty side, oversized side, or the
+      // quick shared-character ratio.
+      if (left.length <= WORD_HIGHLIGHT_MAX_LEN && right.length <= WORD_HIGHLIGHT_MAX_LEN
+        && left.length > 0 && right.length > 0 && left !== right) {
+        const cost = left.length * right.length
+        if (cost <= remaining) {
+          remaining -= cost
+          regions = lcsWordRegions(left, right)
+        }
+      }
+      memo.set(row, regions)
+      return regions
+    },
+  }
+}
+

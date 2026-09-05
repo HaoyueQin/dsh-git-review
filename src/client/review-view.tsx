@@ -7,14 +7,16 @@
  * fixes the view's height and floats the input card over its bottom, so the
  * review→agent feedback loop stays one keystroke away.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
 import { hostCall } from './api.ts'
-import { BranchIcon, CheckIcon, ChevronIcon, CommitIcon, FileIcon, GraphIcon, OptionsIcon, RefreshIcon, SearchIcon } from './icons.tsx'
+import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, OptionsIcon, RefreshIcon, SearchIcon } from './icons.tsx'
 import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
@@ -22,6 +24,8 @@ import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
 import { mergeAllFiles } from './file-tree.ts'
+import { createViewedStore } from './viewed.ts'
+import { createDraftBox, type CommentDraft } from './comment-drafts.ts'
 import { TreePanel } from './tree-panel.tsx'
 import type { NS, ReviewKey } from './locales.ts'
 import css from './review.module.css'
@@ -68,16 +72,16 @@ type DiffState =
   | { kind: 'failed'; message: string }
 
 /** Fetch one status snapshot; maps every failure onto an explicit state. */
-async function loadStatus(cwd: string, base: string | null, target: string | null): Promise<Exclude<StatusState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitStatusPayload | GitStatusFailure>('status', { cwd, base, target })
+async function loadStatus(cwd: string, base: string | null, target: string | null, wsIgnore: boolean): Promise<Exclude<StatusState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitStatusPayload | GitStatusFailure>('status', { cwd, base, target, ws: wsIgnore })
   if (payload === null) return { kind: 'hostUnavailable' }
   if (!payload.ok) return payload.isRepository === false ? { kind: 'notRepo' } : { kind: 'error', message: payload.error }
   return { kind: 'ready', data: payload }
 }
 
 /** Fetch one file's diff; keeps non-ok payloads as explicit failures. */
-async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean, scope: DiffScope, base: string | null, target: string | null): Promise<Exclude<DiffState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full, scope, base, target })
+async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean, scope: DiffScope, base: string | null, target: string | null, wsIgnore: boolean): Promise<Exclude<DiffState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full, scope, base, target, ws: wsIgnore })
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
@@ -137,6 +141,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [searchScope, setSearchScope] = useState<'path' | 'diff' | 'content'>(initialPrefs.searchScope)
   const [searchCS, setSearchCS] = useState(initialPrefs.searchCS)
   const [searchRegex, setSearchRegex] = useState(initialPrefs.searchRegex)
+  // Whitespace-only edits hide behind the ignore-whitespace toggle (a
+  // preference, so the choice follows the user across sessions).
+  const [wsIgnore, setWsIgnore] = useState(initialPrefs.wsIgnore)
   const [searchMenu, setSearchMenu] = useState<'scope' | 'match' | null>(null)
   const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
   // Diff-base override: null compares against HEAD; the refs list feeds the
@@ -174,23 +181,40 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const commitPopRef = useRef<HTMLDivElement | null>(null)
   const branchBtnRef = useRef<HTMLButtonElement | null>(null)
   const commitBtnRef = useRef<HTMLButtonElement | null>(null)
+  const draftPopRef = useRef<HTMLDivElement | null>(null)
+  const draftBtnRef = useRef<HTMLButtonElement | null>(null)
   const searchScopeRef = useRef<HTMLSpanElement | null>(null)
   const searchMatchRef = useRef<HTMLSpanElement | null>(null)
+  // Comment draft box: pending comments keyed per workspace, surfaced in a
+  // toolbar popover with a bulk send into the composer draft.
+  const draftBox = useMemo(() => (cwd === undefined ? null : createDraftBox(cwd)), [cwd])
+  const [draftList, setDraftList] = useState<CommentDraft[]>([])
+  const [draftOpen, setDraftOpen] = useState(false)
+  useEffect(() => {
+    setDraftList(draftBox?.list() ?? [])
+  }, [draftBox])
+  const addDraft = useCallback((draft: CommentDraft) => {
+    draftBox?.add(draft)
+    setDraftList(draftBox?.list() ?? [])
+  }, [draftBox])
+
   // Popovers spawned before RefPicker/FileMenu had no outside-click close;
   // share the same document-mousedown rule those two use. The trigger buttons
   // are excluded so their own click-to-toggle doesn't fight the closer.
   useEffect(() => {
-    if (!branchOpen && !commitOpen) return
+    if (!branchOpen && !commitOpen && !draftOpen) return
     const onDown = (event: MouseEvent): void => {
       const target = event.target as Node
       if (branchOpen && branchPopRef.current !== null && !branchPopRef.current.contains(target)
         && (branchBtnRef.current === null || !branchBtnRef.current.contains(target))) setBranchOpen(false)
       if (commitOpen && commitPopRef.current !== null && !commitPopRef.current.contains(target)
         && (commitBtnRef.current === null || !commitBtnRef.current.contains(target))) setCommitOpen(false)
+      if (draftOpen && draftPopRef.current !== null && !draftPopRef.current.contains(target)
+        && (draftBtnRef.current === null || !draftBtnRef.current.contains(target))) setDraftOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => { document.removeEventListener('mousedown', onDown) }
-  }, [branchOpen, commitOpen])
+  }, [branchOpen, commitOpen, draftOpen])
   useEffect(() => {
     if (searchMenu === null) return
     const onDown = (event: MouseEvent): void => {
@@ -212,6 +236,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setGraphListCollapsed(prefs.graphCollapsed)
     setSearchCS(prefs.searchCS)
     setSearchRegex(prefs.searchRegex)
+    setWsIgnore(prefs.wsIgnore)
   }), [settings])
   const [branchName, setBranchName] = useState('')
   const [branchStart, setBranchStart] = useState('')
@@ -224,6 +249,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // (availability probed once per page by the host).
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null)
   const [openApps, setOpenApps] = useState<OpenApp[] | null>(null)
+  // Reviewed markers (worktree mode only): a plugin-local store keyed on
+  // the worktree blob hash; bumpViewed re-renders the tree after a toggle.
+  const viewedStore = useMemo(() => createViewedStore(), [])
+  const [viewedTick, bumpViewed] = useReducer(count => count + 1, 0)
+  const viewedHas = useCallback((blob: string) => viewedStore.has(blob), [viewedStore])
+  const toggleViewed = useCallback((blob: string) => {
+    viewedStore.toggle(blob)
+    bumpViewed()
+  }, [viewedStore])
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
   // workspace or comparison range changes. A refresh keeps the previous list
@@ -240,11 +274,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     }
     let alive = true
     setStatus(previous => (previous.kind === 'ready' || previous.kind === 'error' ? previous : { kind: 'loading' }))
-    void loadStatus(cwd, baseRef, refsMode ? targetRef : null).then(next => {
+    void loadStatus(cwd, baseRef, refsMode ? targetRef : null, wsIgnore).then(next => {
       if (alive) setStatus(next)
     })
     return () => { alive = false }
-  }, [cwd, reloadTick, baseRef, targetRef, compareMode])
+  }, [cwd, reloadTick, baseRef, targetRef, compareMode, wsIgnore])
 
   // Selectable diff-base refs (branches, remotes, tags) and the picker's
   // recent-commit feed (a capped log — the picker is not a history browser).
@@ -402,6 +436,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     () => (treeMode === 'all' && !refsMode && allFiles !== null ? mergeAllFiles(allFiles, ready?.files ?? []) : null),
     [treeMode, refsMode, allFiles, ready],
   )
+  /** Changed-but-not-yet-reviewed count (worktree mode; drives the tree's chip). */
+  const pendingCount = useMemo(() => {
+    if (viewTab !== 'changes' || refsMode || ready === null) return undefined
+    return ready.files.filter(file => file.blob !== undefined && !viewedStore.has(file.blob)).length
+  }, [viewTab, refsMode, ready, viewedStore, viewedTick])
   const selectedFile = useMemo(() => {
     const source = allRows ?? ready?.files
     return source?.find(file => file.path === selected) ?? null
@@ -426,12 +465,12 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     const wantFile = selectedFile.unchanged === true || effectiveView === 'file'
     const loader = wantFile
       ? loadFileContent(cwd, selected)
-      : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope, baseRef, refsMode ? targetRef : null)
+      : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope, baseRef, refsMode ? targetRef : null, wsIgnore)
     void loader.then(next => {
       if (alive) setDiff(next)
     })
     return () => { alive = false }
-  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef, targetRef, compareMode, viewTab])
+  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef, targetRef, compareMode, viewTab, wsIgnore])
 
   // The selected commit file's diff (graph view): parent0...commit — the
   // empty-tree baseline for a root commit — rendered by the shared DiffPane.
@@ -454,11 +493,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     let alive = true
     setDiff({ kind: 'loading' })
     const parent0 = commitInfo !== null && commitInfo.parents.length > 0 ? commitInfo.parents[0]! : EMPTY_TREE_ID
-    void loadFileDiff(cwd, graphFileInfo.path, graphFileInfo.origPath, false, diffFull, 'all', parent0, selectedCommit).then(next => {
+    void loadFileDiff(cwd, graphFileInfo.path, graphFileInfo.origPath, false, diffFull, 'all', parent0, selectedCommit, wsIgnore).then(next => {
       if (alive) setDiff(next)
     })
     return () => { alive = false }
-  }, [viewTab, cwd, selectedCommit, graphFileInfo, commitInfo, diffFull])
+  }, [viewTab, cwd, selectedCommit, graphFileInfo, commitInfo, diffFull, wsIgnore])
 
   const toggleDir = useCallback((path: string) => {
     setCollapsed(previous => {
@@ -513,6 +552,12 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const toggleSearchRegex = useCallback(() => {
     setSearchRegex(value => {
       settings.set('searchRegex', !value)
+      return !value
+    })
+  }, [settings])
+  const toggleWsIgnore = useCallback(() => {
+    setWsIgnore(value => {
+      settings.set('wsIgnore', !value)
       return !value
     })
   }, [settings])
@@ -887,6 +932,19 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         </button>
         <button
           type="button"
+          className={css.toolBtn + ' ' + css.commitToggle + (draftList.length > 0 ? ' ' + css.toolBtnActive : '')}
+          disabled={useInput === undefined || inputActions === undefined}
+          title={t('comment.draftsTitle')}
+          ref={draftBtnRef}
+          aria-expanded={draftOpen}
+          onClick={() => { setDraftOpen(value => !value) }}
+        >
+          <CommentIcon />
+          <span>{t('comment.draftsTitle')}</span>
+          {draftList.length > 0 && <span className={css.badge}>{String(draftList.length)}</span>}
+        </button>
+        <button
+          type="button"
           className={css.toolBtn + ' ' + css.commitToggle}
           disabled={data === null || running}
           title={running ? t('commit.running') : t('commit.title')}
@@ -896,7 +954,24 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           <CommitIcon />
           <span>{t('commit.title')}</span>
         </button>
-      </header>
+      {draftOpen && useInput !== undefined && inputActions !== undefined && (
+        <DraftPopover
+          items={draftList}
+          useInput={useInput}
+          inputActions={inputActions}
+          popRef={draftPopRef}
+          onRemove={index => {
+            draftBox?.remove(index)
+            setDraftList(draftBox?.list() ?? [])
+          }}
+          onClear={() => {
+            draftBox?.clear()
+            setDraftList([])
+          }}
+          onClose={() => { setDraftOpen(false) }}
+          t={t}
+        />
+      )}
       {commitOpen && data !== null && (
         <div className={css.commitPop} ref={commitPopRef}>
           <textarea
@@ -1079,6 +1154,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           )}
         </div>
       )}
+      </header>
       {fileMenu !== null && (
         <FileMenu
           state={fileMenu}
@@ -1228,10 +1304,13 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           onViewChange={changeViewMode}
                           showViewSwitch
                           allowFileView={false}
+                          wsIgnore={wsIgnore}
+                          onToggleWs={toggleWsIgnore}
                           search={searchSpec}
                           baseActive
                           useInput={useInput}
                           inputActions={inputActions}
+                          onDraftAdd={addDraft}
                           t={t}
                         />
                       )}
@@ -1284,10 +1363,13 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           view={effectiveView}
                           onViewChange={changeViewMode}
                           showViewSwitch={!refsMode}
+                          wsIgnore={wsIgnore}
+                          onToggleWs={toggleWsIgnore}
                           search={searchSpec}
                           baseActive={baseRef !== null || refsMode}
                     useInput={useInput}
                     inputActions={inputActions}
+                    onDraftAdd={addDraft}
                     t={t}
                   />
                 )}
@@ -1307,6 +1389,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             showFilter={false}
             listFailed={allFilesFailed}
             matchCounts={searchMatches ?? undefined}
+            viewedHas={refsMode ? undefined : viewedHas}
+            onToggleViewed={refsMode ? undefined : toggleViewed}
+            pendingCount={pendingCount}
             onFileMenu={(path, x, y) => { setFileMenu({ path, x, y }) }}
             t={t}
           />
@@ -1340,6 +1425,76 @@ function CenteredState({ status, t, onRetry }: { status: Exclude<StatusState, { 
         <RefreshIcon />
         <span>{t('refresh')}</span>
       </button>
+    </div>
+  )
+}
+
+/**
+ * The pending-comment popover: per-workspace drafts with remove controls and
+ * one bulk send into the composer draft (reads the composer draft INSIDE this
+ * tiny component, per the diff-pane comment editor's same rule). Sending
+ * clears the box; the entries keep their original `path:line — text` shape.
+ */
+function DraftPopover({ items, useInput, inputActions, popRef, onRemove, onClear, onClose, t }: {
+  items: readonly CommentDraft[]
+  useInput: NonNullable<SessionStandardProps['useInput']>
+  inputActions: NonNullable<SessionStandardProps['inputActions']>
+  popRef: RefObject<HTMLDivElement>
+  onRemove: (index: number) => void
+  onClear: () => void
+  onClose: () => void
+  t: T
+}) {
+  const draft = useInput((s: InputState) => s.draft)
+  const sendAll = (): void => {
+    if (items.length === 0) return
+    const block = items.map(entry => entry.path + ':' + entry.line + ' \u2014 ' + entry.text).join('\n\n')
+    const current = draft.replace(/\s+$/, '')
+    inputActions.setDraft(current === '' ? block : current + '\n\n' + block)
+    onClear()
+    onClose()
+  }
+  return (
+    <div className={css.commitPop + ' ' + css.draftPop} ref={popRef}>
+      <div className={css.draftHead}>
+        <span>{t('comment.draftsTitle')}</span>
+        {items.length > 0 && (
+          <button type="button" className={css.draftClear} onClick={onClear}>{t('comment.clearDrafts')}</button>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <div className={css.draftEmpty}>{t('comment.emptyDrafts')}</div>
+      ) : (
+        <div className={css.draftList}>
+          {items.map((entry, index) => (
+            <div key={entry.path + ':' + entry.line + ':' + index} className={css.draftRow}>
+              <div className={css.draftRowText}>
+                <span className={css.draftRowPath}>{entry.path + ':' + entry.line}</span>
+                <span className={css.draftRowBody}>{entry.text}</span>
+              </div>
+              <button
+                type="button"
+                className={css.branchIconBtn + ' ' + css.branchDanger}
+                title={t('comment.removeDraft')}
+                aria-label={t('comment.removeDraft')}
+                onClick={() => { onRemove(index) }}
+              >
+                {'\u2715'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className={css.commitActions}>
+        <button
+          type="button"
+          className={css.commitBtn}
+          disabled={items.length === 0}
+          onClick={sendAll}
+        >
+          {t('comment.sendAll')}
+        </button>
+      </div>
     </div>
   )
 }

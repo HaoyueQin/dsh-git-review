@@ -81,6 +81,8 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024
 const DIFF_CAP = 2 * 1024 * 1024
 /** Untracked pseudo-diff read cap (parity with dsh-diff-stat's READ_CAP). */
 const READ_CAP = 512 * 1024
+/** Worktree files hashed per status call for the reviewed markers. */
+const BLOB_HASH_CAP = 200
 
 /** Structural webServer contract this plugin depends on (inject: 'webServer'). */
 interface WebServerService {
@@ -262,7 +264,11 @@ function capDiff(diffText: string): { diff: string; truncated: boolean } {
  *  worktree-vs-base name-status/numstat pair instead (untracked unchanged).
  *  With a `target` too, the ref-range mode reports `base...target` rows and
  *  the worktree (porcelain/untracked) is not consulted at all. */
-async function gitStatus(cwd: unknown, base: unknown, target: unknown): Promise<GitStatusPayload | { ok: false; isRepository: boolean; error: string }> {
+/** The one git flag behind the toolbar's ignore-whitespace toggle (whitespace-only
+ *  edits are the loudest review noise, see the competitor survey). */
+const WS_FLAG = ['--ignore-all-space'] as const
+
+async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitStatusPayload | { ok: false; isRepository: boolean; error: string }> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) {
@@ -284,9 +290,10 @@ async function gitStatus(cwd: unknown, base: unknown, target: unknown): Promise<
       return { ok: false, isRepository: true, error: 'cannot resolve diff range: ' + startRef + '...' + targetRef }
     }
     const range = refRange(baseCommit, targetCommit)
+    const wsFlags = ws === true ? WS_FLAG : []
     const [numstatRaw, nameStatusRaw] = await Promise.all([
-      runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...range]),
-      runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...range]),
+      runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...wsFlags, ...range]),
+      runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...wsFlags, ...range]),
     ])
     const files = mergeDiffRows(parseNameStatusZ(nameStatusRaw), numstatIndex(parseNumstatZ(numstatRaw)))
     let added = 0
@@ -311,14 +318,15 @@ async function gitStatus(cwd: unknown, base: unknown, target: unknown): Promise<
   const overrideCommit = baseRef === null
     ? null
     : await resolveRangeRef(repoRoot, baseRef).then(commit => (commit !== null && commit !== headCommit && commit !== EMPTY_TREE_ID ? commit : null))
+  const wsFlags = ws === true ? WS_FLAG : []
   const [branchRaw, porcelainRaw, numstatRaw, nameStatusRaw] = await Promise.all([
     runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ''),
     runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
     overrideCommit !== null
-      ? runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', overrideCommit])
-      : runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', unbornHead ? EMPTY_TREE_ID : 'HEAD']),
+      ? runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...wsFlags, overrideCommit])
+      : runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...wsFlags, unbornHead ? EMPTY_TREE_ID : 'HEAD']),
     overrideCommit !== null
-      ? runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', overrideCommit])
+      ? runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...wsFlags, overrideCommit])
       : Promise.resolve(''),
   ])
   const porcelainEntries = parsePorcelainV1(porcelainRaw)
@@ -345,6 +353,30 @@ async function gitStatus(cwd: unknown, base: unknown, target: unknown): Promise<
     if (probe !== null) untrackedCounts.set(entry.path, probe)
   }
   const files: ChangedFile[] = mergeStatus(finalEntries, numstat, untrackedCounts)
+  // Worktree blob hashes (the reviewed marker rides them): one hash-object
+  // process covers every existing worktree file; deleted rows have no file
+  // and stay blob-less, which the client renders as "not viewable".
+  const hashable = finalEntries
+    .filter(entry => entry.x !== 'D' && entry.y !== 'D')
+    .map(entry => entry.path)
+    .slice(0, BLOB_HASH_CAP)
+  if (hashable.length > 0) {
+    try {
+      const hashesRaw = await runGit(repoRoot, ['hash-object', '--', ...hashable])
+      const hashes = hashesRaw.split('\n').filter(line => line !== '')
+      const blobByPath = new Map<string, string>()
+      for (let i = 0; i < hashable.length && i < hashes.length; i++) {
+        if (HASH_ONLY_RE.test(hashes[i]!)) blobByPath.set(hashable[i]!, hashes[i]!)
+      }
+      for (const file of files) {
+        const blob = blobByPath.get(file.path)
+        if (blob !== undefined) file.blob = blob
+      }
+    } catch {
+      // hash-object failed (permissions, weird paths): every row stays
+      // blob-less and the viewed UI simply hides — status itself is fine.
+    }
+  }
   let added = 0
   let deleted = 0
   for (const file of files) {
@@ -380,7 +412,7 @@ function asScope(value: unknown): DiffScope {
  *  worktree-vs-base and the staged/unstaged scope is ignored. With a
  *  validated `target`, the ref-range mode runs `base...target` instead and
  *  neither scope nor untracked probing applies. */
-async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown, base: unknown, target: unknown): Promise<GitFileDiffPayload> {
+async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitFileDiffPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -397,12 +429,13 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
   // context), so "show all context" is a plain re-fetch of the same diff.
   const context = full === true ? 100000 : 3
   const targetRef = normalizeBaseRef(target)
+  const wsFlags = ws === true ? WS_FLAG : []
   if (targetRef !== null) {
     const baseCommit = await resolveRangeRef(repoRoot, normalizeBaseRef(base) ?? 'HEAD')
     const targetCommit = await resolveRangeRef(repoRoot, targetRef)
     if (baseCommit === null || targetCommit === null) throw new Error('cannot resolve diff range refs')
     const diffText = await runGit(repoRoot, [
-      'diff', '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context),
+      'diff', '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context), ...wsFlags,
       ...refRange(baseCommit, targetCommit), '--', ...pathspecs,
     ])
     if (diffText === '') return { ok: true, binary: false, diff: '', truncated: false }
@@ -436,7 +469,7 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
   const attempt = (range: string): Promise<string> => runGit(repoRoot, [
     'diff',
     ...(overrideCommit === null && diffScope === 'staged' ? ['--cached'] : []),
-    '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context),
+    '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context), ...wsFlags,
     ...(usesRange ? [range] : []),
     '--', ...pathspecs,
   ])
@@ -1061,11 +1094,11 @@ export function apply(ctx: Context): void {
         const action = route.startsWith(API_PREFIX + '/') ? route.slice(API_PREFIX.length + 1) : (route.startsWith('/') ? route.slice(1) : route)
         const body = await readJsonBody(req, res)
         if (action === 'status') {
-          respond(res, 200, await gitStatus(body['cwd'], body['base'], body['target']))
+          respond(res, 200, await gitStatus(body['cwd'], body['base'], body['target'], body['ws']))
           return
         }
         if (action === 'file-diff') {
-          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope'], body['base'], body['target']))
+          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope'], body['base'], body['target'], body['ws']))
           return
         }
         if (action === 'refs') {

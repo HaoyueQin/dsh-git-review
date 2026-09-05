@@ -37,6 +37,8 @@ export interface ReviewSettingsSection {
   /** Remembered match toggles of the search. */
   searchCS: boolean
   searchRegex: boolean
+  /** Whether diffs hide whitespace-only edits (git --ignore-all-space). */
+  wsIgnore: boolean
 }
 
 export const ReviewSettingsSchema: z<ReviewSettingsSection> = z.object({
@@ -47,6 +49,7 @@ export const ReviewSettingsSchema: z<ReviewSettingsSection> = z.object({
   graphCollapsed: z.boolean().default(false),
   searchCS: z.boolean().default(false),
   searchRegex: z.boolean().default(false),
+  wsIgnore: z.boolean().default(false),
 })
 
 /** Serve the namespace while a settings domain is composed; inert otherwise.

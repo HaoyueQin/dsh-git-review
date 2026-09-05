@@ -570,6 +570,176 @@ body[data-dsh-bg-glass] .root {
   cursor: not-allowed;
 }
 
+/* ── branch manager ──────────────────────────────────────────────────── */
+
+.branchBtn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  max-width: 200px;
+  padding: 4px 9px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.branchBtn:hover {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.branchPop {
+  position: absolute;
+  top: 44px;
+  left: 12px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 360px;
+  max-height: 60%;
+  padding: 10px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+.branchCreateRow {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.branchNameInput {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+}
+
+.branchNameInput::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.branchCreateRow .branchSelect {
+  flex: none;
+  max-width: 150px;
+}
+
+.branchListScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.branchGroupLabel {
+  padding: 2px 4px 4px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+}
+
+.branchRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 4px;
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.branchRow:hover {
+  background: var(--dsw-alias-fill-hover);
+}
+
+.branchRowCurrent {
+  background: var(--dsw-alias-fill-active);
+}
+
+.branchRowRemote {
+  color: var(--dsw-alias-label-tertiary);
+  background: transparent;
+}
+
+.branchCurrentMark {
+  flex: none;
+  color: var(--dsw-alias-state-success-primary);
+  font-size: 12px;
+}
+
+.branchNameBtn {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 3px 2px;
+}
+
+.branchNameBtn:disabled {
+  cursor: default;
+}
+
+.branchIconBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.branchIconBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.branchIconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.branchDanger:hover:not(:disabled) {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.branchRemoteDetails {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.branchRemoteDetails summary {
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
 .commitPop {
   position: absolute;
   top: 44px;

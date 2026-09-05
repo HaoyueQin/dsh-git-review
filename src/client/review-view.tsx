@@ -13,7 +13,7 @@ import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/cl
 import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload } from '../contract.ts'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
 import { hostCall } from './api.ts'
-import { BranchIcon, CommitIcon, GraphIcon, RefreshIcon, SearchIcon } from './icons.tsx'
+import { BranchIcon, ChevronIcon, CommitIcon, GraphIcon, RefreshIcon, SearchIcon } from './icons.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
@@ -144,6 +144,15 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [stageAll, setStageAll] = useState(true)
   const [armed, setArmed] = useState<'commit' | 'commitPush' | 'push' | null>(null)
   const [writeState, setWriteState] = useState<{ kind: 'idle' } | { kind: 'busy' } | { kind: 'result'; ok: boolean; text: string }>({ kind: 'idle' })
+  // Branch manager popover state (create/switch/rename/delete).
+  const [branchOpen, setBranchOpen] = useState(false)
+  const [branchName, setBranchName] = useState('')
+  const [branchStart, setBranchStart] = useState('')
+  const [branchBusy, setBranchBusy] = useState(false)
+  const [branchResult, setBranchResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [renameTarget, setRenameTarget] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [deleteArmed, setDeleteArmed] = useState<string | null>(null)
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
   // workspace or comparison range changes. A refresh keeps the previous list
@@ -407,6 +416,26 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     })
   }, [])
 
+  /** Run one branch management action and surface git's answer verbatim;
+   *  a success refreshes status + refs (the branch may have changed). */
+  const executeBranch = useCallback(async (action: 'create' | 'switch' | 'delete' | 'rename', body: Record<string, unknown>) => {
+    if (cwd === undefined) return
+    setBranchBusy(true)
+    setBranchResult(null)
+    const payload = await hostCall<GitWritePayload>('branch-' + action, { cwd, confirm: true, ...body })
+    setBranchBusy(false)
+    if (payload === null) {
+      setBranchResult({ ok: false, text: t('state.hostUnavailable') })
+      return
+    }
+    setBranchResult({ ok: payload.ok, text: payload.ok ? (payload.output ?? '') : (payload.error ?? 'unknown error') })
+    if (payload.ok) {
+      setDeleteArmed(null)
+      setRenameTarget(null)
+      refresh()
+    }
+  }, [cwd, refresh, t])
+
   /** Execute one armed write (commit / commit+push / push) against the host. */
   const executeWrite = useCallback(async (kind: 'commit' | 'commitPush' | 'push') => {
     if (cwd === undefined) return
@@ -449,6 +478,16 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   return (
     <div className={css.root} data-conversation-composer-overlay="">
       <header className={css.toolbar} data-git-review-toolbar="">
+        <button
+          type="button"
+          className={css.branchBtn}
+          title={t('branch.manage')}
+          onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setBranchResult(null) }}
+        >
+          <BranchIcon />
+          <span>{data?.branch ?? 'HEAD'}</span>
+          <ChevronIcon rotated={branchOpen} />
+        </button>
         <span className={css.scopeSwitch} role="group" aria-label={t('compare.mode')}>
           {(['worktree', 'refs'] as const).map(candidate => (
             <button
@@ -590,6 +629,140 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
           {writeState.kind === 'busy' && <div className={css.commitNote}>{t('commit.busy')}</div>}
           {writeState.kind === 'result' && (
             <div className={css.commitNote + (writeState.ok ? '' : ' ' + css.errorText)}>{writeState.text}</div>
+          )}
+        </div>
+      )}
+      {branchOpen && data !== null && (
+        <div className={css.branchPop}>
+          <div className={css.branchCreateRow}>
+            <input
+              className={css.branchNameInput}
+              value={branchName}
+              onChange={event => { setBranchName(event.target.value) }}
+              onKeyDown={event => { if (event.key === 'Escape') setBranchOpen(false) }}
+              placeholder={t('branch.newName')}
+              spellCheck={false}
+            />
+            <select
+              className={css.branchSelect}
+              value={branchStart}
+              onChange={event => { setBranchStart(event.target.value) }}
+            >
+              <option value="">{t('branch.fromHead')}</option>
+              <RefOptionGroups refs={refs} t={t} />
+            </select>
+            <button
+              type="button"
+              className={css.commitBtn}
+              disabled={branchName.trim() === '' || branchBusy || running}
+              onClick={() => { void executeBranch('create', { name: branchName.trim(), startPoint: branchStart === '' ? undefined : branchStart }) }}
+            >
+              {t('branch.create')}
+            </button>
+          </div>
+          <div className={css.branchListScroll}>
+            <div className={css.branchGroupLabel}>{t('branch.local')}</div>
+            {(refs ?? []).filter(ref => ref.kind === 'branch').map(ref => {
+              const isCurrent = ref.name === data.branch
+              if (renameTarget === ref.name) {
+                return (
+                  <div key={ref.name} className={css.branchRow}>
+                    <input
+                      className={css.branchNameInput}
+                      value={renameValue}
+                      onChange={event => { setRenameValue(event.target.value) }}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter' && renameValue.trim() !== '' && renameValue.trim() !== ref.name) {
+                          void executeBranch('rename', { name: ref.name, newName: renameValue.trim() })
+                        }
+                        if (event.key === 'Escape') setRenameTarget(null)
+                      }}
+                      autoFocus
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className={css.branchIconBtn}
+                      disabled={branchBusy || renameValue.trim() === '' || renameValue.trim() === ref.name}
+                      onClick={() => { void executeBranch('rename', { name: ref.name, newName: renameValue.trim() }) }}
+                    >
+                      {'\u2713'}
+                    </button>
+                    <button type="button" className={css.branchIconBtn} onClick={() => { setRenameTarget(null) }}>
+                      {'\u2715'}
+                    </button>
+                  </div>
+                )
+              }
+              return (
+                <div key={ref.name} className={css.branchRow + (isCurrent ? ' ' + css.branchRowCurrent : '')}>
+                  {isCurrent && <span className={css.branchCurrentMark} title={t('branch.current')}>{'\u2713'}</span>}
+                  <button
+                    type="button"
+                    className={css.branchNameBtn}
+                    disabled={isCurrent || branchBusy || running}
+                    title={isCurrent ? t('branch.current') : t('branch.switch')}
+                    onClick={() => { void executeBranch('switch', { name: ref.name }) }}
+                  >
+                    {ref.name}
+                  </button>
+                  <button
+                    type="button"
+                    className={css.branchIconBtn}
+                    title={t('branch.rename')}
+                    onClick={() => { setRenameTarget(ref.name); setRenameValue(ref.name) }}
+                  >
+                    {'\u270e'}
+                  </button>
+                  {deleteArmed === ref.name ? (
+                    <>
+                      <button
+                        type="button"
+                        className={css.branchIconBtn + ' ' + css.branchDanger}
+                        disabled={branchBusy || running}
+                        title={t('branch.confirmDelete')}
+                        onClick={() => { void executeBranch('delete', { name: ref.name, force: false }) }}
+                      >
+                        {t('branch.confirmDelete')}
+                      </button>
+                      <button
+                        type="button"
+                        className={css.branchIconBtn + ' ' + css.branchDanger}
+                        disabled={branchBusy || running}
+                        title={t('branch.forceDelete')}
+                        onClick={() => { void executeBranch('delete', { name: ref.name, force: true }) }}
+                      >
+                        {t('branch.forceDelete')}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className={css.branchIconBtn + ' ' + css.branchDanger}
+                      disabled={isCurrent || branchBusy || running}
+                      title={t('branch.delete')}
+                      onClick={() => { setDeleteArmed(ref.name) }}
+                    >
+                      {'\u2715'}
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+            {(refs ?? []).some(ref => ref.kind === 'remote') && (
+              <details className={css.branchRemoteDetails}>
+                <summary>{t('branch.remote')}</summary>
+                {(refs ?? []).filter(ref => ref.kind === 'remote').map(ref => (
+                  <div key={ref.name} className={css.branchRow + ' ' + css.branchRowRemote}>
+                    <span className={css.branchNameBtn}>{ref.name}</span>
+                  </div>
+                ))}
+              </details>
+            )}
+          </div>
+          {branchBusy && <div className={css.commitNote}>{t('branch.busy')}</div>}
+          {branchResult !== null && (
+            <div className={css.commitNote + (branchResult.ok ? '' : ' ' + css.errorText)}>{branchResult.text}</div>
           )}
         </div>
       )}

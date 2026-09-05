@@ -13,6 +13,10 @@
  *   POST /dsh-git-review/api/refs         { cwd }
  *   POST /dsh-git-review/api/commit       { cwd, message, mode?, confirm: true }
  *   POST /dsh-git-review/api/push         { cwd, confirm: true }
+ *   POST /dsh-git-review/api/branch-create  { cwd, name, startPoint?, confirm: true }
+ *   POST /dsh-git-review/api/branch-switch  { cwd, name, confirm: true }
+ *   POST /dsh-git-review/api/branch-delete  { cwd, name, force?, confirm: true }
+ *   POST /dsh-git-review/api/branch-rename  { cwd, name, newName, confirm: true }
  *   GET  /dsh-git-review/api/ping
  *
  * `status`/`file-diff` accept an optional `base` ref name (validated by
@@ -729,6 +733,81 @@ async function gitPush(cwd: unknown, confirm: unknown): Promise<GitWritePayload>
   return { ok: true, output: result.stdout.trim() }
 }
 
+/** Guard shared by the branch endpoints: confirm flag + normalizeBaseRef
+ *  pre-filter, then git's own rule checker (`check-ref-format --branch`)
+ *  has the final say on the name's validity. */
+async function branchGuard(repoRoot: string, confirm: unknown, rawName: unknown): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  if (confirm !== true) return { ok: false, error: 'branch actions require confirm: true' }
+  const name = normalizeBaseRef(rawName)
+  if (name === null) return { ok: false, error: 'invalid branch name' }
+  const check = await runGitCapture(repoRoot, ['check-ref-format', '--branch', name])
+  if (check.code !== 0) {
+    return { ok: false, error: check.stderr.trim() || check.stdout.trim() || 'invalid branch name: ' + name }
+  }
+  return { ok: true, name }
+}
+
+function writeAnswer(result: { code: number; stdout: string; stderr: string }, verb: string): GitWritePayload {
+  if (result.code !== 0) {
+    return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git ' + verb + ' failed (exit ' + result.code + ')' }
+  }
+  return { ok: true, output: result.stdout.trim() }
+}
+
+/** One `branch-create` answer: `git branch <name> [startPoint]`. The start
+ *  point accepts any ref and is resolved to a commit id before the call. */
+async function gitBranchCreate(cwd: unknown, name: unknown, startPoint: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const guard = await branchGuard(repoRoot, confirm, name)
+  if (!guard.ok) return guard
+  let startCommit: string | undefined
+  if (typeof startPoint === 'string' && startPoint.trim() !== '') {
+    const ref = normalizeBaseRef(startPoint)
+    const commit = ref === null ? null : await resolveRangeRef(repoRoot, ref)
+    if (commit === null || commit === EMPTY_TREE_ID) {
+      return { ok: false, error: 'cannot resolve start point: ' + (ref ?? '(invalid)') }
+    }
+    startCommit = commit
+  }
+  return writeAnswer(await runGitCapture(repoRoot, ['branch', guard.name, ...(startCommit !== undefined ? [startCommit] : [])]), 'branch')
+}
+
+/** One `branch-switch` answer: `git switch <name>` (branches only; a dirty
+ *  worktree is git's own call to refuse, and its words surface verbatim). */
+async function gitBranchSwitch(cwd: unknown, name: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const guard = await branchGuard(repoRoot, confirm, name)
+  if (!guard.ok) return guard
+  return writeAnswer(await runGitCapture(repoRoot, ['switch', guard.name]), 'switch')
+}
+
+/** One `branch-delete` answer: `git branch -d <name>` (force=true upgrades
+ *  to `-D` for not-yet-merged branches; the client arms it separately). */
+async function gitBranchDelete(cwd: unknown, name: unknown, force: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const guard = await branchGuard(repoRoot, confirm, name)
+  if (!guard.ok) return guard
+  return writeAnswer(await runGitCapture(repoRoot, ['branch', force === true ? '-D' : '-d', guard.name]), 'branch -d')
+}
+
+/** One `branch-rename` answer: `git branch -m <old> <new>`. */
+async function gitBranchRename(cwd: unknown, name: unknown, newName: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const guard = await branchGuard(repoRoot, confirm, name)
+  if (!guard.ok) return guard
+  const guardNew = await branchGuard(repoRoot, confirm, newName)
+  if (!guardNew.ok) return { ok: false, error: guardNew.error }
+  return writeAnswer(await runGitCapture(repoRoot, ['branch', '-m', guard.name, guardNew.name]), 'branch -m')
+}
+
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
 function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -815,6 +894,22 @@ export function apply(ctx: Context): void {
         }
         if (action === 'push') {
           respond(res, 200, await gitPush(body['cwd'], body['confirm']))
+          return
+        }
+        if (action === 'branch-create') {
+          respond(res, 200, await gitBranchCreate(body['cwd'], body['name'], body['startPoint'], body['confirm']))
+          return
+        }
+        if (action === 'branch-switch') {
+          respond(res, 200, await gitBranchSwitch(body['cwd'], body['name'], body['confirm']))
+          return
+        }
+        if (action === 'branch-delete') {
+          respond(res, 200, await gitBranchDelete(body['cwd'], body['name'], body['force'], body['confirm']))
+          return
+        }
+        if (action === 'branch-rename') {
+          respond(res, 200, await gitBranchRename(body['cwd'], body['name'], body['newName'], body['confirm']))
           return
         }
         if (action === 'file-content') {

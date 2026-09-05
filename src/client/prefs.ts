@@ -1,15 +1,10 @@
 /**
- * User preferences for the review tab, persisted in localStorage under one
- * JSON key. Every value here mirrors a control the user can flip inside the
- * tab (layout, search scope, graph rail), so the store is written on every
- * change and read back on mount — the settings card in Settings → Plugins
- * edits the same store, and `prefs/change` keeps concurrent views in sync.
- *
- * localStorage (the dsh-review-checkout precedent) beats a host settings
- * namespace for now: single-user single-machine, zero host surface, edits
- * apply instantly without a save button. If cross-device sync is ever
- * wanted, migrate the same shape to a registered settings namespace
- * (dsh-context's src/host/settings.ts is the in-ecosystem template).
+ * User preferences for the review tab. The durable source is the host-served
+ * settings namespace (review-settings.ts binds it and both surfaces read that
+ * store); this module keeps the fallback channel the tab degrades to when no
+ * settings seam serves the section: one JSON key in localStorage, written on
+ * every change and read back on mount. On first contact with a serving scope
+ * the store is migrated there and removed (review-settings.ts).
  */
 
 export type ReviewPrefs = {
@@ -25,9 +20,6 @@ export type ReviewPrefs = {
 }
 
 export const PREFS_KEY = 'dsh-git-review.prefs'
-
-/** Fired on `window` after every write so open views can re-read. */
-export const PREFS_EVENT = 'dsh-git-review:prefs-change'
 
 export const DEFAULT_PREFS: ReviewPrefs = {
   viewMode: 'split',
@@ -66,6 +58,7 @@ function parseJson(raw: string): unknown {
 export interface PrefsStorage {
   getItem(key: string): string | null
   setItem(key: string, value: string): void
+  removeItem(key: string): void
 }
 
 export function loadPrefs(storage: PrefsStorage | undefined): ReviewPrefs {
@@ -88,10 +81,4 @@ export function savePrefs(storage: PrefsStorage | undefined, prefs: ReviewPrefs)
 
 export function readPrefs(): ReviewPrefs {
   return loadPrefs(typeof localStorage === 'undefined' ? undefined : localStorage)
-}
-
-export function writePrefs(prefs: ReviewPrefs): void {
-  if (typeof localStorage === 'undefined') return
-  savePrefs(localStorage, prefs)
-  window.dispatchEvent(new CustomEvent(PREFS_EVENT))
 }

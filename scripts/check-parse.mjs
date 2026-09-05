@@ -9,6 +9,7 @@ import { countMatchRows, countUnifiedMatches, makeSearchEngine, parseUnifiedDiff
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
+import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
 
@@ -437,5 +438,19 @@ assert.deepEqual(normalizePrefs('not json'), DEFAULT_PREFS)
 assert.deepEqual(normalizePrefs({ viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, junk: 1 }),
   { viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true })
 assert.deepEqual(normalizePrefs({ viewMode: 'bogus', searchScope: 'nope' }), DEFAULT_PREFS)
+
+// 35. Settings-scope store helpers: section reads normalize, a default
+//     section reads as default, and the legacy-store migration carries only
+//     a user-written store (defaults or junk stay put; shapes clean up).
+assert.deepEqual(prefsFromSection({ viewMode: 'unified', junk: 1 }),
+  { viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false })
+assert.equal(sectionIsDefault({ viewMode: 'split', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false }), true)
+assert.equal(sectionIsDefault({ viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false }), false)
+assert.equal(migrationFields(null), null)
+assert.equal(migrationFields('not json'), null)
+assert.equal(migrationFields(JSON.stringify(DEFAULT_PREFS)), null)
+const legacy = JSON.stringify({ viewMode: 'unified', searchScope: 'content' })
+assert.deepEqual(migrationFields(legacy),
+  { viewMode: 'unified', searchScope: 'content', graphCollapsed: false, searchCS: false, searchRegex: false })
 
 console.log('check-parse: all assertions passed')

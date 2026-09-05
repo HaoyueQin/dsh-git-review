@@ -58,6 +58,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
 import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
+import { installSettings } from './settings-schema.ts'
 import type { ChangedFile, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
@@ -1032,6 +1033,11 @@ function respond(res: ServerResponse, status: number, payload: unknown): void {
 }
 
 export function apply(ctx: Context): void {
+  // Per-user preference namespace (the plugins-settings card's join key) —
+  // served independently of the review API: a host without webServer still
+  // gets the settings card, and a host without the settings domain still
+  // gets the API.
+  installSettings(ctx)
   const webServer = (ctx as Context & { webServer?: WebServerService }).webServer
   if (webServer === undefined) {
     // Host half is optional by design (the tab degrades to an explicit notice).

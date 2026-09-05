@@ -18,7 +18,7 @@ import { BranchIcon, CheckIcon, ChevronIcon, CommitIcon, FileIcon, GraphIcon, Op
 import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
-import { PREFS_EVENT, readPrefs, writePrefs } from './prefs.ts'
+import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
 import { mergeAllFiles } from './file-tree.ts'
@@ -30,6 +30,8 @@ import css from './review.module.css'
 export interface ReviewInjected {
   /** The session workspace path; undefined when the session has none. */
   cwd: string | undefined
+  /** The plugin-level preference store (also edits the settings card). */
+  settings: ReviewSettings
 }
 
 type T = PropsLocale<typeof NS>['t']
@@ -102,7 +104,7 @@ function fmtCount(value: number): string {
  * typed optional so a kit change degrades instead of crashing.
  * @param props - injected cwd, locale dictionary and the session standard kit.
  */
-export function ReviewView({ cwd, t, useSession, useInput, inputActions }: InjectFace<ReviewInjected> & PropsLocale<typeof NS> & Partial<SessionStandardProps>) {
+export function ReviewView({ cwd, settings, t, useSession, useInput, inputActions }: InjectFace<ReviewInjected> & PropsLocale<typeof NS> & Partial<SessionStandardProps>) {
   // Agent-running gate for the write actions (commit/push) — a boolean
   // selector keeps re-renders to the running flip only.
   const running = useSession !== undefined ? (useSession((s: SessionSnapshot) => s.running) ?? false) : false
@@ -117,12 +119,14 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
   const [allFiles, setAllFiles] = useState<string[] | null>(null)
   const [allFilesFailed, setAllFilesFailed] = useState(false)
-  // The layout/search/graph defaults come from the persisted prefs (the
-  // settings card edits the same store); flips inside the tab write back so
-  // the user's last choice survives a reload (GitHub/GitLab/VS Code all
-  // persist the split/unified choice this way).
-  const initialPrefs = useMemo(() => readPrefs(), [])
-  const [viewMode, setViewMode] = useState<FileViewMode>(initialPrefs.viewMode)
+  // The layout/search/graph defaults come from the preference store (the
+  // settings card edits the same store; see review-settings.ts). The
+  // whole-file toggle is session-transient — only split/unified persist —
+  // so the store's viewMode can drive the tab's state unconditionally.
+  const initialPrefs = settings.store.getSnapshot().prefs
+  const [viewMode, setViewMode] = useState<'split' | 'unified'>(initialPrefs.viewMode)
+  // The whole-file view toggle (transient; unchanged rows force it anyway).
+  const [fileView, setFileView] = useState(false)
   // Content search: the draft debounces into the committed query; matches map
   // drives the tree's per-file count chips and the diff pane's highlighting.
   // The scope decides what is searched — file names (client-side tree
@@ -196,23 +200,19 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     document.addEventListener('mousedown', onDown)
     return () => { document.removeEventListener('mousedown', onDown) }
   }, [searchMenu])
-  // Persist the remembered controls on every flip, and follow edits made in
-  // the settings card while this tab is open (same-window CustomEvent).
-  useEffect(() => {
-    writePrefs({ viewMode: viewMode === 'file' ? 'split' : viewMode, searchScope, graphCollapsed: graphListCollapsed, searchCS, searchRegex })
-  }, [viewMode, searchScope, graphListCollapsed, searchCS, searchRegex])
-  useEffect(() => {
-    const onPrefs = (): void => {
-      const prefs = readPrefs()
-      setViewMode(prefs.viewMode)
-      setSearchScope(prefs.searchScope)
-      setGraphListCollapsed(prefs.graphCollapsed)
-      setSearchCS(prefs.searchCS)
-      setSearchRegex(prefs.searchRegex)
-    }
-    window.addEventListener(PREFS_EVENT, onPrefs)
-    return () => { window.removeEventListener(PREFS_EVENT, onPrefs) }
-  }, [])
+  // Follow preference edits made in the settings card (and any other tab
+  // instance) through the shared store. Every user flip inside this tab goes
+  // through an explicit settings.set at its control (see the callbacks
+  // below) — there is deliberately no echo-write effect, so a store update
+  // never re-publishes itself.
+  useEffect(() => settings.store.subscribe(() => {
+    const prefs = settings.store.getSnapshot().prefs
+    setViewMode(prefs.viewMode)
+    setSearchScope(prefs.searchScope)
+    setGraphListCollapsed(prefs.graphCollapsed)
+    setSearchCS(prefs.searchCS)
+    setSearchRegex(prefs.searchRegex)
+  }), [settings])
   const [branchName, setBranchName] = useState('')
   const [branchStart, setBranchStart] = useState('')
   const [branchBusy, setBranchBusy] = useState(false)
@@ -406,8 +406,9 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     const source = allRows ?? ready?.files
     return source?.find(file => file.path === selected) ?? null
   }, [allRows, ready, selected])
-  /** Unchanged rows have no diff — the file view is their only view. */
-  const effectiveView: FileViewMode = selectedFile?.unchanged === true ? 'file' : viewMode
+  /** Unchanged rows have no diff — the file view is their only view. The
+   *  whole-file toggle is transient and applies only where a diff exists. */
+  const effectiveView: FileViewMode = fileView || selectedFile?.unchanged === true ? 'file' : viewMode
 
   // Diff/content lifecycle (worktree view): whenever the selected file, its
   // untracked-ness (a status refresh may reclassify it), the context depth,
@@ -484,6 +485,38 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     if (mode === 'changes') setAllFiles(null)
   }, [])
 
+  /** Apply a view-switch choice: the whole-file toggle is transient, the
+   *  split/unified half persists into the preference store (the settings
+   *  card reads the same store). */
+  const changeViewMode = useCallback((next: FileViewMode) => {
+    if (next === 'file') {
+      setFileView(true)
+      return
+    }
+    setFileView(false)
+    setViewMode(next)
+    settings.set('viewMode', next)
+  }, [settings])
+
+  /** The remembered search controls: each flip also writes the preference
+   *  store (the settings card mirrors these three controls). */
+  const changeSearchScope = useCallback((scope: 'path' | 'diff' | 'content') => {
+    setSearchScope(scope)
+    settings.set('searchScope', scope)
+  }, [settings])
+  const toggleSearchCS = useCallback(() => {
+    setSearchCS(value => {
+      settings.set('searchCS', !value)
+      return !value
+    })
+  }, [settings])
+  const toggleSearchRegex = useCallback(() => {
+    setSearchRegex(value => {
+      settings.set('searchRegex', !value)
+      return !value
+    })
+  }, [settings])
+
   /** Pick a new diff base; the selection resets (the file list changes). */
   const changeBase = useCallback((ref: string | null) => {
     setBaseRef(ref)
@@ -532,8 +565,13 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   }, [selectedCommit])
 
   const toggleGraphList = useCallback(() => {
-    setGraphListCollapsed(value => !value)
-  }, [])
+    // The user-facing fold toggle is the one that updates the remembered
+    // default (auto-folds on commit selection are transient view state).
+    setGraphListCollapsed(value => {
+      settings.set('graphCollapsed', !value)
+      return !value
+    })
+  }, [settings])
 
   const selectGraphFile = useCallback((path: string) => {
     setGraphFile(path)
@@ -758,7 +796,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                       key={candidate}
                       type="button"
                       className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
-                      onClick={() => { setSearchScope(candidate); setSearchMenu(null) }}
+                      onClick={() => { changeSearchScope(candidate); setSearchMenu(null) }}
                     >
                       <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
                       {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
@@ -799,7 +837,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                   <button
                     type="button"
                     className={css.pickerItem + (searchCS ? ' ' + css.pickerItemActive : '')}
-                    onClick={() => { setSearchCS(value => !value) }}
+                    onClick={() => { toggleSearchCS() }}
                   >
                     <span className={css.pickerItemName}>{t('search.caseSensitive')}</span>
                     {searchCS && <span className={css.pickerItemCheck}><CheckIcon /></span>}
@@ -807,7 +845,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                   <button
                     type="button"
                     className={css.pickerItem + (searchRegex ? ' ' + css.pickerItemActive : '')}
-                    onClick={() => { setSearchRegex(value => !value) }}
+                    onClick={() => { toggleSearchRegex() }}
                   >
                     <span className={css.pickerItemName}>{t('search.regex')}</span>
                     {searchRegex && <span className={css.pickerItemCheck}><CheckIcon /></span>}
@@ -1186,8 +1224,8 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                           onScopeChange={setDiffScope}
                           // 'file' belongs to the worktree pane only; the
                           // commit diff falls back to side-by-side.
-                          view={viewMode === 'file' ? 'split' : viewMode}
-                          onViewChange={setViewMode}
+                          view={viewMode}
+                          onViewChange={changeViewMode}
                           showViewSwitch
                           allowFileView={false}
                           search={searchSpec}
@@ -1226,7 +1264,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                     loading={diff.kind === 'loading'}
                     canShowDiff={selectedFile.unchanged !== true}
                     view={effectiveView}
-                    onViewChange={setViewMode}
+                    onViewChange={changeViewMode}
                     search={searchSpec}
                     t={t}
                   />
@@ -1244,7 +1282,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                           scope={diffScope}
                           onScopeChange={setDiffScope}
                           view={effectiveView}
-                          onViewChange={setViewMode}
+                          onViewChange={changeViewMode}
                           showViewSwitch={!refsMode}
                           search={searchSpec}
                           baseActive={baseRef !== null || refsMode}

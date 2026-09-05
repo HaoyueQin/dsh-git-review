@@ -20,9 +20,9 @@ const PROJECT_ROOT = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ID = 'dsh-git-review'
 
 /** Host-half packages resolved by the harness at runtime — never inlined.
- *  The host half imports no @deepseek-ai runtime values (node builtins and
- *  type-only cordis imports only); the entry stays listed for safety. */
-const LIB_EXTERNALS = ['@deepseek-ai/cordis'] as const
+ *  schemastery (the settings-seam schema builder) is a host-provided peer,
+ *  same as cordis itself; everything else in the host half stays type-only. */
+const LIB_EXTERNALS = ['@deepseek-ai/cordis', '@deepseek-ai/schemastery'] as const
 
 /** Module specifiers the dsh web shell shares into its frozen module table
  *  — the client half declares these in dsh.client.inject and must never
@@ -32,6 +32,7 @@ const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-conversation',
+  '@deepseek-ai/dsh-client-ui-settings',
 ] as const
 
 /** Externals resolved from the loader module table. */

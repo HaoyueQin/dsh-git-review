@@ -40,7 +40,17 @@ body[data-dsh-bg-glass] .root {
 
 /* ── toolbar ─────────────────────────────────────────────────────────── */
 
+/* The explicit z-index is the frosted-glass popout fix: while the glass is
+ * on, the toolbar's backdrop-filter (fill-mode recipe) makes it a stacking
+ * context, so the absolute popouts anchored inside it (ref picker, search
+ * options — z-index only ranks WITHIN that context) would otherwise be
+ * painted under the tree/diff glass surfaces that come later in the DOM and
+ * blurred behind their backdrop-filter. Ranking the toolbar above the body's
+ * auto contexts lifts every toolbar popout with it. The popovers that hang
+ * off the root (commit/branch z-40, file menu z-90) already outrank them. */
 .toolbar {
+  position: relative;
+  z-index: 30;
   display: flex;
   flex: none;
   flex-direction: row;
@@ -816,6 +826,15 @@ body[data-dsh-bg-glass] .root {
 .scopeBtnActive {
   background: var(--dsw-alias-fill-active);
   color: var(--dsw-alias-label-primary);
+}
+
+.scopeBtn:disabled {
+  cursor: default;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.scopeBtn:disabled:hover {
+  background: transparent;
 }
 
 .noticeRow {
@@ -1742,63 +1761,112 @@ body[data-dsh-bg-glass] .commitHeader {
   font-size: 12px;
 }
 
-/* Preference card in Settings → Plugins: one row per remembered control
-   (label + hint on the left, the same segmented switch the toolbar uses on
-   the right). */
-.prefCard {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+/* Plugin-configuration card (Settings → Plugins → Plugin configuration):
+   the harness's own plugin-card visual language — a rounded bordered card,
+   a disclosure header, hairline-separated rows — sized to the settings modal
+   (tokens mirror ui-settings-plugins' PluginCard/fields sheets). Rows reuse
+   the toolbar's segmented switch (shared .scopeSwitch/.scopeBtn above). */
+.pluginCard {
+  list-style: none;
   width: 100%;
-  max-width: 640px;
-  padding: 14px 16px;
-  border: 1px solid var(--dsw-alias-border-secondary);
-  border-radius: 10px;
-  background: var(--dsw-alias-bg-layer-1);
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 16px;
+  background: var(--dsw-alias-bg-layer-3);
+  transition: border-color .16s, background .16s;
 }
 
-.prefCardHead {
+.pluginCard:hover {
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+/* An open card reads as the one being worked on, not merely taller. */
+.pluginCardOpen {
+  background: var(--dsw-alias-bg-layer-2);
+  border-color: var(--dsw-alias-label-dimmed);
+}
+
+.pluginCardHead {
   display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pluginCardHead:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
+}
+
+.pluginCardHeadText {
+  display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  min-width: 0;
 }
 
-.prefTitle {
+.pluginCardName {
   color: var(--dsw-alias-label-primary);
-  font-size: 13.5px;
+  font-size: 15px;
   font-weight: 600;
+  line-height: 1.4;
 }
 
-.prefDescription {
-  color: var(--dsw-alias-label-secondary);
-  font-size: 12px;
+.pluginCardDescription {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-.prefRow {
+.pluginCardBody {
+  margin: 0 16px;
+  padding: 2px 0 10px;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.pluginPrefRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  padding: 12px 0;
 }
 
-.prefRowText {
+.pluginPrefRow + .pluginPrefRow {
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.pluginPrefText {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.prefLabel {
+.pluginPrefLabel {
   color: var(--dsw-alias-label-primary);
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
 }
 
-.prefHint {
+.pluginPrefHint {
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11.5px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
-.prefNote {
+.pluginCardNote {
+  margin: 8px 0 0;
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.5;
 }

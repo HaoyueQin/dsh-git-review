@@ -92,3 +92,104 @@ export function GraphIcon({ size = 13 }: IconProps) {
     </svg>
   )
 }
+
+export function TagIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M2.2 2.6v4.3l6.1 6.1 4.9-4.9-6.1-6.1H3.2z" strokeLinejoin="round" />
+      <circle cx="4.9" cy="4.9" r="1" />
+    </svg>
+  )
+}
+
+export function FileIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M3.5 2.5h6l3 3v8h-9z" strokeLinejoin="round" />
+      <path d="M9.5 2.5v3h3" />
+    </svg>
+  )
+}
+
+export function CopyIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+      <path d="M10.5 5.5v-2a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v5.5a1 1 0 0 0 1 1h2" />
+    </svg>
+  )
+}
+
+export function TrashIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M2.5 4.5h11" />
+      <path d="M5.5 4.5V3a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v1.5" />
+      <path d="M3.5 4.5 4.4 13a1.5 1.5 0 0 0 1.5 1.4h4.2a1.5 1.5 0 0 0 1.5-1.4l.9-8.5" />
+      <path d="M6.5 7.5v4M9.5 7.5v4" />
+    </svg>
+  )
+}
+
+export function PencilIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="m10.8 2.8 2.4 2.4-7.6 7.6-3 .6.6-3z" strokeLinejoin="round" />
+      <path d="m9.6 4 2.4 2.4" />
+    </svg>
+  )
+}
+
+export function OpenIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M8 2.5H4a1.5 1.5 0 0 0-1.5 1.5v8A1.5 1.5 0 0 0 4 13.5h8a1.5 1.5 0 0 0 1.5-1.5V8" />
+      <path d="M10.5 2.5h3v3" />
+      <path d="M13.2 2.8 8.5 7.5" />
+    </svg>
+  )
+}
+
+export function FolderIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M1.8 4.5a1 1 0 0 1 1-1h3.4l1.6 1.7h5.4a1 1 0 0 1 1 1v6.3a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+export function CheckIcon({ size = 12 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <path d="m3 8.5 3.2 3.2L13 4.5" />
+    </svg>
+  )
+}
+
+export function LineLeftIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <rect x="2" y="2.5" width="4.5" height="11" rx="1" />
+      <rect x="9.5" y="2.5" width="4.5" height="11" rx="1" />
+    </svg>
+  )
+}
+
+export function LinesIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
+    </svg>
+  )
+}
+
+export function OptionsIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
+      <circle cx="6" cy="4.5" r="1.4" fill="var(--dsw-alias-bg-layer-1)" />
+      <circle cx="10.5" cy="8" r="1.4" fill="var(--dsw-alias-bg-layer-1)" />
+      <circle cx="5" cy="11.5" r="1.4" fill="var(--dsw-alias-bg-layer-1)" />
+    </svg>
+  )
+}

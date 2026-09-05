@@ -51,14 +51,14 @@
  * ponytail: the empty-tree literal is sha1-only; sha256 repositories would
  * need `git hash-object -t tree /dev/null` at status time.
  */
-import { execFile } from 'node:child_process'
-import { lstat, open, realpath } from 'node:fs/promises'
+import { execFile, spawn } from 'node:child_process'
+import { lstat, open, realpath, rename, rm } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
-import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
-import type { ChangedFile, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload } from './contract.ts'
+import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
+import type { ChangedFile, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
 const HASH_ONLY_RE = /^[0-9a-f]{40}$/
@@ -556,15 +556,19 @@ async function gitRefs(cwd: unknown): Promise<GitRefsPayload> {
 const LOG_CAP = 500
 
 /** One `log` answer: the commit-graph feed across all refs, newest first,
- *  in date order (minimizes edge crossings in the lane layout). */
-async function gitLog(cwd: unknown): Promise<GitLogPayload> {
+ *  in date order (minimizes edge crossings in the lane layout). An optional
+ *  `limit` feeds the ref picker's commit section (capped by LOG_CAP). */
+async function gitLog(cwd: unknown, limit: unknown): Promise<GitLogPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   let raw: string
+  const maxCount = typeof limit === 'number' && Number.isFinite(limit) && limit >= 1
+    ? Math.min(Math.floor(limit), LOG_CAP)
+    : LOG_CAP
   try {
     raw = await runGit(repoRoot, [
-      'log', '--all', '--date-order', '--max-count=' + String(LOG_CAP),
+      'log', '--all', '--date-order', '--max-count=' + String(maxCount),
       '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e',
     ])
   } catch (error) {
@@ -575,7 +579,7 @@ async function gitLog(cwd: unknown): Promise<GitLogPayload> {
     throw error
   }
   const commits = parseLogLines(raw)
-  return { ok: true, commits, truncated: commits.length >= LOG_CAP }
+  return { ok: true, commits, truncated: commits.length >= maxCount }
 }
 
 /** One `commit-files` answer: a single commit's changed files, diffed
@@ -611,13 +615,62 @@ async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<GitCommitF
  *  worktree-vs-HEAD diff (or a ref-range diff when `target` is given) plus
  *  untracked file content (bounded, worktree mode only). The response sorts
  *  loudest-first so the tree's top hit is the most-changed file. */
-async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: unknown): Promise<GitSearchPayload> {
+async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: unknown, mode: unknown, cs: unknown, rx: unknown): Promise<GitSearchPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (typeof query !== 'string' || query.trim() === '') return { ok: true, matches: [], truncated: false }
   const needle = query.slice(0, 200)
+  const options = { caseSensitive: cs === true, regex: rx === true }
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const targetRef = normalizeBaseRef(target)
+  const contentMode = mode === 'content'
+
+  // Content mode: per-file matching LINE counts straight from git grep
+  // (binary skipped via -I). Worktree mode greps the working tree; refs mode
+  // greps the target commit's tree. Untracked files only exist in the worktree.
+  if (contentMode) {
+    const grepArgs = ['grep', '-c', '-I', ...(options.caseSensitive ? [] : ['-i']),
+      ...(options.regex ? ['-e', needle] : ['--fixed-strings', '-e', needle])]
+    if (targetRef !== null) {
+      const targetCommit = await resolveRangeRef(repoRoot, targetRef)
+      if (targetCommit === null) throw new Error('cannot resolve diff range refs')
+      const result = await runGitCapture(repoRoot, [...grepArgs, targetCommit])
+      if (result.code === 1) return { ok: true, matches: [], truncated: false }
+      if (result.code !== 0) {
+        throw new Error(result.stderr.trim() || result.stdout.trim() || 'git grep failed')
+      }
+      return { ok: true, matches: parseGrepCounts(result.stdout, targetCommit).sort((a, b) => b.count - a.count), truncated: false }
+    }
+    const result = await runGitCapture(repoRoot, grepArgs)
+    if (result.code !== 0 && result.code !== 1) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || 'git grep failed')
+    }
+    const counts = new Map(parseGrepCounts(result.stdout).map(match => [match.path, match.count] as const))
+    // Untracked content never appears in git grep — scan bounded prefixes.
+    let untracked: string[] = []
+    try {
+      const porcelain = await runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+      untracked = parsePorcelainV1(porcelain).filter(entry => entry.x === '?').map(entry => entry.path)
+    } catch { /* no untracked scan on status failure */ }
+    let truncated = untracked.length > SEARCH_UNTRACKED_CAP
+    for (const relPath of untracked.slice(0, SEARCH_UNTRACKED_CAP)) {
+      const absPath = resolve(repoRoot, relPath)
+      if (!inside(repoRoot, absPath)) continue
+      try {
+        const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
+        if (bytes.includes(0)) continue
+        const count = countMatches(bytes.toString('utf8'), needle, options)
+        if (count > 0) counts.set(relPath, (counts.get(relPath) ?? 0) + count)
+      } catch {
+        truncated = true
+      }
+    }
+    const matches = [...counts.entries()]
+      .map(([path, count]) => ({ path, count }))
+      .sort((a, b) => b.count - a.count)
+    return { ok: true, matches, truncated }
+  }
+
   let diffText: string
   let refsMode = false
   if (targetRef !== null) {
@@ -639,7 +692,7 @@ async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: un
   const counts = new Map<string, number>()
   for (const section of splitDiffSections(diffText)) {
     if (section.path === null || section.body === '') continue
-    const count = countOccurrences(section.body, needle)
+    const count = countMatches(section.body, needle, options)
     if (count > 0) counts.set(section.path, count)
   }
   if (refsMode) return { ok: true, matches: [...counts.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count), truncated: false }
@@ -656,7 +709,7 @@ async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: un
     try {
       const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
       if (bytes.includes(0)) continue
-      const count = countOccurrences(bytes.toString('utf8'), needle)
+      const count = countMatches(bytes.toString('utf8'), needle, options)
       if (count > 0) counts.set(relPath, (counts.get(relPath) ?? 0) + count)
     } catch {
       truncated = true
@@ -666,6 +719,26 @@ async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: un
     .map(([path, count]) => ({ path, count }))
     .sort((a, b) => b.count - a.count)
   return { ok: true, matches, truncated }
+}
+
+/** Parse `git grep -c` output: one `path:count` line per matching file.
+ *  The path is everything before the LAST colon (a path may itself contain
+ *  ':' on non-Windows filesystems). When grepping a commit's tree git prefixes
+ *  every line with `<commit>:` — stripPrefix removes it so paths match the
+ *  file tree the client already knows. */
+function parseGrepCounts(raw: string, stripPrefix?: string): GitSearchPayload['matches'] {
+  const prefix = stripPrefix !== undefined ? stripPrefix + ':' : ''
+  const out: GitSearchPayload['matches'] = []
+  for (const line of raw.split('\n')) {
+    if (line === '') continue
+    const stripped = prefix !== '' && line.startsWith(prefix) ? line.slice(prefix.length) : line
+    const colon = stripped.lastIndexOf(':')
+    if (colon <= 0) continue
+    const count = Number(stripped.slice(colon + 1))
+    if (!Number.isFinite(count) || count <= 0) continue
+    out.push({ path: stripped.slice(0, colon), count })
+  }
+  return out
 }
 
 /** Push is a network operation: it outlives the local-git timeout. */
@@ -808,6 +881,119 @@ async function gitBranchRename(cwd: unknown, name: unknown, newName: unknown, co
   return writeAnswer(await runGitCapture(repoRoot, ['branch', '-m', guard.name, guardNew.name]), 'branch -m')
 }
 
+/* ─ file-tree context-menu operations ──────────────────────────── */
+
+/** One workspace file operation the tree's context menu can run. Only
+ *  regular files inside the repository are touched; every path goes through
+ *  the same fence the read endpoints use. Rename/delete are guarded by the
+ *  explicit confirm flag (the client's two-step UI sets it). */
+async function gitFileOp(cwd: unknown, path: unknown, action: unknown, newPath: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  if (confirm !== true) return { ok: false, error: 'file operations require confirm: true' }
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
+  let stat: { isFile(): boolean } | null = null
+  try {
+    stat = await lstat(absPath)
+  } catch {
+    return { ok: false, error: 'file does not exist: ' + String(path) }
+  }
+  if (stat === null || !stat.isFile()) return { ok: false, error: 'not a regular file' }
+  if (action === 'rename') {
+    if (typeof newPath !== 'string' || newPath.trim() === '') return { ok: false, error: 'new path is required' }
+    const absTarget = fenceRepoPath(repoRoot, newPath.trim())
+    if (absTarget === absPath) return { ok: true, output: '' }
+    try {
+      await lstat(absTarget)
+      return { ok: false, error: 'target already exists: ' + newPath }
+    } catch { /* free name, proceed */ }
+    try {
+      await rename(absPath, absTarget)
+      return { ok: true, output: '' }
+    } catch (error) {
+      return { ok: false, error: String((error as Error).message ?? error) }
+    }
+  }
+  if (action === 'delete') {
+    try {
+      await rm(absPath, { force: false })
+      return { ok: true, output: '' }
+    } catch (error) {
+      return { ok: false, error: String((error as Error).message ?? error) }
+    }
+  }
+  return { ok: false, error: 'unknown file operation' }
+}
+
+/** Open one workspace file outside the plugin (read-only launch: the app
+ *  gets the path as its argument; no shell is involved, so percent-characters
+ *  and spaces need no escaping). The app id is a fixed whitelist. */
+async function gitOpenWith(cwd: unknown, path: unknown, app: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
+  try {
+    const stat = await lstat(absPath)
+    if (!stat.isFile()) return { ok: false, error: 'not a regular file' }
+  } catch {
+    return { ok: false, error: 'file does not exist (it may only exist in history)' }
+  }
+  const tool = app === 'explorer' ? 'explorer.exe'
+    : app === 'notepad' ? 'notepad.exe'
+      : app === 'code' ? 'code'
+        : app === 'code-insiders' ? 'code-insiders'
+          : undefined
+  const run = (): Promise<void> => new Promise((resolvePromise, rejectPromise) => {
+    // GUI openers outlive the request (notepad stays open for minutes), and
+    // explorer.exe commonly exits non-zero even on success. Spawn detached and
+    // resolve as soon as the process exists — exit codes are never consulted.
+    const argv = tool !== undefined
+      ? [tool, tool === 'explorer.exe' ? '/select,' + absPath : absPath]
+      : process.platform === 'win32'
+        ? ['cmd.exe', '/c', 'start', '', absPath]
+        : ['xdg-open', absPath]
+    const child = spawn(argv[0], argv.slice(1), { windowsHide: true, detached: true, stdio: 'ignore' })
+    child.once('error', (error: Error) => rejectPromise(error))
+    child.once('spawn', () => resolvePromise())
+    child.unref()
+  })
+  try {
+    await run()
+    return { ok: true, output: '' }
+  } catch (error) {
+    const message = String((error as Error & { code?: string }).message ?? error)
+    const hint = (error as Error & { code?: string }).code === 'ENOENT' ? ' (app not installed or not on PATH)' : ''
+    return { ok: false, error: 'cannot open: ' + message + hint }
+  }
+}
+
+/** The open-with app list: fixed candidates, availability probed per request
+ *  via where/which (a missing editor stays listed but marked unavailable). */
+async function gitOpenApps(): Promise<OpenAppsPayload> {
+  const available = async (name: string): Promise<boolean> => {
+    try {
+      await new Promise<void>((resolvePromise, rejectPromise) => {
+        execFile(process.platform === 'win32' ? 'where' : 'which', [name], { windowsHide: true }, error => {
+          if (error !== null) rejectPromise(error)
+          else resolvePromise()
+        })
+      })
+      return true
+    } catch {
+      return false
+    }
+  }
+  const [hasCode, hasInsiders] = await Promise.all([available('code'), available('code-insiders')])
+  const apps: OpenAppsPayload['apps'] = [{ id: 'default', available: true }]
+  if (process.platform === 'win32') {
+    apps.push({ id: 'explorer', available: true }, { id: 'notepad', available: true })
+  }
+  apps.push({ id: 'code', available: hasCode }, { id: 'code-insiders', available: hasInsiders })
+  return { ok: true, apps }
+}
+
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
 function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -881,7 +1067,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'log') {
-          respond(res, 200, await gitLog(body['cwd']))
+          respond(res, 200, await gitLog(body['cwd'], body['limit']))
           return
         }
         if (action === 'commit-files') {
@@ -921,7 +1107,19 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'search') {
-          respond(res, 200, await gitSearch(body['cwd'], body['query'], body['base'], body['target']))
+          respond(res, 200, await gitSearch(body['cwd'], body['query'], body['base'], body['target'], body['mode'], body['cs'], body['rx']))
+          return
+        }
+        if (action === 'file-op') {
+          respond(res, 200, await gitFileOp(body['cwd'], body['path'], body['action'], body['newPath'], body['confirm']))
+          return
+        }
+        if (action === 'open-with') {
+          respond(res, 200, await gitOpenWith(body['cwd'], body['path'], body['app']))
+          return
+        }
+        if (action === 'apps') {
+          respond(res, 200, await gitOpenApps())
           return
         }
         respond(res, 404, { ok: false, error: 'unknown action' })

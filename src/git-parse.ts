@@ -121,6 +121,44 @@ export function countOccurrences(haystack: string, needle: string): number {
   return count
 }
 
+/** Search-match options (the optional toggles of the toolbar search). */
+export interface MatchOptions {
+  caseSensitive?: boolean
+  regex?: boolean
+}
+
+/** Occurrence count honoring the optional case-sensitivity / regex toggles.
+ *  An invalid regex counts as 0 (never throws); a non-regex query is a
+ *  literal, non-overlapping scan — the same contract `countOccurrences`
+ *  established. */
+export function countMatches(haystack: string, needle: string, options: MatchOptions = {}): number {
+  if (needle === '') return 0
+  if (options.regex === true) {
+    try {
+      const re = new RegExp(needle, options.caseSensitive ? 'g' : 'gi')
+      let count = 0
+      let match: RegExpExecArray | null
+      while ((match = re.exec(haystack)) !== null) {
+        count += 1
+        if (match.index === re.lastIndex) re.lastIndex += 1
+      }
+      return count
+    } catch {
+      return 0
+    }
+  }
+  if (options.caseSensitive) {
+    let count = 0
+    let at = haystack.indexOf(needle)
+    while (at !== -1) {
+      count += 1
+      at = haystack.indexOf(needle, at + needle.length)
+    }
+    return count
+  }
+  return countOccurrences(haystack, needle)
+}
+
 /**
  * Normalize a request-supplied diff-base ref, or null when it is absent or
  * unsafe. ExecFile passes argv literally, so git would otherwise parse a

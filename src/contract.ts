@@ -177,3 +177,17 @@ export interface GitWritePayload {
   /** Failure reason, verbatim from git. */
   error?: string
 }
+
+/** One selectable open-with app (the file tree's context menu). */
+export interface OpenApp {
+  id: 'default' | 'explorer' | 'notepad' | 'code' | 'code-insiders'
+  /** Availability probed by the host (where/which); the list keeps missing
+   *  editors visible but marked, so the reason the item is disabled is clear. */
+  available: boolean
+}
+
+/** Successful `apps` payload: the open-with candidates. */
+export interface OpenAppsPayload {
+  ok: true
+  apps: OpenApp[]
+}

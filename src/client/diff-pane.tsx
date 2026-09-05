@@ -45,6 +45,8 @@ export interface DiffPaneProps {
   /** Active main view ('diff' here); the header hosts the switch. */
   view: FileViewMode
   onViewChange: (next: FileViewMode) => void
+  /** False hides the diff/file switch (a commit diff has no file view). */
+  showViewSwitch?: boolean
   /** Active content search query ('' = none); highlights rows + navigation. */
   search: string
   /** True while a base-branch override is active (scope chips are hidden). */
@@ -157,7 +159,7 @@ function CommentEditor({ path, line, useInput, inputActions, onClose, t }: {
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, search, baseActive, useInput, inputActions, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, search, baseActive, useInput, inputActions, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -209,7 +211,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
             </button>
           </span>
         )}
-        <ViewSwitch active={view} onViewChange={onViewChange} t={t} />
+        {showViewSwitch && <ViewSwitch active={view} onViewChange={onViewChange} t={t} />}
         {!file.untracked && !baseActive && (
           <span className={css.scopeSwitch} role="group" aria-label={t('scope.label')}>
             {(['all', 'staged', 'unstaged'] as const).map(candidate => (

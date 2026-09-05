@@ -4,8 +4,9 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, refRange, splitDiffSections } from '../src/git-parse.ts'
+import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, refRange, splitDiffSections } from '../src/git-parse.ts'
 import { parseUnifiedDiff, splitByMatch } from '../src/client/diff-parse.ts'
+import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
@@ -298,5 +299,74 @@ assert.deepEqual(rangeRows.map(r => [r.path, r.x, r.y, r.added, r.deleted, r.bin
   ['gone.bin', 'D', ' ', 0, 0, true, false],
 ])
 assert.deepEqual(mergeDiffRows([], new Map()), [])
+
+// 26. parseLogLines + parseDecorations: \x1e-record/\x1f-field wire format,
+//     leading newlines trimmed, root commits have no parents, decorations
+//     classify head/tag/other, malformed records are skipped.
+const H1 = 'a'.repeat(40)
+const H2 = 'b'.repeat(40)
+const H3 = 'c'.repeat(40)
+const logLines = parseLogLines([
+  '',
+  H1 + '\x1f' + H2 + ' ' + H3 + '\x1fAlice\x1f1700000000\x1fHEAD -> main, origin/main, tag: v1.0\x1fsubject one\x1e',
+  H2 + '\x1f\x1fBob\x1f1700000001\x1f\x1froot commit\x1e',
+  'zz' + '\x1fshort\x1e',
+].join('\x1e'))
+assert.equal(logLines.length, 2)
+assert.deepEqual(logLines[0], {
+  hash: H1,
+  parents: [H2, H3],
+  authorName: 'Alice',
+  timestamp: 1700000000,
+  refs: [
+    { name: 'main', kind: 'head' },
+    { name: 'origin/main', kind: 'other' },
+    { name: 'v1.0', kind: 'tag' },
+  ],
+  subject: 'subject one',
+})
+assert.deepEqual(logLines[1].parents, [])
+assert.equal(logLines[1].subject, 'root commit')
+
+// 27. computeGraphLanes, straight history: one lane, in/out segments chain.
+const straight = computeGraphLanes([
+  { hash: H1, parents: [H2] },
+  { hash: H2, parents: [H3] },
+  { hash: H3, parents: [] },
+])
+assert.equal(straight.length, 3)
+assert.ok(straight.every(row => row.lane === 0 && row.laneCount === 1 && row.pass.length === 0))
+assert.deepEqual(straight[0].inEdges, [])
+assert.deepEqual(straight[0].outEdges, [{ from: 0, to: 0, color: 0 }])
+assert.deepEqual(straight[1].inEdges, [{ from: 0, to: 0, color: 0 }])
+assert.deepEqual(straight[2].outEdges, [])
+
+// 28. computeGraphLanes, branch: a second tip claims a new lane and folds
+//     into the main line at the shared parent (the fold keeps its color);
+//     the main line passes straight through the branch tip's row.
+const branched = computeGraphLanes([
+  { hash: H1, parents: [H3] },
+  { hash: H2, parents: [H3] },
+  { hash: H3, parents: [] },
+])
+assert.deepEqual(branched.map(r => r.lane), [0, 1, 0])
+assert.deepEqual(branched[1].inEdges, [])
+assert.deepEqual(branched[1].outEdges, [{ from: 1, to: 0, color: branched[1].color }])
+assert.deepEqual(branched[1].pass, [{ lane: 0, color: 0 }])
+assert.deepEqual(branched[2].inEdges, [{ from: 0, to: 0, color: 0 }])
+assert.deepEqual(branched[2].pass, [])
+
+// 29. computeGraphLanes, merge: the merge commit branches out, the merged
+//     line folds sideways into it at its row, and the untouched line passes
+//     straight through the middle row.
+const mergeBase = computeGraphLanes([
+  { hash: H1, parents: [H2, H3] },
+  { hash: H2, parents: [H3] },
+  { hash: H3, parents: [] },
+])
+assert.deepEqual(mergeBase[0].outEdges, [{ from: 0, to: 0, color: 0 }, { from: 0, to: 1, color: 1 }])
+assert.deepEqual(mergeBase[1].inEdges, [{ from: 0, to: 0, color: 0 }])
+assert.deepEqual(mergeBase[1].pass, [{ lane: 1, color: 1 }])
+assert.deepEqual(mergeBase[2].inEdges, [{ from: 1, to: 1, color: 1 }])
 
 console.log('check-parse: all assertions passed')

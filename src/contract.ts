@@ -139,6 +139,35 @@ export interface GitSearchPayload {
   truncated: boolean
 }
 
+/** One commit in the graph log. */
+export interface GitCommitSummary {
+  hash: string
+  /** Parent hashes, first-parent first; empty for a root commit. */
+  parents: string[]
+  authorName: string
+  /** Author time, unix seconds. */
+  timestamp: number
+  /** Decorations on this commit (branch/tag pointers). */
+  refs: { name: string; kind: 'head' | 'tag' | 'other' }[]
+  subject: string
+}
+
+/** Successful `log` payload: the commit-graph feed, newest first. */
+export interface GitLogPayload {
+  ok: true
+  commits: GitCommitSummary[]
+  /** True when the feed was cut at the host's commit cap. */
+  truncated: boolean
+}
+
+/** Successful `commit-files` payload: one commit's changed files (vs its
+ *  first parent; a root commit diffs against the empty tree). */
+export interface GitCommitFilesPayload {
+  ok: true
+  files: ChangedFile[]
+  totals: { added: number; deleted: number }
+}
+
 /** `commit`/`push` answer. Failures carry git's own human-readable words
  *  (stderr, or stdout for commit's "nothing to commit") verbatim. */
 export interface GitWritePayload {

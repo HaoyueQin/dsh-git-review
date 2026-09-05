@@ -10,11 +10,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload } from '../contract.ts'
+import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload } from '../contract.ts'
+import { EMPTY_TREE_ID } from '../git-parse.ts'
 import { hostCall } from './api.ts'
-import { BranchIcon, CommitIcon, RefreshIcon, SearchIcon } from './icons.tsx'
+import { BranchIcon, CommitIcon, GraphIcon, RefreshIcon, SearchIcon } from './icons.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
+import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
+import { computeGraphLanes } from './git-graph.ts'
 import { mergeAllFiles } from './file-tree.ts'
 import { TreePanel } from './tree-panel.tsx'
 import type { NS, ReviewKey } from './locales.ts'
@@ -31,6 +34,15 @@ type T = PropsLocale<typeof NS>['t']
 /** The comparison side of the toolbar: worktree-vs-base (the review tab's
  *  home mode) or any-two-commits (ref-range: base...target). */
 type CompareMode = 'worktree' | 'refs'
+
+/** The tab's main view: workspace changes or the commit graph. */
+type ViewTab = 'changes' | 'graph'
+
+/** The commit-graph feed's load state. */
+type LogState =
+  | { kind: 'idle' | 'loading' }
+  | { kind: 'ready'; commits: GitCommitSummary[]; truncated: boolean }
+  | { kind: 'failed'; message: string }
 
 /** The status side of the view. */
 type StatusState =
@@ -118,6 +130,14 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [refs, setRefs] = useState<GitRefEntry[] | null>(null)
   const refsMode = compareMode === 'refs'
   const rangeReady = !refsMode || (baseRef !== null && targetRef !== null)
+  // Graph view: the log feed, the selected commit, and its file list/diff.
+  const [viewTab, setViewTab] = useState<ViewTab>('changes')
+  const [logState, setLogState] = useState<LogState>({ kind: 'idle' })
+  const [selectedCommit, setSelectedCommit] = useState<string | null>(null)
+  const [graphFile, setGraphFile] = useState<string | null>(null)
+  const [graphFilter, setGraphFilter] = useState('')
+  const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
+  const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null)
   // Commit/push popover state: two-step armed buttons, verbatim git output.
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
@@ -195,7 +215,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   }, [searchDraft])
 
   useEffect(() => {
-    if (search === '' || cwd === undefined || !rangeReady) {
+    if (search === '' || cwd === undefined || !rangeReady || viewTab !== 'changes') {
       setSearchMatches(null)
       return
     }
@@ -207,9 +227,49 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
         : null)
     })
     return () => { alive = false }
-  }, [search, cwd, reloadTick, baseRef, targetRef, compareMode])
+  }, [search, cwd, reloadTick, baseRef, targetRef, compareMode, viewTab])
+
+  // Graph feed lifecycle: fetched when the graph view opens (and on refresh).
+  useEffect(() => {
+    if (viewTab !== 'graph' || cwd === undefined) return
+    let alive = true
+    setLogState({ kind: 'loading' })
+    void hostCall<GitLogPayload>('log', { cwd }).then(payload => {
+      if (!alive) return
+      if (payload === null) setLogState({ kind: 'failed', message: t('state.hostUnavailable') })
+      else if (!payload.ok) setLogState({ kind: 'failed', message: (payload as { error?: string }).error ?? t('graph.failed') })
+      else setLogState({ kind: 'ready', commits: payload.commits, truncated: payload.truncated })
+    })
+    return () => { alive = false }
+  }, [viewTab, cwd, reloadTick, t])
+
+  // Selected commit's changed files (vs first parent / empty tree).
+  useEffect(() => {
+    if (viewTab !== 'graph' || cwd === undefined || selectedCommit === null) {
+      setCommitFiles(null)
+      return
+    }
+    let alive = true
+    setCommitFiles(null)
+    void hostCall<GitCommitFilesPayload>('commit-files', { cwd, commit: selectedCommit }).then(payload => {
+      if (!alive) return
+      setCommitFiles(payload !== null && payload.ok ? payload.files : [])
+    })
+    return () => { alive = false }
+  }, [viewTab, cwd, selectedCommit])
 
   const ready = status.kind === 'ready' ? status.data : null
+  /** Graph feed with the local search filter applied (topology rows kept). */
+  const graphCommits = logState.kind === 'ready' ? logState.commits : []
+  const graphLanes = useMemo(() => computeGraphLanes(graphCommits), [graphCommits])
+  const visibleGraph = useMemo(() => {
+    const query = graphFilter.trim().toLowerCase()
+    const rows = graphCommits.map((commit, index) => ({ commit, lane: graphLanes[index] }))
+    if (query === '') return rows
+    return rows.filter(({ commit }) => commit.subject.toLowerCase().includes(query)
+      || commit.authorName.toLowerCase().includes(query)
+      || commit.hash.startsWith(query))
+  }, [graphCommits, graphLanes, graphFilter])
   /** Every repository row in all-files mode (changed rows merged in); null in changes mode. */
   const allRows = useMemo(
     () => (treeMode === 'all' && !refsMode && allFiles !== null ? mergeAllFiles(allFiles, ready?.files ?? []) : null),
@@ -222,11 +282,13 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   /** Unchanged rows have no diff — the file view is their only view. */
   const effectiveView: FileViewMode = selectedFile?.unchanged === true ? 'file' : viewMode
 
-  // Diff/content lifecycle: whenever the selected file, its untracked-ness
-  // (a status refresh may reclassify it), the context depth, the staged/
-  // unstaged scope, or the diff/file view changes. Unchanged rows and the
-  // file view load whole-file content instead of a diff.
+  // Diff/content lifecycle (worktree view): whenever the selected file, its
+  // untracked-ness (a status refresh may reclassify it), the context depth,
+  // the staged/unstaged scope, or the diff/file view changes. Unchanged rows
+  // and the file view load whole-file content instead of a diff. The graph
+  // view owns `diff` while active — this effect stands down there.
   useEffect(() => {
+    if (viewTab !== 'changes') return
     if (cwd === undefined || selected === null || selectedFile === null) {
       setDiff({ kind: 'idle' })
       return
@@ -241,7 +303,34 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
       if (alive) setDiff(next)
     })
     return () => { alive = false }
-  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef, targetRef, compareMode])
+  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef, targetRef, compareMode, viewTab])
+
+  // The selected commit file's diff (graph view): parent0...commit — the
+  // empty-tree baseline for a root commit — rendered by the shared DiffPane.
+  const commitInfo = useMemo(
+    () => (logState.kind === 'ready' && selectedCommit !== null
+      ? logState.commits.find(commit => commit.hash === selectedCommit) ?? null
+      : null),
+    [logState, selectedCommit],
+  )
+  const graphFileInfo = useMemo(
+    () => commitFiles?.find(file => file.path === graphFile) ?? null,
+    [commitFiles, graphFile],
+  )
+  useEffect(() => {
+    if (viewTab !== 'graph') return
+    if (cwd === undefined || selectedCommit === null || graphFileInfo === null) {
+      setDiff({ kind: 'idle' })
+      return
+    }
+    let alive = true
+    setDiff({ kind: 'loading' })
+    const parent0 = commitInfo !== null && commitInfo.parents.length > 0 ? commitInfo.parents[0]! : EMPTY_TREE_ID
+    void loadFileDiff(cwd, graphFileInfo.path, graphFileInfo.origPath, false, diffFull, 'all', parent0, selectedCommit).then(next => {
+      if (alive) setDiff(next)
+    })
+    return () => { alive = false }
+  }, [viewTab, cwd, selectedCommit, graphFileInfo, commitInfo, diffFull])
 
   const toggleDir = useCallback((path: string) => {
     setCollapsed(previous => {
@@ -288,6 +377,34 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     setSelected(null)
     setDiffScope('all')
     if (mode === 'refs') setTargetRef(previous => previous ?? 'HEAD')
+  }, [])
+
+  /** Switch the main view between workspace changes and the commit graph. */
+  const changeViewTab = useCallback((tab: ViewTab) => {
+    setViewTab(tab)
+    setSelected(null)
+    setSelectedCommit(null)
+    setGraphFile(null)
+  }, [])
+
+  /** Select a graph commit; its file list and the file selection reset. */
+  const selectCommit = useCallback((hash: string) => {
+    setSelectedCommit(hash)
+    setGraphFile(null)
+    setDiffScope('all')
+  }, [])
+
+  const selectGraphFile = useCallback((path: string) => {
+    setGraphFile(path)
+  }, [])
+
+  const toggleGraphDir = useCallback((path: string) => {
+    setGraphCollapsed(previous => {
+      const next = new Set(previous)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
   }, [])
 
   /** Execute one armed write (commit / commit+push / push) against the host. */
@@ -393,14 +510,27 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
             value={searchDraft}
             onChange={event => { setSearchDraft(event.target.value) }}
             onKeyDown={event => { if (event.key === 'Escape') setSearchDraft('') }}
-            placeholder={t('search.placeholder')}
+            placeholder={viewTab === 'graph' ? t('graph.search') : t('search.placeholder')}
             spellCheck={false}
           />
-          {search !== '' && (
+          {viewTab === 'changes' && search !== '' && (
             <span className={css.searchMeta}>{searchMatches === null ? '\u2026' : t('search.files', { count: searchMatches.size })}</span>
           )}
         </label>
         <span className={css.toolbarSpacer} />
+        <span className={css.scopeSwitch} role="group" aria-label={t('view.label')}>
+          {(['changes', 'graph'] as const).map(candidate => (
+            <button
+              key={candidate}
+              type="button"
+              className={css.scopeBtn + (viewTab === candidate ? ' ' + css.scopeBtnActive : '')}
+              onClick={() => { changeViewTab(candidate) }}
+            >
+              {candidate === 'changes' ? null : <GraphIcon />}
+              <span>{t(('viewTab.' + candidate) as ReviewKey)}</span>
+            </button>
+          ))}
+        </span>
         <button type="button" className={css.toolBtn} onClick={refresh} title={t('refresh')}>
           <RefreshIcon />
           <span>{status.kind === 'loading' ? t('refreshing') : t('refresh')}</span>
@@ -464,6 +594,115 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
         </div>
       )}
       <div className={css.body}>
+        {viewTab === 'graph' ? (
+          <>
+            <section className={css.graphList} data-git-review-graph="">
+              {logState.kind === 'loading' && <div className={css.paneNotice}>{t('graph.loading')}</div>}
+              {logState.kind === 'failed' && <div className={css.paneNotice + ' ' + css.errorText}>{logState.message}</div>}
+              {logState.kind === 'ready' && graphCommits.length === 0 && (
+                <div className={css.paneNotice}>{t('graph.empty')}</div>
+              )}
+              {logState.kind === 'ready' && graphCommits.length > 0 && (
+                <>
+                  {logState.truncated && <div className={css.noticeRow}>{t('graph.truncated', { count: graphCommits.length })}</div>}
+                  {visibleGraph.length === 0
+                    ? <div className={css.paneNotice}>{t('graph.noMatches')}</div>
+                    : (
+                      <CommitGraph
+                        commits={visibleGraph.map(row => row.commit)}
+                        lanes={visibleGraph.map(row => row.lane)}
+                        selected={selectedCommit}
+                        onSelect={selectCommit}
+                        t={t}
+                      />
+                    )}
+                </>
+              )}
+            </section>
+            <main className={css.mainPane}>
+              {selectedCommit === null || commitInfo === null ? (
+                <div className={css.emptyState}>
+                  <div className={css.emptyTitle}>{t('graph.selectCommit')}</div>
+                  <div className={css.emptyHint}>{t('graph.selectHint')}</div>
+                </div>
+              ) : (
+                <div className={css.commitDetail} data-git-review-diff="">
+                  <div className={css.commitInfo}>
+                    <div className={css.commitInfoSubject}>{commitInfo.subject}</div>
+                    <div className={css.commitInfoMeta}>
+                      <span className={css.commitHash}>{commitInfo.hash.slice(0, 7)}</span>
+                      <span>{commitInfo.authorName}</span>
+                      <span>{fmtGraphDate(commitInfo.timestamp)}</span>
+                      {commitInfo.refs.map(ref => (
+                        <span
+                          key={ref.kind + ':' + ref.name}
+                          className={ref.kind === 'head' ? css.refBadgeHead : ref.kind === 'tag' ? css.refBadgeTag : css.refBadgeOther}
+                        >
+                          {ref.name}
+                        </span>
+                      ))}
+                      {commitInfo.parents.length > 0 && (
+                        <span>{t('graph.parent') + ' ' + commitInfo.parents[0]!.slice(0, 7)}</span>
+                      )}
+                      {commitFiles !== null && (
+                        <span>{t('graph.filesCount', { count: commitFiles.length })}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className={css.commitSplit}>
+                    <div className={css.commitTreePanel} data-git-review-tree="">
+                      {commitFiles === null
+                        ? <div className={css.paneNotice}>{t('graph.loading')}</div>
+                        : commitFiles.length === 0
+                          ? <div className={css.paneNotice}>{t('graph.noFiles')}</div>
+                          : (
+                            <TreePanel
+                              files={commitFiles}
+                              selected={graphFile}
+                              onSelect={selectGraphFile}
+                              filter={graphFilter}
+                              onFilterChange={setGraphFilter}
+                              collapsed={graphCollapsed}
+                              onToggleDir={toggleGraphDir}
+                              mode="changes"
+                              onModeChange={() => { /* pinned in graph view */ }}
+                              showModeRow={false}
+                              listFailed={false}
+                              t={t}
+                            />
+                          )}
+                    </div>
+                    <div className={css.commitDiffArea}>
+                      {graphFileInfo !== null && diff.kind !== 'idle' && (
+                        <DiffPane
+                          file={graphFileInfo}
+                          diff={diff.kind === 'text' ? diff.diff : ''}
+                          truncated={diff.kind === 'text' && diff.truncated}
+                          loading={diff.kind === 'loading'}
+                          binary={diff.kind === 'binary'}
+                          size={diff.kind === 'binary' ? diff.size : 0}
+                          full={diffFull}
+                          onToggleFull={() => { setDiffFull(value => !value) }}
+                          scope={diffScope}
+                          onScopeChange={setDiffScope}
+                          view="diff"
+                          onViewChange={() => { /* pinned: a commit diff has no file view */ }}
+                          showViewSwitch={false}
+                          search={search}
+                          baseActive
+                          useInput={useInput}
+                          inputActions={inputActions}
+                          t={t}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </main>
+          </>
+        ) : (
+          <>
         <main className={css.mainPane}>
           {selected === null || selectedFile === null || diff.kind === 'idle'
             ? (
@@ -527,6 +766,8 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
             matchCounts={searchMatches ?? undefined}
             t={t}
           />
+        )}
+          </>
         )}
       </div>
     </div>

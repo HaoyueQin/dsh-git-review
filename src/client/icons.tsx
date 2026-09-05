@@ -80,3 +80,15 @@ export function CommentIcon({ size = 13 }: IconProps) {
     </svg>
   )
 }
+
+export function GraphIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <circle cx="4" cy="3.5" r="1.5" />
+      <circle cx="4" cy="12.5" r="1.5" />
+      <circle cx="11.5" cy="8" r="1.5" />
+      <path d="M4 5v6" />
+      <path d="M4 8h5.5" />
+    </svg>
+  )
+}

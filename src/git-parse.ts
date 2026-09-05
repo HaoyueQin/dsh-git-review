@@ -230,6 +230,74 @@ export function nameStatusIndex(rows: readonly NameStatusRow[]): Map<string, Nam
   return index
 }
 
+/** One decoration in a `%D` list: the ref name and its display class. */
+export interface DecorationEntry {
+  name: string
+  /** 'head' = local branch (incl. the name behind 'HEAD -> '), 'tag' = a
+   *  tag, 'other' = remote/secondary refs. */
+  kind: 'head' | 'tag' | 'other'
+}
+
+/**
+ * Parse the `%D` decorations string (`HEAD -> main, origin/main, tag: v1.0`).
+ * 'HEAD -> X' collapses to X as a head; 'tag: X' becomes a tag; everything
+ * else passes through as 'other'.
+ */
+export function parseDecorations(raw: string): DecorationEntry[] {
+  const out: DecorationEntry[] = []
+  for (const piece of raw.split(',')) {
+    const item = piece.trim()
+    if (item === '') continue
+    if (item.startsWith('HEAD -> ')) out.push({ name: item.slice('HEAD -> '.length), kind: 'head' })
+    else if (item.startsWith('tag: ')) out.push({ name: item.slice('tag: '.length), kind: 'tag' })
+    else out.push({ name: item, kind: 'other' })
+  }
+  return out
+}
+
+/** One `git log` record (the wire format `parseLogLines` reads). */
+export interface LogLine {
+  hash: string
+  /** Parent hashes, first-parent first; empty for a root commit. */
+  parents: string[]
+  authorName: string
+  /** Author time, unix seconds (0 when unparseable). */
+  timestamp: number
+  refs: DecorationEntry[]
+  subject: string
+}
+
+const HASH_RE = /^[0-9a-f]{40}$/
+
+/**
+ * Parse `git log --all --format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e`
+ * output: records end with \x1e, fields separate on \x1f. The subject is
+ * the LAST field (joined again if it contained a \x1f), and malformed or
+ * short records are skipped rather than mis-parsed. The leading newline
+ * git inserts between records is trimmed off the hash field.
+ */
+export function parseLogLines(raw: string): LogLine[] {
+  const out: LogLine[] = []
+  for (const record of raw.split('\x1e')) {
+    if (record.trim() === '') continue
+    const fields = record.split('\x1f')
+    if (fields.length < 6) continue
+    const hash = fields[0]!.trim()
+    if (!HASH_RE.test(hash)) continue
+    const parentField = fields[1]!.trim()
+    const timestamp = Number(fields[3]!.trim())
+    out.push({
+      hash,
+      parents: parentField === '' ? [] : parentField.split(' '),
+      authorName: fields[2]!,
+      timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+      refs: parseDecorations(fields[4]!),
+      subject: fields.slice(5).join('\x1f').trim(),
+    })
+  }
+  return out
+}
+
 /** One per-file section of a full `git diff` text. */
 export interface DiffSection {
   /** Path parsed from the +++ (or ---) header line; null when unclear. */

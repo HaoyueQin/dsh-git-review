@@ -53,8 +53,11 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
-import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
-import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload } from './contract.ts'
+import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
+import type { ChangedFile, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload } from './contract.ts'
+
+/** A bare 40-hex object id (the only commit-id form accepted over the wire). */
+const HASH_ONLY_RE = /^[0-9a-f]{40}$/
 
 export const name = 'dsh-git-review'
 
@@ -545,6 +548,61 @@ async function gitRefs(cwd: unknown): Promise<GitRefsPayload> {
   return { ok: true, refs: refs.slice(0, REFS_CAP), truncated: refs.length > REFS_CAP }
 }
 
+/** Commit cap for the graph log (a review tab is not a history browser). */
+const LOG_CAP = 500
+
+/** One `log` answer: the commit-graph feed across all refs, newest first,
+ *  in date order (minimizes edge crossings in the lane layout). */
+async function gitLog(cwd: unknown): Promise<GitLogPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  let raw: string
+  try {
+    raw = await runGit(repoRoot, [
+      'log', '--all', '--date-order', '--max-count=' + String(LOG_CAP),
+      '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e',
+    ])
+  } catch (error) {
+    // An unborn HEAD has no commits: an empty graph, not a failure.
+    if (/does not have any commits yet|bad revision/i.test(String((error as Error).message ?? error))) {
+      return { ok: true, commits: [], truncated: false }
+    }
+    throw error
+  }
+  const commits = parseLogLines(raw)
+  return { ok: true, commits, truncated: commits.length >= LOG_CAP }
+}
+
+/** One `commit-files` answer: a single commit's changed files, diffed
+ *  against its first parent (a root commit against the empty tree) — the
+ *  same first-parent convention GitHub's commit pages use. */
+async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<GitCommitFilesPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const hash = typeof commit === 'string' ? commit.trim() : ''
+  if (!HASH_ONLY_RE.test(hash)) throw new Error('commit id required')
+  // `rev-list --parents -n 1` → "<hash> <parent0> ..." on one line.
+  const listing = (await runGit(repoRoot, ['rev-list', '--parents', '-n', '1', hash])).trim()
+  const parts = listing.split(' ')
+  if (parts[0] !== hash) throw new Error('commit not found')
+  const parent0 = parts.length > 1 && parts[1] !== undefined ? parts[1] : EMPTY_TREE_ID
+  const range = refRange(parent0, hash)
+  const [numstatRaw, nameStatusRaw] = await Promise.all([
+    runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...range]),
+    runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...range]),
+  ])
+  const files = mergeDiffRows(parseNameStatusZ(nameStatusRaw), numstatIndex(parseNumstatZ(numstatRaw)))
+  let added = 0
+  let deleted = 0
+  for (const file of files) {
+    added += file.added
+    deleted += file.deleted
+  }
+  return { ok: true, files, totals: { added, deleted } }
+}
+
 /** One `search` answer: case-insensitive per-file match counts over the full
  *  worktree-vs-HEAD diff (or a ref-range diff when `target` is given) plus
  *  untracked file content (bounded, worktree mode only). The response sorts
@@ -741,6 +799,14 @@ export function apply(ctx: Context): void {
         }
         if (action === 'refs') {
           respond(res, 200, await gitRefs(body['cwd']))
+          return
+        }
+        if (action === 'log') {
+          respond(res, 200, await gitLog(body['cwd']))
+          return
+        }
+        if (action === 'commit-files') {
+          respond(res, 200, await gitCommitFiles(body['cwd'], body['commit']))
           return
         }
         if (action === 'commit') {

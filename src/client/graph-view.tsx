@@ -5,6 +5,7 @@
  * layout). The lane layout itself lives in git-graph.ts (pure, check-script
  * tested); this file only draws it.
  */
+import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { GitCommitSummary } from '../contract.ts'
 import type { GraphLaneRow } from './git-graph.ts'
@@ -107,20 +108,50 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
   const maxLanes = lanes.reduce((width, row) => Math.max(width, row !== undefined ? row.laneCount : 1), 1)
   const graphWidth = Math.max(maxLanes * LANE_W, LANE_W * 2)
   const columns = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px'
+  // Hover-card state for the folded rail (kept at the top: hooks never go
+  // below an early return).
+  const [tip, setTip] = useState<{ x: number; y: number; commit: GitCommitSummary } | null>(null)
+  const showTip = (node: Element, commit: GitCommitSummary): void => {
+    const rect = node.getBoundingClientRect()
+    const top = Math.min(rect.top, window.innerHeight - 90)
+    setTip({ x: rect.right, y: Math.max(8, top), commit })
+  }
   if (collapsed) {
+    // The folded rail keeps one column per commit — but the bare 64px of
+    // dots was a blind jump: nothing said which commit a node was, and the
+    // native title tooltip was the only hint. The rail now carries the
+    // subject + short hash per row AND a rich hover card (subject, hash,
+    // author, date, refs) so switching commits is never blind. The card is
+    // one conditionally-rendered fixed-position node: absolute inside the
+    // rail would be clipped by the list's overflow (the Menu portal lesson).
     return (
-      <div className={css.commitList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
+      <div className={css.commitList + ' ' + css.railList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
         {commits.map((commit, index) => (
           <button
             key={commit.hash}
             type="button"
-            className={css.commitRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
-            title={commit.subject + ' \u00b7 ' + commit.hash.slice(0, 7)}
+            className={css.railRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
+            aria-label={commit.subject + ' \u00b7 ' + commit.hash.slice(0, 7)}
             onClick={() => { onSelect(commit.hash) }}
+            onMouseEnter={event => { showTip(event.currentTarget, commit) }}
+            onMouseLeave={() => { setTip(null) }}
+            onFocus={event => { showTip(event.currentTarget, commit) }}
+            onBlur={() => { setTip(null) }}
           >
             <GraphCell row={lanes[index]} width={graphWidth} />
+            <span className={css.railSubject}>{commit.subject}</span>
+            <span className={css.railHash}>{commit.hash.slice(0, 7)}</span>
           </button>
         ))}
+        {tip !== null && (
+          <div className={css.railTip} role="tooltip" style={{ left: tip.x + 10, top: tip.y }}>
+            <span className={css.railTipSubject}>{tip.commit.subject}</span>
+            <span className={css.railTipMeta}>{tip.commit.hash + ' \u00b7 ' + tip.commit.authorName + ' \u00b7 ' + fmtGraphDate(tip.commit.timestamp)}</span>
+            {tip.commit.refs.length > 0 && (
+              <span className={css.railTipRefs}>{tip.commit.refs.map(item => item.name).join(', ')}</span>
+            )}
+          </div>
+        )}
       </div>
     )
   }

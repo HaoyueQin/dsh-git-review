@@ -138,6 +138,8 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [graphFilter, setGraphFilter] = useState('')
   const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null)
+  const [commitTotals, setCommitTotals] = useState<{ added: number; deleted: number } | null>(null)
+  const [copiedHash, setCopiedHash] = useState(false)
   // Commit/push popover state: two-step armed buttons, verbatim git output.
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
@@ -256,16 +258,32 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   useEffect(() => {
     if (viewTab !== 'graph' || cwd === undefined || selectedCommit === null) {
       setCommitFiles(null)
+      setCommitTotals(null)
       return
     }
     let alive = true
     setCommitFiles(null)
+    setCommitTotals(null)
     void hostCall<GitCommitFilesPayload>('commit-files', { cwd, commit: selectedCommit }).then(payload => {
       if (!alive) return
-      setCommitFiles(payload !== null && payload.ok ? payload.files : [])
+      if (payload !== null && payload.ok) {
+        setCommitFiles(payload.files)
+        setCommitTotals(payload.totals)
+      } else {
+        setCommitFiles([])
+      }
     })
     return () => { alive = false }
   }, [viewTab, cwd, selectedCommit])
+
+  /** Copy the selected commit's full hash (the detail bar's hash button). */
+  const copyCommitHash = useCallback(() => {
+    if (selectedCommit === null) return
+    void navigator.clipboard?.writeText(selectedCommit).then(() => {
+      setCopiedHash(true)
+      window.setTimeout(() => { setCopiedHash(false) }, 1500)
+    }).catch(() => { /* clipboard unavailable — the hash stays visible */ })
+  }, [selectedCommit])
 
   const ready = status.kind === 'ready' ? status.data : null
   /** Graph feed with the local search filter applied (topology rows kept). */
@@ -801,24 +819,46 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
               ) : (
                 <div className={css.commitDetail} data-git-review-diff="">
                   <div className={css.commitInfo}>
-                    <div className={css.commitInfoSubject}>{commitInfo.subject}</div>
-                    <div className={css.commitInfoMeta}>
-                      <span className={css.commitHash}>{commitInfo.hash.slice(0, 7)}</span>
+                    <div className={css.commitInfoTop}>
+                      <span className={css.commitInfoLabel}>{t('graph.col.subject')}</span>
+                      <div className={css.commitInfoSubjectArea}>
+                        <span className={css.commitInfoSubject}>{commitInfo.subject}</span>
+                        {commitInfo.refs.map(ref => (
+                          <span
+                            key={ref.kind + ':' + ref.name}
+                            className={ref.name === 'HEAD' ? css.refBadgeHeadState : ref.kind === 'head' ? css.refBadgeHead : ref.kind === 'tag' ? css.refBadgeTag : css.refBadgeOther}
+                          >
+                            {ref.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className={css.commitInfoGrid}>
+                      <span className={css.commitInfoLabel}>{t('graph.col.commit')}</span>
+                      <button
+                        type="button"
+                        className={css.commitHashBtn}
+                        title={copiedHash ? t('graph.copied') : t('graph.copyHash')}
+                        onClick={copyCommitHash}
+                      >
+                        {commitInfo.hash}
+                      </button>
+                      <span className={css.commitInfoLabel}>{t('graph.field.author')}</span>
                       <span>{commitInfo.authorName}</span>
+                      <span className={css.commitInfoLabel}>{t('graph.col.date')}</span>
                       <span>{fmtGraphDate(commitInfo.timestamp)}</span>
-                      {commitInfo.refs.map(ref => (
-                        <span
-                          key={ref.kind + ':' + ref.name}
-                          className={ref.kind === 'head' ? css.refBadgeHead : ref.kind === 'tag' ? css.refBadgeTag : css.refBadgeOther}
-                        >
-                          {ref.name}
-                        </span>
-                      ))}
-                      {commitInfo.parents.length > 0 && (
-                        <span>{t('graph.parent') + ' ' + commitInfo.parents[0]!.slice(0, 7)}</span>
-                      )}
-                      {commitFiles !== null && (
-                        <span>{t('graph.filesCount', { count: commitFiles.length })}</span>
+                      <span className={css.commitInfoLabel}>{t('graph.parent')}</span>
+                      <span>{commitInfo.parents.length === 0 ? '\u2014' : commitInfo.parents.map(parent => parent.slice(0, 7)).join(', ')}</span>
+                      {commitTotals !== null && (
+                        <>
+                          <span className={css.commitInfoLabel}>{t('graph.field.changes')}</span>
+                          <span>
+                            <span className={css.totalAdded}>{'+' + fmtCount(commitTotals.added)}</span>
+                            {' '}
+                            <span className={css.totalDeleted}>{'\u2212' + fmtCount(commitTotals.deleted)}</span>
+                            {commitFiles !== null && ' \u00b7 ' + t('graph.filesCount', { count: commitFiles.length })}
+                          </span>
+                        </>
                       )}
                     </div>
                   </div>

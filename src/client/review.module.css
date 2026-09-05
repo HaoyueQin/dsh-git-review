@@ -933,14 +933,35 @@ body[data-dsh-bg-glass] .root {
 }
 
 .commitList {
-  padding: 4px 0 140px;
+  padding: 0 0 140px;
+  --graph-w: 48px;
+}
+
+/* Column header row (图/描述/日期/作者/提交), aligned with the data rows
+   via the same grid template the rows set inline. */
+.commitHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  gap: 7px;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px 0 0;
+  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+}
+
+body[data-dsh-bg-glass] .commitHeader {
+  background: transparent;
 }
 
 .commitRow {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
+  display: grid;
   gap: 7px;
+  align-items: center;
   width: 100%;
   height: 27px;
   padding-right: 10px;
@@ -965,6 +986,15 @@ body[data-dsh-bg-glass] .root {
   display: block;
 }
 
+/* Badges + subject share the description column; badges lead, like the
+   reference graph window. */
+.commitMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .commitSubject {
   flex: 0 1 auto;
   min-width: 0;
@@ -973,18 +1003,16 @@ body[data-dsh-bg-glass] .root {
   white-space: nowrap;
 }
 
-.commitSpacer {
-  flex: 1 1 0;
-  min-width: 8px;
-}
-
 .commitAuthor,
 .commitDate,
 .commitHash {
-  flex: none;
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
-  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -994,7 +1022,8 @@ body[data-dsh-bg-glass] .root {
 
 .refBadgeHead,
 .refBadgeTag,
-.refBadgeOther {
+.refBadgeOther,
+.refBadgeHeadState {
   flex: none;
   max-width: 140px;
   overflow: hidden;
@@ -1009,6 +1038,14 @@ body[data-dsh-bg-glass] .root {
 .refBadgeHead {
   border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 45%, transparent);
   color: var(--dsw-alias-state-business-primary);
+}
+
+/* The HEAD pointer itself gets the strongest tone. */
+.refBadgeHeadState {
+  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-business-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+  font-weight: 600;
 }
 
 .refBadgeTag {
@@ -1034,9 +1071,30 @@ body[data-dsh-bg-glass] .root {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.commitInfoTop {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.commitInfoLabel {
+  flex: none;
+  min-width: 44px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+}
+
+.commitInfoSubjectArea {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .commitInfoSubject {
@@ -1046,13 +1104,33 @@ body[data-dsh-bg-glass] .root {
   word-break: break-word;
 }
 
-.commitInfoMeta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  color: var(--dsw-alias-label-tertiary);
+.commitInfoGrid {
+  display: grid;
+  grid-template-columns: minmax(44px, auto) minmax(0, 1fr) minmax(44px, auto) minmax(0, 1fr);
+  gap: 4px 10px;
+  align-items: baseline;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+}
+
+.commitHashBtn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
   font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.commitHashBtn:hover {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
 .commitSplit {

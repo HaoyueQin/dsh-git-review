@@ -240,17 +240,23 @@ export interface DecorationEntry {
 
 /**
  * Parse the `%D` decorations string (`HEAD -> main, origin/main, tag: v1.0`).
- * 'HEAD -> X' collapses to X as a head; 'tag: X' becomes a tag; everything
- * else passes through as 'other'.
+ * 'HEAD -> X' yields TWO entries — the HEAD pointer itself and the branch it
+ * names (both heads, matching how graph UIs badge them separately); 'tag: X'
+ * becomes a tag; everything else passes through as 'other'.
  */
 export function parseDecorations(raw: string): DecorationEntry[] {
   const out: DecorationEntry[] = []
   for (const piece of raw.split(',')) {
     const item = piece.trim()
     if (item === '') continue
-    if (item.startsWith('HEAD -> ')) out.push({ name: item.slice('HEAD -> '.length), kind: 'head' })
-    else if (item.startsWith('tag: ')) out.push({ name: item.slice('tag: '.length), kind: 'tag' })
-    else out.push({ name: item, kind: 'other' })
+    if (item.startsWith('HEAD -> ')) {
+      out.push({ name: 'HEAD', kind: 'head' })
+      out.push({ name: item.slice('HEAD -> '.length), kind: 'head' })
+    } else if (item.startsWith('tag: ')) {
+      out.push({ name: item.slice('tag: '.length), kind: 'tag' })
+    } else {
+      out.push({ name: item, kind: 'other' })
+    }
   }
   return out
 }

@@ -319,6 +319,7 @@ assert.deepEqual(logLines[0], {
   authorName: 'Alice',
   timestamp: 1700000000,
   refs: [
+    { name: 'HEAD', kind: 'head' },
     { name: 'main', kind: 'head' },
     { name: 'origin/main', kind: 'other' },
     { name: 'v1.0', kind: 'tag' },

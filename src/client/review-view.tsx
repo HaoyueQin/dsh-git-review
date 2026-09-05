@@ -17,7 +17,7 @@ import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { mergeAllFiles } from './file-tree.ts'
 import { TreePanel } from './tree-panel.tsx'
-import type { NS } from './locales.ts'
+import type { NS, ReviewKey } from './locales.ts'
 import css from './review.module.css'
 
 /** Props injected by the slot registration (see client/index.ts). */
@@ -27,6 +27,10 @@ export interface ReviewInjected {
 }
 
 type T = PropsLocale<typeof NS>['t']
+
+/** The comparison side of the toolbar: worktree-vs-base (the review tab's
+ *  home mode) or any-two-commits (ref-range: base...target). */
+type CompareMode = 'worktree' | 'refs'
 
 /** The status side of the view. */
 type StatusState =
@@ -47,16 +51,16 @@ type DiffState =
   | { kind: 'failed'; message: string }
 
 /** Fetch one status snapshot; maps every failure onto an explicit state. */
-async function loadStatus(cwd: string, base: string | null): Promise<Exclude<StatusState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitStatusPayload | GitStatusFailure>('status', { cwd, base })
+async function loadStatus(cwd: string, base: string | null, target: string | null): Promise<Exclude<StatusState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitStatusPayload | GitStatusFailure>('status', { cwd, base, target })
   if (payload === null) return { kind: 'hostUnavailable' }
   if (!payload.ok) return payload.isRepository === false ? { kind: 'notRepo' } : { kind: 'error', message: payload.error }
   return { kind: 'ready', data: payload }
 }
 
 /** Fetch one file's diff; keeps non-ok payloads as explicit failures. */
-async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean, scope: DiffScope, base: string | null): Promise<Exclude<DiffState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full, scope, base })
+async function loadFileDiff(cwd: string, path: string, origPath: string | undefined, untracked: boolean, full: boolean, scope: DiffScope, base: string | null, target: string | null): Promise<Exclude<DiffState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitFileDiffPayload & { error?: string }>('file-diff', { cwd, path, origPath, untracked, full, scope, base, target })
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
@@ -106,9 +110,14 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [search, setSearch] = useState('')
   const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
   // Diff-base override: null compares against HEAD; the refs list feeds the
-  // dropdown (fetched alongside each status refresh).
+  // dropdowns (fetched alongside each status refresh). In refs mode the
+  // comparison runs between two picked refs instead of the worktree.
+  const [compareMode, setCompareMode] = useState<CompareMode>('worktree')
   const [baseRef, setBaseRef] = useState<string | null>(null)
+  const [targetRef, setTargetRef] = useState<string | null>(null)
   const [refs, setRefs] = useState<GitRefEntry[] | null>(null)
+  const refsMode = compareMode === 'refs'
+  const rangeReady = !refsMode || (baseRef !== null && targetRef !== null)
   // Commit/push popover state: two-step armed buttons, verbatim git output.
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
@@ -117,20 +126,25 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [writeState, setWriteState] = useState<{ kind: 'idle' } | { kind: 'busy' } | { kind: 'result'; ok: boolean; text: string }>({ kind: 'idle' })
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
-  // workspace changes. A refresh keeps the previous list visible (loading
-  // states only replace an empty board) so the tree never flashes blank.
+  // workspace or comparison range changes. A refresh keeps the previous list
+  // visible (loading states only replace an empty board) so the tree never
+  // flashes blank; refs mode waits until both ends are picked.
   useEffect(() => {
     if (cwd === undefined) {
       setStatus({ kind: 'noWorkspace' })
       return
     }
+    if (!rangeReady) {
+      setStatus({ kind: 'loading' })
+      return
+    }
     let alive = true
     setStatus(previous => (previous.kind === 'ready' || previous.kind === 'error' ? previous : { kind: 'loading' }))
-    void loadStatus(cwd, baseRef).then(next => {
+    void loadStatus(cwd, baseRef, refsMode ? targetRef : null).then(next => {
       if (alive) setStatus(next)
     })
     return () => { alive = false }
-  }, [cwd, reloadTick, baseRef])
+  }, [cwd, reloadTick, baseRef, targetRef, compareMode])
 
   // Selectable diff-base refs (branches, remotes, tags).
   useEffect(() => {
@@ -146,9 +160,14 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   }, [cwd, reloadTick])
 
   // All-files list lifecycle: fetched when the tree switches to 'all' mode
-  // (and again on refresh while that mode is active).
+  // (and again on refresh while that mode is active). Refs mode pins the
+  // tree to the changed list — the whole-worktree list has no meaning for a
+  // commit-to-commit range.
   useEffect(() => {
-    if (treeMode !== 'all' || cwd === undefined) return
+    if (refsMode) setTreeMode('changes')
+  }, [refsMode])
+  useEffect(() => {
+    if (treeMode !== 'all' || cwd === undefined || refsMode) return
     let alive = true
     void hostCall<GitListFilesPayload>('list-files', { cwd }).then(payload => {
       if (!alive) return
@@ -161,7 +180,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
       setAllFilesFailed(false)
     })
     return () => { alive = false }
-  }, [treeMode, cwd, reloadTick])
+  }, [treeMode, cwd, reloadTick, refsMode])
 
   // Search lifecycle: 400ms debounce on the draft, then one host call per
   // committed query (re-run on refresh; cleared with the draft).
@@ -176,25 +195,25 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   }, [searchDraft])
 
   useEffect(() => {
-    if (search === '' || cwd === undefined) {
+    if (search === '' || cwd === undefined || !rangeReady) {
       setSearchMatches(null)
       return
     }
     let alive = true
-    void hostCall<GitSearchPayload>('search', { cwd, query: search }).then(payload => {
+    void hostCall<GitSearchPayload>('search', { cwd, query: search, base: baseRef, target: refsMode ? targetRef : null }).then(payload => {
       if (!alive) return
       setSearchMatches(payload !== null && payload.ok
         ? new Map(payload.matches.map(match => [match.path, match.count] as const))
         : null)
     })
     return () => { alive = false }
-  }, [search, cwd, reloadTick])
+  }, [search, cwd, reloadTick, baseRef, targetRef, compareMode])
 
   const ready = status.kind === 'ready' ? status.data : null
   /** Every repository row in all-files mode (changed rows merged in); null in changes mode. */
   const allRows = useMemo(
-    () => (treeMode === 'all' && allFiles !== null ? mergeAllFiles(allFiles, ready?.files ?? []) : null),
-    [treeMode, allFiles, ready],
+    () => (treeMode === 'all' && !refsMode && allFiles !== null ? mergeAllFiles(allFiles, ready?.files ?? []) : null),
+    [treeMode, refsMode, allFiles, ready],
   )
   const selectedFile = useMemo(() => {
     const source = allRows ?? ready?.files
@@ -217,12 +236,12 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     const wantFile = selectedFile.unchanged === true || effectiveView === 'file'
     const loader = wantFile
       ? loadFileContent(cwd, selected)
-      : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope, baseRef)
+      : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope, baseRef, refsMode ? targetRef : null)
     void loader.then(next => {
       if (alive) setDiff(next)
     })
     return () => { alive = false }
-  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef])
+  }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef, targetRef, compareMode])
 
   const toggleDir = useCallback((path: string) => {
     setCollapsed(previous => {
@@ -254,6 +273,21 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     setBaseRef(ref)
     setSelected(null)
     setDiffScope('all')
+  }, [])
+
+  /** Pick the ref-range target; same reset semantics as the base. */
+  const changeTarget = useCallback((ref: string) => {
+    setTargetRef(ref === '' ? null : ref)
+    setSelected(null)
+    setDiffScope('all')
+  }, [])
+
+  /** Switch the comparison side between worktree and ref-range modes. */
+  const changeCompareMode = useCallback((mode: CompareMode) => {
+    setCompareMode(mode)
+    setSelected(null)
+    setDiffScope('all')
+    if (mode === 'refs') setTargetRef(previous => previous ?? 'HEAD')
   }, [])
 
   /** Execute one armed write (commit / commit+push / push) against the host. */
@@ -298,20 +332,53 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   return (
     <div className={css.root} data-conversation-composer-overlay="">
       <header className={css.toolbar} data-git-review-toolbar="">
-        <label className={css.branchChip} title={t('base.label')}>
-          <BranchIcon />
-          <select
-            className={css.branchSelect}
-            value={baseRef ?? ''}
-            onChange={event => { changeBase(event.target.value === '' ? null : event.target.value) }}
-          >
-            <option value="">{data?.branch ?? 'HEAD'}</option>
-            {(refs ?? []).map(ref => (
-              <option key={ref.kind + ':' + ref.name} value={ref.name}>{ref.name}</option>
-            ))}
-          </select>
-          {baseRef !== null && <span className={css.baseArrow}>{'\u2192'}</span>}
-        </label>
+        <span className={css.scopeSwitch} role="group" aria-label={t('compare.mode')}>
+          {(['worktree', 'refs'] as const).map(candidate => (
+            <button
+              key={candidate}
+              type="button"
+              className={css.scopeBtn + (compareMode === candidate ? ' ' + css.scopeBtnActive : '')}
+              onClick={() => { changeCompareMode(candidate) }}
+            >
+              {t(('compare.' + candidate) as ReviewKey)}
+            </button>
+          ))}
+        </span>
+        {!refsMode ? (
+          <label className={css.branchChip} title={t('base.label')}>
+            <BranchIcon />
+            <select
+              className={css.branchSelect}
+              value={baseRef ?? ''}
+              onChange={event => { changeBase(event.target.value === '' ? null : event.target.value) }}
+            >
+              <option value="">{data?.branch ?? 'HEAD'}</option>
+              <RefOptionGroups refs={refs} t={t} />
+            </select>
+            {baseRef !== null && <span className={css.baseArrow}>{'\u2192'}</span>}
+          </label>
+        ) : (
+          <label className={css.branchChip + ' ' + css.rangeChip} title={t('compare.pickHint')}>
+            <BranchIcon />
+            <select
+              className={css.branchSelect}
+              value={baseRef ?? ''}
+              onChange={event => { changeBase(event.target.value === '' ? null : event.target.value) }}
+            >
+              <option value="">{t('compare.pickBase')}</option>
+              <RefOptionGroups refs={refs} t={t} />
+            </select>
+            <span className={css.baseArrow}>{'\u2192'}</span>
+            <select
+              className={css.branchSelect}
+              value={targetRef ?? ''}
+              onChange={event => { changeTarget(event.target.value) }}
+            >
+              <option value="HEAD">HEAD</option>
+              <RefOptionGroups refs={refs} t={t} />
+            </select>
+          </label>
+        )}
         {data !== null && (
           <span className={css.totals}>
             <span className={css.totalAdded}>{'+' + fmtCount(data.totals.added)}</span>
@@ -401,8 +468,8 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
           {selected === null || selectedFile === null || diff.kind === 'idle'
             ? (
               <div className={css.emptyState}>
-                <div className={css.emptyTitle}>{t('empty.title')}</div>
-                <div className={css.emptyHint}>{t('empty.hint')}</div>
+                <div className={css.emptyTitle}>{refsMode && !rangeReady ? t('compare.refs') : t('empty.title')}</div>
+                <div className={css.emptyHint}>{refsMode && !rangeReady ? t('compare.pickHint') : t('empty.hint')}</div>
               </div>
             )
             : diff.kind === 'failed'
@@ -437,7 +504,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                     view={effectiveView}
                     onViewChange={setViewMode}
                     search={search}
-                    baseActive={baseRef !== null}
+                    baseActive={baseRef !== null || refsMode}
                     useInput={useInput}
                     inputActions={inputActions}
                     t={t}
@@ -455,6 +522,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
             onToggleDir={toggleDir}
             mode={treeMode}
             onModeChange={changeTreeMode}
+            showModeRow={!refsMode}
             listFailed={allFilesFailed}
             matchCounts={searchMatches ?? undefined}
             t={t}
@@ -462,6 +530,33 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
         )}
       </div>
     </div>
+  )
+}
+
+/** The refs dropdown's optgroups: local branches, remote branches, tags —
+ *  three separate groups (mixing branches and tags into one flat list was
+ *  the old UI's complaint). */
+function RefOptionGroups({ refs, t }: { refs: GitRefEntry[] | null; t: T }) {
+  if (refs === null || refs.length === 0) return null
+  const groups: ReadonlyArray<{ kind: GitRefEntry['kind']; label: string }> = [
+    { kind: 'branch', label: t('ref.branches') },
+    { kind: 'remote', label: t('ref.remotes') },
+    { kind: 'tag', label: t('ref.tags') },
+  ]
+  return (
+    <>
+      {groups.map(group => {
+        const entries = refs.filter(ref => ref.kind === group.kind)
+        if (entries.length === 0) return null
+        return (
+          <optgroup key={group.kind} label={group.label}>
+            {entries.map(ref => (
+              <option key={group.kind + ':' + ref.name} value={ref.name}>{ref.name}</option>
+            ))}
+          </optgroup>
+        )
+      })}
+    </>
   )
 }
 

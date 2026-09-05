@@ -4,7 +4,7 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countOccurrences, mergeStatus, normalizeBaseRef, numstatIndex, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, splitDiffSections } from '../src/git-parse.ts'
+import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, refRange, splitDiffSections } from '../src/git-parse.ts'
 import { parseUnifiedDiff, splitByMatch } from '../src/client/diff-parse.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 
@@ -278,5 +278,25 @@ assert.deepEqual(nsRows, [
 nsRows = parseNameStatusZ('R100\x00old.ts\x00new.ts\x00')
 assert.deepEqual(nsRows, [{ letter: 'R', score: '100', path: 'new.ts', origPath: 'old.ts' }])
 assert.deepEqual(parseNameStatusZ(''), [])
+
+// 24. refRange: three-dot for two commits (merge-base view); two-dot when
+//     the base end is the empty tree (a tree id has no merge-base).
+assert.deepEqual(refRange('a'.repeat(40), 'b'.repeat(40)), ['a'.repeat(40) + '...' + 'b'.repeat(40)])
+assert.deepEqual(refRange(EMPTY_TREE_ID, 'b'.repeat(40)), [EMPTY_TREE_ID, 'b'.repeat(40)])
+
+// 25. mergeDiffRows: name-status letters become x with a blank y; counts come
+//     from the numstat index (destination path); binary follows the dashes;
+//     rows without a numstat entry are zero-count, not binary.
+const rangeRows = mergeDiffRows(
+  parseNameStatusZ('A\x00added.ts\x00M\x00mod.ts\x00R100\x00old.ts\x00ren.ts\x00D\x00gone.bin\x00'),
+  numstatIndex(parseNumstatZ('5\t0\tadded.ts\x001\t2\tmod.ts\x000\t0\t\x00old.ts\x00ren.ts\x00-\t-\tgone.bin\x00')),
+)
+assert.deepEqual(rangeRows.map(r => [r.path, r.x, r.y, r.added, r.deleted, r.binary, r.untracked]), [
+  ['added.ts', 'A', ' ', 5, 0, false, false],
+  ['mod.ts', 'M', ' ', 1, 2, false, false],
+  ['ren.ts', 'R', ' ', 0, 0, false, false],
+  ['gone.bin', 'D', ' ', 0, 0, true, false],
+])
+assert.deepEqual(mergeDiffRows([], new Map()), [])
 
 console.log('check-parse: all assertions passed')

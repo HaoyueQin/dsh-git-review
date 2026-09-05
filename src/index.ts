@@ -5,11 +5,11 @@
  * this plugin's own prefix route (the same webServer pattern dsh-diff-stat
  * ships):
  *
- *   POST /dsh-git-review/api/status       { cwd }
- *   POST /dsh-git-review/api/file-diff    { cwd, path, untracked?, full?, scope? }
+ *   POST /dsh-git-review/api/status       { cwd, base?, target? }
+ *   POST /dsh-git-review/api/file-diff    { cwd, path, untracked?, full?, scope?, base?, target? }
  *   POST /dsh-git-review/api/file-content { cwd, path }
  *   POST /dsh-git-review/api/list-files   { cwd }
- *   POST /dsh-git-review/api/search       { cwd, query }
+ *   POST /dsh-git-review/api/search       { cwd, query, base?, target? }
  *   POST /dsh-git-review/api/refs         { cwd }
  *   POST /dsh-git-review/api/commit       { cwd, message, mode?, confirm: true }
  *   POST /dsh-git-review/api/push         { cwd, confirm: true }
@@ -19,6 +19,12 @@
  * normalizeBaseRef, re-verified via `rev-parse --verify --end-of-options`):
  * when it resolves to a commit other than HEAD the comparison runs against
  * that commit (worktree vs base) instead of HEAD.
+ *
+ * Passing `target` as well switches to the ref-range mode (any two refs):
+ * base and target both resolve to commit ids and the diff is the three-dot
+ * `base...target` (merge-base vs target, the GitHub-Compare convention).
+ * `status` then reports the range's rows instead of porcelain ones, and
+ * `scope`/untracked probing do not apply.
  *
  * `scope` splits the worktree-vs-HEAD diff into its porcelain halves:
  * 'all' (default) = worktree vs HEAD, 'staged' = index vs HEAD (`--cached`),
@@ -47,7 +53,7 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
-import { countOccurrences, normalizeBaseRef, parseNameStatusZ, splitDiffSections } from './git-parse.ts'
+import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
 import type { ChangedFile, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload } from './contract.ts'
 
 export const name = 'dsh-git-review'
@@ -67,8 +73,6 @@ const GIT_MAX_BUFFER = 64 * 1024 * 1024
 const DIFF_CAP = 2 * 1024 * 1024
 /** Untracked pseudo-diff read cap (parity with dsh-diff-stat's READ_CAP). */
 const READ_CAP = 512 * 1024
-/** Diff base when HEAD is unborn (the well-known empty-tree object id). */
-const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 /** Structural webServer contract this plugin depends on (inject: 'webServer'). */
 interface WebServerService {
@@ -120,8 +124,11 @@ async function resolveRepository(cwd: string): Promise<string | null> {
   }
 }
 
-/** Resolve a validated base ref to a commit id, or null when it fails. */
-async function resolveBaseCommit(repoRoot: string, ref: string): Promise<string | null> {
+/** Resolve a validated ref to a diff-range endpoint id, or null when it
+ *  fails. The empty-tree literal passes through (a tree id, the root-commit
+ *  baseline); everything else must resolve to a commit. */
+async function resolveRangeRef(repoRoot: string, ref: string): Promise<string | null> {
+  if (ref === EMPTY_TREE_ID) return ref
   try {
     const commit = (await runGit(repoRoot, ['rev-parse', '--verify', '--end-of-options', ref + '^{commit}'])).trim()
     return commit === '' ? null : commit
@@ -148,7 +155,7 @@ async function diffBase(repoRoot: string): Promise<{ base: string; unbornHead: b
   try {
     return { base: (await runGit(repoRoot, ['rev-parse', '--verify', 'HEAD'])).trim(), unbornHead: false }
   } catch {
-    return { base: EMPTY_TREE, unbornHead: true }
+    return { base: EMPTY_TREE_ID, unbornHead: true }
   }
 }
 
@@ -244,24 +251,64 @@ function capDiff(diffText: string): { diff: string; truncated: boolean } {
 
 /** One `status` answer: repo detection, porcelain + numstat in one shot.
  *  With a validated `base` override the tracked rows come from a
- *  worktree-vs-base name-status/numstat pair instead (untracked unchanged). */
-async function gitStatus(cwd: unknown, base: unknown): Promise<GitStatusPayload | { ok: false; isRepository: false; error: string }> {
+ *  worktree-vs-base name-status/numstat pair instead (untracked unchanged).
+ *  With a `target` too, the ref-range mode reports `base...target` rows and
+ *  the worktree (porcelain/untracked) is not consulted at all. */
+async function gitStatus(cwd: unknown, base: unknown, target: unknown): Promise<GitStatusPayload | { ok: false; isRepository: boolean; error: string }> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) {
     return { ok: false, isRepository: false, error: 'not a git repository (or git is unavailable)' }
   }
-  const { base: headCommit, unbornHead } = await diffBase(repoRoot)
   const baseRef = normalizeBaseRef(base)
+  const targetRef = normalizeBaseRef(target)
+  if (targetRef !== null) {
+    // Ref-range mode: two resolved commit ids, `base...target` (refRange
+    // picks two-dot when the base end is the empty-tree id). Untracked rows
+    // and staged/unstaged halves are worktree concepts and do not apply.
+    const startRef = baseRef ?? 'HEAD'
+    const [branchRaw, baseCommit, targetCommit] = await Promise.all([
+      runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ''),
+      resolveRangeRef(repoRoot, startRef),
+      resolveRangeRef(repoRoot, targetRef),
+    ])
+    if (baseCommit === null || targetCommit === null) {
+      return { ok: false, isRepository: true, error: 'cannot resolve diff range: ' + startRef + '...' + targetRef }
+    }
+    const range = refRange(baseCommit, targetCommit)
+    const [numstatRaw, nameStatusRaw] = await Promise.all([
+      runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...range]),
+      runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...range]),
+    ])
+    const files = mergeDiffRows(parseNameStatusZ(nameStatusRaw), numstatIndex(parseNumstatZ(numstatRaw)))
+    let added = 0
+    let deleted = 0
+    for (const file of files) {
+      added += file.added
+      deleted += file.deleted
+    }
+    const branch = branchRaw.trim()
+    return {
+      ok: true,
+      root: repoRoot,
+      branch: branch === '' ? null : branch,
+      base: baseCommit,
+      unbornHead: false,
+      baseRef: startRef,
+      files,
+      totals: { added, deleted },
+    }
+  }
+  const { base: headCommit, unbornHead } = await diffBase(repoRoot)
   const overrideCommit = baseRef === null
     ? null
-    : await resolveBaseCommit(repoRoot, baseRef).then(commit => (commit !== null && commit !== headCommit ? commit : null))
+    : await resolveRangeRef(repoRoot, baseRef).then(commit => (commit !== null && commit !== headCommit && commit !== EMPTY_TREE_ID ? commit : null))
   const [branchRaw, porcelainRaw, numstatRaw, nameStatusRaw] = await Promise.all([
     runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ''),
     runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
     overrideCommit !== null
       ? runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', overrideCommit])
-      : runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', unbornHead ? EMPTY_TREE : 'HEAD']),
+      : runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', unbornHead ? EMPTY_TREE_ID : 'HEAD']),
     overrideCommit !== null
       ? runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', overrideCommit])
       : Promise.resolve(''),
@@ -322,8 +369,10 @@ function asScope(value: unknown): DiffScope {
 
 /** One `file-diff` answer: single-file unified diff, lazily fetched. When a
  *  validated `base` override resolves to a non-HEAD commit, the diff runs
- *  worktree-vs-base and the staged/unstaged scope is ignored. */
-async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown, base: unknown): Promise<GitFileDiffPayload> {
+ *  worktree-vs-base and the staged/unstaged scope is ignored. With a
+ *  validated `target`, the ref-range mode runs `base...target` instead and
+ *  neither scope nor untracked probing applies. */
+async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown, base: unknown, target: unknown): Promise<GitFileDiffPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -336,6 +385,29 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
     const relOrig = relative(repoRoot, fenceRepoPath(repoRoot, origPath)).replaceAll('\\', '/')
     if (relOrig !== relPath) pathspecs.unshift(relOrig)
   }
+  // Expanded view: one huge -U merges every hunk (git folds overlapping
+  // context), so "show all context" is a plain re-fetch of the same diff.
+  const context = full === true ? 100000 : 3
+  const targetRef = normalizeBaseRef(target)
+  if (targetRef !== null) {
+    const baseCommit = await resolveRangeRef(repoRoot, normalizeBaseRef(base) ?? 'HEAD')
+    const targetCommit = await resolveRangeRef(repoRoot, targetRef)
+    if (baseCommit === null || targetCommit === null) throw new Error('cannot resolve diff range refs')
+    const diffText = await runGit(repoRoot, [
+      'diff', '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context),
+      ...refRange(baseCommit, targetCommit), '--', ...pathspecs,
+    ])
+    if (diffText === '') return { ok: true, binary: false, diff: '', truncated: false }
+    if (diffSaysBinary(diffText)) {
+      let size = 0
+      try {
+        size = (await lstat(absPath)).size
+      } catch { /* size stays 0 */ }
+      return { ok: true, binary: true, diff: '', truncated: false, size }
+    }
+    const capped = capDiff(diffText)
+    return { ok: true, binary: false, diff: capped.diff, truncated: capped.truncated }
+  }
   if (untracked === true) {
     const pseudo = await untrackedPseudoDiff(repoRoot, relPath)
     if (pseudo !== null) return pseudo
@@ -343,12 +415,9 @@ async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full
   // diffBase already resolves HEAD → hash, falling back to the empty tree id
   // on an unborn HEAD, so `base` alone is the right range argument.
   const { base: headCommit } = await diffBase(repoRoot)
-  // Expanded view: one huge -U merges every hunk (git folds overlapping
-  // context), so "show all context" is a plain re-fetch of the same diff.
-  const context = full === true ? 100000 : 3
   const diffScope = asScope(scope)
   const baseRef = normalizeBaseRef(base)
-  const requestedCommit = baseRef === null ? null : await resolveBaseCommit(repoRoot, baseRef)
+  const requestedCommit = baseRef === null ? null : await resolveRangeRef(repoRoot, baseRef)
   // The override applies only when it actually differs from HEAD; otherwise
   // the scope semantics (staged/unstaged halves) stay meaningful.
   const overrideCommit = requestedCommit !== null && requestedCommit !== headCommit ? requestedCommit : null
@@ -477,22 +546,33 @@ async function gitRefs(cwd: unknown): Promise<GitRefsPayload> {
 }
 
 /** One `search` answer: case-insensitive per-file match counts over the full
- *  worktree-vs-HEAD diff plus untracked file content (bounded). The response
- *  sorts loudest-first so the tree's top hit is the most-changed file. */
-async function gitSearch(cwd: unknown, query: unknown): Promise<GitSearchPayload> {
+ *  worktree-vs-HEAD diff (or a ref-range diff when `target` is given) plus
+ *  untracked file content (bounded, worktree mode only). The response sorts
+ *  loudest-first so the tree's top hit is the most-changed file. */
+async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: unknown): Promise<GitSearchPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (typeof query !== 'string' || query.trim() === '') return { ok: true, matches: [], truncated: false }
   const needle = query.slice(0, 200)
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
-  const { base } = await diffBase(repoRoot)
+  const targetRef = normalizeBaseRef(target)
   let diffText: string
-  try {
-    diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', base])
-  } catch {
-    // The empty-tree literal is the one sha256-incompatible path; git's own
-    // words surface if the retry fails too.
-    diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', 'HEAD'])
+  let refsMode = false
+  if (targetRef !== null) {
+    const baseCommit = await resolveRangeRef(repoRoot, normalizeBaseRef(base) ?? 'HEAD')
+    const targetCommit = await resolveRangeRef(repoRoot, targetRef)
+    if (baseCommit === null || targetCommit === null) throw new Error('cannot resolve diff range refs')
+    diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', ...refRange(baseCommit, targetCommit)])
+    refsMode = true
+  } else {
+    const { base } = await diffBase(repoRoot)
+    try {
+      diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', base])
+    } catch {
+      // The empty-tree literal is the one sha256-incompatible path; git's own
+      // words surface if the retry fails too.
+      diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', 'HEAD'])
+    }
   }
   const counts = new Map<string, number>()
   for (const section of splitDiffSections(diffText)) {
@@ -500,6 +580,7 @@ async function gitSearch(cwd: unknown, query: unknown): Promise<GitSearchPayload
     const count = countOccurrences(section.body, needle)
     if (count > 0) counts.set(section.path, count)
   }
+  if (refsMode) return { ok: true, matches: [...counts.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count), truncated: false }
   // Untracked content never appears in `git diff` — scan bounded prefixes.
   let untracked: string[] = []
   try {
@@ -651,11 +732,11 @@ export function apply(ctx: Context): void {
         const action = route.startsWith(API_PREFIX + '/') ? route.slice(API_PREFIX.length + 1) : (route.startsWith('/') ? route.slice(1) : route)
         const body = await readJsonBody(req, res)
         if (action === 'status') {
-          respond(res, 200, await gitStatus(body['cwd'], body['base']))
+          respond(res, 200, await gitStatus(body['cwd'], body['base'], body['target']))
           return
         }
         if (action === 'file-diff') {
-          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope'], body['base']))
+          respond(res, 200, await gitFileDiff(body['cwd'], body['path'], body['untracked'], body['full'], body['origPath'], body['scope'], body['base'], body['target']))
           return
         }
         if (action === 'refs') {
@@ -679,7 +760,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'search') {
-          respond(res, 200, await gitSearch(body['cwd'], body['query']))
+          respond(res, 200, await gitSearch(body['cwd'], body['query'], body['base'], body['target']))
           return
         }
         respond(res, 404, { ok: false, error: 'unknown action' })

@@ -29,6 +29,8 @@ export interface TreePanelProps {
   /** 'changes' = uncommitted files only; 'all' = the whole repository list. */
   mode: 'changes' | 'all'
   onModeChange: (next: 'changes' | 'all') => void
+  /** False hides the changes/all switch (ref-range mode pins to changes). */
+  showModeRow?: boolean
   /** True when the all-files list fetch failed. */
   listFailed: boolean
   /** Content-search match counts per file path (absent = no active search). */
@@ -127,26 +129,28 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
  * The panel body: filter box above, tree (or flat filtered list) below.
  * @param props - files, selection, filter/collapse state and callbacks, locale.
  */
-export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, listFailed, matchCounts, t }: TreePanelProps) {
+export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, showModeRow = true, listFailed, matchCounts, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
   const tree = useMemo(() => buildFileTree(visible), [visible])
   const flat = filter.trim() !== ''
   return (
     <div className={css.treePanel} data-git-review-tree="">
-      <div className={css.treeModeRow}>
-        <span className={css.scopeSwitch} role="group" aria-label={t('tree.mode.label')}>
-          {(['changes', 'all'] as const).map(candidate => (
-            <button
-              key={candidate}
-              type="button"
-              className={css.scopeBtn + (mode === candidate ? ' ' + css.scopeBtnActive : '')}
-              onClick={() => { onModeChange(candidate) }}
-            >
-              {t(('tree.mode.' + candidate) as ReviewKey)}
-            </button>
-          ))}
-        </span>
-      </div>
+      {showModeRow && (
+        <div className={css.treeModeRow}>
+          <span className={css.scopeSwitch} role="group" aria-label={t('tree.mode.label')}>
+            {(['changes', 'all'] as const).map(candidate => (
+              <button
+                key={candidate}
+                type="button"
+                className={css.scopeBtn + (mode === candidate ? ' ' + css.scopeBtnActive : '')}
+                onClick={() => { onModeChange(candidate) }}
+              >
+                {t(('tree.mode.' + candidate) as ReviewKey)}
+              </button>
+            ))}
+          </span>
+        </div>
+      )}
       <label className={css.filterRow}>
         <SearchIcon />
         <input

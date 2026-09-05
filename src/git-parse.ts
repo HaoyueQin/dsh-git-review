@@ -137,6 +137,48 @@ export function normalizeBaseRef(value: unknown): string | null {
   return ref
 }
 
+/** The well-known empty-tree object id (sha1) — a fresh repository's diff
+ *  baseline and the parent stand-in for root commits. */
+export const EMPTY_TREE_ID = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+/**
+ * The `git diff` range arguments comparing two validated object ids. Both
+ * inputs arrive as 40-hex ids the host resolved itself (never raw user
+ * text), so concatenation is injection-free. Three-dot (`base...target`)
+ * compares the merge-base against target — the GitHub-Compare convention;
+ * the empty-tree end (tree object, no commits to merge) falls back to
+ * two-dot, which git accepts for a tree-vs-commit comparison.
+ */
+export function refRange(baseCommit: string, targetCommit: string): string[] {
+  return baseCommit === EMPTY_TREE_ID
+    ? [baseCommit, targetCommit]
+    : [baseCommit + '...' + targetCommit]
+}
+
+/**
+ * Merge one range's name-status rows with its numstat index into the
+ * rendered rows (the ref-range counterpart of mergeStatus): every row is a
+ * committed change, so there is no untracked half and `y` is always blank.
+ */
+export function mergeDiffRows(
+  rows: readonly NameStatusRow[],
+  numstat: ReadonlyMap<string, NumstatRow>,
+): ChangedFile[] {
+  return rows.map(row => {
+    const stat = numstat.get(row.path)
+    return {
+      path: row.path,
+      origPath: row.origPath,
+      x: row.letter,
+      y: ' ',
+      added: stat === undefined ? 0 : stat.added ?? 0,
+      deleted: stat === undefined ? 0 : stat.deleted ?? 0,
+      binary: stat !== undefined && (stat.added === null || stat.deleted === null),
+      untracked: false,
+    }
+  })
+}
+
 /** One `diff --name-status -z` record. */
 export interface NameStatusRow {
   /** Status letter: A | C | D | M | R | T (U/X never reach a clean diff). */

@@ -66,6 +66,12 @@ body[data-dsh-bg-glass] .root {
   text-overflow: ellipsis;
 }
 
+/* Ref-range mode hosts TWO dropdowns (base → target); wider than the single
+   base picker. */
+.rangeChip {
+  max-width: 400px;
+}
+
 .branchSelect {
   max-width: 150px;
   border: none;

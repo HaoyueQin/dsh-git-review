@@ -65,8 +65,10 @@ function GraphCell({ row, width }: { row: GraphLaneRow | undefined; width: numbe
   )
 }
 
-/** One decoration badge (HEAD/branch/tag/remote), placed before the subject. */
-function RefBadge({ ref: decoration }: { ref: { name: string; kind: 'head' | 'tag' | 'other' } }) {
+/** One decoration badge (HEAD/branch/tag/remote), placed before the subject.
+ *  The prop must NOT be named `ref` — React consumes that reserved prop and
+ *  the component would crash reading a name off undefined. */
+function RefBadge({ decoration }: { decoration: { name: string; kind: 'head' | 'tag' | 'other' } }) {
   const className = decoration.name === 'HEAD'
     ? css.refBadgeHeadState
     : decoration.kind === 'head' ? css.refBadgeHead
@@ -112,7 +114,7 @@ export function CommitGraph({ commits, lanes, selected, onSelect, t }: CommitGra
         >
           <GraphCell row={lanes[index]} width={graphWidth} />
           <span className={css.commitMain}>
-            {commit.refs.map(ref => <RefBadge key={ref.kind + ':' + ref.name} ref={ref} />)}
+            {commit.refs.map(ref => <RefBadge key={ref.kind + ':' + ref.name} decoration={ref} />)}
             <span className={css.commitSubject}>{commit.subject}</span>
           </span>
           <span className={css.commitDate}>{fmtGraphDate(commit.timestamp)}</span>

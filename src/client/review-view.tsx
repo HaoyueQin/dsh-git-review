@@ -951,12 +951,13 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                     size={diff.kind === 'binary' ? diff.size : 0}
                     full={diffFull}
                     onToggleFull={() => { setDiffFull(value => !value) }}
-                    scope={diffScope}
-                    onScopeChange={setDiffScope}
-                    view={effectiveView}
-                    onViewChange={setViewMode}
-                    search={search}
-                    baseActive={baseRef !== null || refsMode}
+                          scope={diffScope}
+                          onScopeChange={setDiffScope}
+                          view={effectiveView}
+                          onViewChange={setViewMode}
+                          showViewSwitch={!refsMode}
+                          search={search}
+                          baseActive={baseRef !== null || refsMode}
                     useInput={useInput}
                     inputActions={inputActions}
                     t={t}

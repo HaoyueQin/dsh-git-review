@@ -146,7 +146,8 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
         {tip !== null && (
           <div className={css.railTip} role="tooltip" style={{ left: tip.x + 10, top: tip.y }}>
             <span className={css.railTipSubject}>{tip.commit.subject}</span>
-            <span className={css.railTipMeta}>{tip.commit.hash + ' \u00b7 ' + tip.commit.authorName + ' \u00b7 ' + fmtGraphDate(tip.commit.timestamp)}</span>
+            <span className={css.railTipHash}>{tip.commit.hash}</span>
+            <span className={css.railTipMeta}>{tip.commit.authorName + ' \u00b7 ' + fmtGraphDate(tip.commit.timestamp)}</span>
             {tip.commit.refs.length > 0 && (
               <span className={css.railTipRefs}>{tip.commit.refs.map(item => item.name).join(', ')}</span>
             )}

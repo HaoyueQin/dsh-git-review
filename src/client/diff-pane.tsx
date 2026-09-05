@@ -45,8 +45,11 @@ export interface DiffPaneProps {
   /** Active main view ('split' or 'unified' here); the header hosts the switch. */
   view: FileViewMode
   onViewChange: (next: FileViewMode) => void
-  /** False hides the diff/file switch (a commit diff has no file view). */
+  /** False hides the layout switch entirely. */
   showViewSwitch?: boolean
+  /** False drops the file option from the switch (a commit diff has no
+   *  worktree copy to read); split/unified stay available. */
+  allowFileView?: boolean
   /** Active content search spec (query '' = none); highlights + navigation. */
   search: SearchSpec
   /** True while a base-branch override is active (scope chips are hidden). */
@@ -198,7 +201,7 @@ function CommentEditor({ path, line, useInput, inputActions, onClose, t }: {
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, search, baseActive, useInput, inputActions, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, search, baseActive, useInput, inputActions, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -256,7 +259,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
             </button>
           </span>
         )}
-        {showViewSwitch && <ViewSwitch active={view} onViewChange={onViewChange} t={t} />}
+        {showViewSwitch && <ViewSwitch active={view} onViewChange={onViewChange} allowFileView={allowFileView} t={t} />}
         {!file.untracked && !baseActive && (
           <span className={css.scopeSwitch} role="group" aria-label={t('scope.label')}>
             {(['all', 'staged', 'unstaged'] as const).map(candidate => (

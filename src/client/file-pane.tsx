@@ -29,16 +29,19 @@ function highlightedLine(text: string, engine: ReturnType<typeof makeSearchEngin
 }
 
 /** The layout/view switch shared by both pane headers. */
-export function ViewSwitch({ active, onViewChange, t }: {
+export function ViewSwitch({ active, onViewChange, allowFileView = true, t }: {
   active: FileViewMode
   onViewChange: (next: FileViewMode) => void
+  /** False drops the file option (a commit diff has no worktree to read). */
+  allowFileView?: boolean
   t: T
 }) {
-  const options: ReadonlyArray<{ key: FileViewMode; icon: ReactNode; label: string }> = [
-    { key: 'split', icon: <LineLeftIcon />, label: t('view.split') },
-    { key: 'unified', icon: <LinesIcon />, label: t('view.unified') },
-    { key: 'file', icon: <FileIcon />, label: t('view.file') },
+  const allOptions: ReadonlyArray<{ key: FileViewMode; icon: ReactNode; label: string; fileOnly: boolean }> = [
+    { key: 'split', icon: <LineLeftIcon />, label: t('view.split'), fileOnly: false },
+    { key: 'unified', icon: <LinesIcon />, label: t('view.unified'), fileOnly: false },
+    { key: 'file', icon: <FileIcon />, label: t('view.file'), fileOnly: true },
   ]
+  const options = allOptions.filter(option => allowFileView || !option.fileOnly)
   return (
     <span className={css.scopeSwitch} role="group" aria-label={t('view.label')}>
       {options.map(candidate => (

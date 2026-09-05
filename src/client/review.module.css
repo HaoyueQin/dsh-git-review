@@ -291,7 +291,7 @@ body[data-dsh-bg-glass] .root {
   flex: none;
   align-items: center;
   gap: 6px;
-  max-width: 300px;
+  max-width: 380px;
   padding: 3px 9px;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 999px;
@@ -306,6 +306,7 @@ body[data-dsh-bg-glass] .root {
 
 .searchInput {
   flex: 1;
+  width: 170px;
   min-width: 0;
   border: none;
   outline: none;
@@ -325,13 +326,38 @@ body[data-dsh-bg-glass] .root {
   font-variant-numeric: tabular-nums;
 }
 
-/* The toolbar search + its options gear (scope / case / regex popover). */
+/* The toolbar search: scope chip + box + matching gear. The chip leads so
+   the classified search (diff/content/name) is visible at a glance. */
 .searchWrap {
   position: relative;
   display: inline-flex;
   flex: none;
   align-items: center;
   gap: 4px;
+}
+
+.searchScope {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.searchScopeBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.searchScopeBtn:hover {
+  background: var(--dsw-alias-fill-hover);
 }
 
 .searchOptions {
@@ -1412,6 +1438,14 @@ body[data-dsh-bg-glass] .root {
   font-size: 12.5px;
   font-weight: 600;
   word-break: break-word;
+}
+
+.railTipHash {
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
 }
 
 .railTipMeta {

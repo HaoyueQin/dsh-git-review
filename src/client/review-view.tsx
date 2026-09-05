@@ -127,7 +127,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [searchScope, setSearchScope] = useState<'path' | 'diff' | 'content'>('diff')
   const [searchCS, setSearchCS] = useState(false)
   const [searchRegex, setSearchRegex] = useState(false)
-  const [searchOptionsOpen, setSearchOptionsOpen] = useState(false)
+  const [searchMenu, setSearchMenu] = useState<'scope' | 'match' | null>(null)
   const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
   // Diff-base override: null compares against HEAD; the refs list feeds the
   // dropdowns (fetched alongside each status refresh). In refs mode the
@@ -164,6 +164,8 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const commitPopRef = useRef<HTMLDivElement | null>(null)
   const branchBtnRef = useRef<HTMLButtonElement | null>(null)
   const commitBtnRef = useRef<HTMLButtonElement | null>(null)
+  const searchScopeRef = useRef<HTMLSpanElement | null>(null)
+  const searchMatchRef = useRef<HTMLSpanElement | null>(null)
   // Popovers spawned before RefPicker/FileMenu had no outside-click close;
   // share the same document-mousedown rule those two use. The trigger buttons
   // are excluded so their own click-to-toggle doesn't fight the closer.
@@ -179,6 +181,15 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     document.addEventListener('mousedown', onDown)
     return () => { document.removeEventListener('mousedown', onDown) }
   }, [branchOpen, commitOpen])
+  useEffect(() => {
+    if (searchMenu === null) return
+    const onDown = (event: MouseEvent): void => {
+      const root = searchMenu === 'scope' ? searchScopeRef.current : searchMatchRef.current
+      if (root !== null && !root.contains(event.target as Node)) setSearchMenu(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => { document.removeEventListener('mousedown', onDown) }
+  }, [searchMenu])
   const [branchName, setBranchName] = useState('')
   const [branchStart, setBranchStart] = useState('')
   const [branchBusy, setBranchBusy] = useState(false)
@@ -639,6 +650,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
               key={candidate}
               type="button"
               className={css.scopeBtn + (compareMode === candidate ? ' ' + css.scopeBtnActive : '')}
+              title={t(('compare.' + candidate + 'Hint') as ReviewKey)}
               onClick={() => { changeCompareMode(candidate) }}
             >
               {t(('compare.' + candidate) as ReviewKey)}
@@ -701,6 +713,37 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
         )}
         {viewTab === 'changes' ? (
           <span className={css.searchWrap}>
+            {/* Scope dropdown leads the box so the classified search is
+                discoverable — it used to hide inside the gear popover and
+                users read the box as one generic full-text field. */}
+            <span className={css.searchScope} ref={searchScopeRef}>
+              <button
+                type="button"
+                className={css.searchScopeBtn}
+                title={t('search.scope')}
+                aria-haspopup="menu"
+                aria-expanded={searchMenu === 'scope'}
+                onClick={() => { setSearchMenu(value => value === 'scope' ? null : 'scope') }}
+              >
+                <span>{t(('search.scope.' + searchScope) as ReviewKey)}</span>
+                <ChevronIcon size={10} rotated={searchMenu === 'scope'} />
+              </button>
+              {searchMenu === 'scope' && (
+                <div className={css.searchOptionsPop} role="menu">
+                  {(['diff', 'content', 'path'] as const).map(candidate => (
+                    <button
+                      key={candidate}
+                      type="button"
+                      className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
+                      onClick={() => { setSearchScope(candidate); setSearchMenu(null) }}
+                    >
+                      <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
+                      {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </span>
             <label className={css.searchBox}>
               <SearchIcon />
               <input
@@ -717,32 +760,19 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
               {searchCS && <span className={css.searchFlag} title={t('search.caseSensitive')}>{t('search.flagCS')}</span>}
               {searchRegex && <span className={css.searchFlag} title={t('search.regex')}>{t('search.flagRegex')}</span>}
             </label>
-            <span className={css.searchOptions}>
+            <span className={css.searchOptions} ref={searchMatchRef}>
               <button
                 type="button"
                 className={css.toolBtn + ' ' + css.searchOptionsBtn}
-                title={t('search.options')}
-                aria-label={t('search.options')}
-                aria-expanded={searchOptionsOpen}
-                onClick={() => { setSearchOptionsOpen(value => !value) }}
+                title={t('search.matching')}
+                aria-label={t('search.matching')}
+                aria-expanded={searchMenu === 'match'}
+                onClick={() => { setSearchMenu(value => value === 'match' ? null : 'match') }}
               >
                 <OptionsIcon />
               </button>
-              {searchOptionsOpen && (
+              {searchMenu === 'match' && (
                 <div className={css.searchOptionsPop} role="menu">
-                  <div className={css.searchOptionsGroup}>{t('search.scope')}</div>
-                  {(['diff', 'content', 'path'] as const).map(candidate => (
-                    <button
-                      key={candidate}
-                      type="button"
-                      className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
-                      onClick={() => { setSearchScope(candidate); setSearchOptionsOpen(false) }}
-                    >
-                      <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
-                      {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
-                    </button>
-                  ))}
-                  <div className={css.searchOptionsGroup}>{t('search.matching')}</div>
                   <button
                     type="button"
                     className={css.pickerItem + (searchCS ? ' ' + css.pickerItemActive : '')}
@@ -1131,9 +1161,12 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                           onToggleFull={() => { setDiffFull(value => !value) }}
                           scope={diffScope}
                           onScopeChange={setDiffScope}
-                          view="split"
-                          onViewChange={() => { /* pinned: a commit diff has no file view */ }}
-                          showViewSwitch={false}
+                          // 'file' belongs to the worktree pane only; the
+                          // commit diff falls back to side-by-side.
+                          view={viewMode === 'file' ? 'split' : viewMode}
+                          onViewChange={setViewMode}
+                          showViewSwitch
+                          allowFileView={false}
                           search={searchSpec}
                           baseActive
                           useInput={useInput}

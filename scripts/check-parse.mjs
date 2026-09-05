@@ -4,8 +4,8 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, refRange, splitDiffSections } from '../src/git-parse.ts'
-import { parseUnifiedDiff, splitByMatch } from '../src/client/diff-parse.ts'
+import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, refRange, splitDiffSections } from '../src/git-parse.ts'
+import { countMatchRows, countUnifiedMatches, makeSearchEngine, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 
@@ -369,5 +369,63 @@ assert.deepEqual(mergeBase[0].outEdges, [{ from: 0, to: 0, color: 0 }, { from: 0
 assert.deepEqual(mergeBase[1].inEdges, [{ from: 0, to: 0, color: 0 }])
 assert.deepEqual(mergeBase[1].pass, [{ lane: 1, color: 1 }])
 assert.deepEqual(mergeBase[2].inEdges, [{ from: 1, to: 1, color: 1 }])
+
+// 30. countMatches: literal case-insensitive default; the optional case and
+//     regex toggles; an invalid regex counts 0 (never throws).
+assert.equal(countMatches('aBc AbC abc', 'abc'), 3)
+assert.equal(countMatches('aBc AbC abc', 'abc', { caseSensitive: true }), 1)
+assert.equal(countMatches('aBc AbC abc', 'a.c', { regex: true }), 3)
+assert.equal(countMatches('aBc AbC abc', 'a.c', { regex: true, caseSensitive: true }), 2) // aBc + abc (AbC has an uppercase A)
+assert.equal(countMatches('abc', '['), 0)
+assert.equal(countMatches('aaa', 'aa'), 1) // non-overlapping, like countOccurrences
+
+// 31. makeSearchEngine: parts/count/test under case/regex options; an invalid
+//     regex produces an inactive engine.
+const engine = makeSearchEngine({ query: 'foo' })
+assert.ok(engine.active)
+assert.equal(engine.count('Foo fOo foo'), 3)
+assert.deepEqual(engine.parts('x Foo y'), ['x ', 'Foo', ' y'])
+assert.ok(engine.test('xxFOO'))
+const csEngine = makeSearchEngine({ query: 'Foo', caseSensitive: true })
+assert.equal(csEngine.count('Foo FOO'), 1)
+const rxEngine = makeSearchEngine({ query: 'f.o', regex: true })
+assert.equal(rxEngine.count('Foo foo fuo'), 3)
+const badEngine = makeSearchEngine({ query: '[' , regex: true })
+assert.equal(badEngine.active, false)
+assert.equal(badEngine.count('anything'), 0)
+const emptyEngine = makeSearchEngine({ query: '   ' })
+assert.equal(emptyEngine.active, false)
+
+// 32. rowHasMatch/countMatchRows with an engine (side-by-side navigation).
+const parseDiff = parseUnifiedDiff([
+  'diff --git a/a.txt b/a.txt',
+  '--- a/a.txt',
+  '+++ b/a.txt',
+  '@@ -1,2 +1,2 @@',
+  ' keep',
+  '-old Foo',
+  '+new bar',
+].join('\n'))
+assert.equal(countMatchRows(parseDiff, makeSearchEngine({ query: 'foo' })), 1)
+
+// 33. unifyHunkRows: context stays one line; a replacement (pair) renders as
+//     deletion line then addition line; one-sided rows pass through.
+const unified = unifyHunkRows(parseDiff.hunks[0].rows)
+assert.deepEqual(unified.map(line => line.kind), ['ctx', 'del', 'add'])
+assert.deepEqual(unified.map(line => line.no), [1, 2, 2]) // ctx=old1, del=old2, add=new2
+assert.equal(unified[2].text, 'new bar')
+
+// 34. countUnifiedMatches: a replacement pair with a match on BOTH lines
+//     counts twice (the unified navigation walks lines, not rows).
+const pairDiff = parseUnifiedDiff([
+  'diff --git a/b.txt b/b.txt',
+  '--- a/b.txt',
+  '+++ b/b.txt',
+  '@@ -1 +1 @@',
+  '-alpha & beta',
+  '+alpha & gamma',
+].join('\n'))
+const pairEngine = makeSearchEngine({ query: 'alpha' })
+assert.equal(countUnifiedMatches(pairDiff, pairEngine), 2)
 
 console.log('check-parse: all assertions passed')

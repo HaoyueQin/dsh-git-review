@@ -10,7 +10,7 @@
  * No I/O and no React — the check script imports this file directly under
  * Node's native TS type stripping (Node >= 23.6).
  */
-import { countOccurrences } from '../git-parse.ts'
+/** Pure diff parsing: no I/O, no React. */
 
 /** Above this row count any pane renders a prefix (with a notice). */
 export const MAX_RENDER_ROWS = 20_000
@@ -208,20 +208,177 @@ export function splitByMatch(text: string, search: string): string[] {
   return parts
 }
 
-/** Whether either side of the row contains the query (case-insensitive). */
-export function rowHasMatch(row: PairRow, search: string): boolean {
-  if (search === '') return false
-  return (row.left !== null && countOccurrences(row.left.text, search) > 0)
-    || (row.right !== null && countOccurrences(row.right.text, search) > 0)
+/** Whether either side of the row contains a match. */
+export function rowHasMatch(row: PairRow, engine: SearchEngine): boolean {
+  if (!engine.active) return false
+  return (row.left !== null && engine.test(row.left.text))
+    || (row.right !== null && engine.test(row.right.text))
 }
 
-/** Rows (across all hunks) containing at least one match — the navigation count. */
-export function countMatchRows(parsed: ParsedDiff, search: string): number {
-  if (search === '') return 0
+/** Rows (across all hunks) containing at least one match — the side-by-side
+ *  navigation count. */
+export function countMatchRows(parsed: ParsedDiff, engine: SearchEngine): number {
+  if (!engine.active) return 0
   let count = 0
   for (const hunk of parsed.hunks) {
     for (const row of hunk.rows) {
-      if (rowHasMatch(row, search)) count += 1
+      if (rowHasMatch(row, engine)) count += 1
+    }
+  }
+  return count
+}
+
+/* ── search engine (regex / case options, optional) ─────────────────── */
+
+/** The options the toolbar search offers (off by default). */
+export interface SearchSpec {
+  query: string
+  /** Case-sensitive matching (default: insensitive). */
+  caseSensitive?: boolean
+  /** Treat the query as a regular expression (default: literal). */
+  regex?: boolean
+}
+
+export interface SearchEngine {
+  /** Split into unmatched/matched parts (odd indices are the matches). */
+  parts(text: string): string[]
+  /** Match count (0 for an empty query, an invalid regex, or 'no matches'). */
+  count(text: string): number
+  /** Whether the text contains at least one match. */
+  test(text: string): boolean
+  /** True when the spec is active and the query itself compiled. */
+  active: boolean
+}
+
+/** Build the search engine for one spec. A regex that fails to compile
+ *  degrades to an engine that matches nothing (never throws). */
+export function makeSearchEngine(spec: SearchSpec): SearchEngine {
+  const query = spec.query
+  const empty: SearchEngine = {
+    parts: (text: string) => [text],
+    count: () => 0,
+    test: () => false,
+    active: false,
+  }
+  if (query.trim() === '') return empty
+  const flags = (spec.caseSensitive ? '' : 'i') + (spec.regex ? 'g' : 'g')
+  if (spec.regex === true) {
+    let re: RegExp
+    try {
+      re = new RegExp(query, flags)
+    } catch {
+      return empty
+    }
+    return {
+      parts: (text: string) => {
+        const out: string[] = []
+        let cursor = 0
+        re.lastIndex = 0
+        let match: RegExpExecArray | null
+        while ((match = re.exec(text)) !== null) {
+          if (match.index === re.lastIndex) re.lastIndex += 1
+          out.push(text.slice(cursor, match.index), match[0])
+          cursor = match.index + match[0].length
+        }
+        out.push(text.slice(cursor))
+        return out.length === 1 ? out : out
+      },
+      count: (text: string) => {
+        let countValue = 0
+        re.lastIndex = 0
+        let match: RegExpExecArray | null
+        while ((match = re.exec(text)) !== null) {
+          countValue += 1
+          if (match.index === re.lastIndex) re.lastIndex += 1
+        }
+        return countValue
+      },
+      test: (text: string) => { re.lastIndex = 0; return re.test(text) },
+      active: true,
+    }
+  }
+  const q = spec.caseSensitive ? query : query.toLowerCase()
+  const lowerCached = new Map<string, string>()
+  const lower = (text: string): string => {
+    const cached = lowerCached.get(text)
+    if (cached !== undefined) return cached
+    const value = spec.caseSensitive ? text : text.toLowerCase()
+    if (lowerCached.size < 5000) lowerCached.set(text, value)
+    return value
+  }
+  return {
+    parts: (text: string) => {
+      const haystack = lower(text)
+      const parts: string[] = []
+      let cursor = 0
+      let at = haystack.indexOf(q)
+      while (at !== -1) {
+        parts.push(text.slice(cursor, at), text.slice(at, at + q.length))
+        cursor = at + q.length
+        at = haystack.indexOf(q, cursor)
+      }
+      parts.push(text.slice(cursor))
+      return parts
+    },
+    count: (text: string) => {
+      const haystack = lower(text)
+      let countValue = 0
+      let at = haystack.indexOf(q)
+      while (at !== -1) {
+        countValue += 1
+        at = haystack.indexOf(q, at + q.length)
+      }
+      return countValue
+    },
+    test: (text: string) => lower(text).includes(q),
+    active: true,
+  }
+}
+
+/* ── unified (single-column) rendering model ────────────────────────── */
+
+/** One rendered line of the unified (single-column) view. */
+export interface UnifiedLine {
+  /** 'ctx' unchanged · 'del' old side only · 'add' new side only. */
+  kind: 'ctx' | 'del' | 'add'
+  /** The side's line number (left for ctx/del, right for add). */
+  no: number
+  text: string
+  noNewline?: boolean
+  /** The source side-by-side row (search/comment stats derive from it). */
+  pair: PairRow
+}
+
+/** Expand one hunk's side-by-side rows into unified lines: a replacement
+ *  (pair) renders as its deletion line followed by its addition line —
+ *  the conventional unified-diff shape. */
+export function unifyHunkRows(rows: readonly PairRow[]): UnifiedLine[] {
+  const out: UnifiedLine[] = []
+  for (const row of rows) {
+    if (row.kind === 'pair') {
+      if (row.left !== null) out.push({ kind: 'del', no: row.left.no, text: row.left.text, noNewline: row.left.noNewline, pair: row })
+      if (row.right !== null) out.push({ kind: 'add', no: row.right.no, text: row.right.text, noNewline: row.right.noNewline, pair: row })
+      continue
+    }
+    if (row.kind === 'ctx') {
+      if (row.left !== null) out.push({ kind: 'ctx', no: row.left.no, text: row.left.text, noNewline: row.left.noNewline, pair: row })
+    } else if (row.kind === 'del') {
+      if (row.left !== null) out.push({ kind: 'del', no: row.left.no, text: row.left.text, noNewline: row.left.noNewline, pair: row })
+    } else if (row.kind === 'add') {
+      if (row.right !== null) out.push({ kind: 'add', no: row.right.no, text: row.right.text, noNewline: row.right.noNewline, pair: row })
+    }
+  }
+  return out
+}
+
+/** Matched unified lines across all hunks — the navigation count when the
+ *  pane renders single-column (a replacement pair counts twice). */
+export function countUnifiedMatches(parsed: ParsedDiff, engine: SearchEngine): number {
+  if (!engine.active) return 0
+  let count = 0
+  for (const hunk of parsed.hunks) {
+    for (const line of unifyHunkRows(hunk.rows)) {
+      if (engine.test(line.text)) count += 1
     }
   }
   return count

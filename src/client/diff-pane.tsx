@@ -8,7 +8,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { countMatchRows, parseUnifiedDiff, rowHasMatch, splitByMatch, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff } from './diff-parse.ts'
+import { countMatchRows, countUnifiedMatches, makeSearchEngine, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec } from './diff-parse.ts'
 import { CommentIcon, ExpandIcon, CollapseIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
@@ -42,13 +42,13 @@ export interface DiffPaneProps {
   /** Active staged/unstaged scope (tracked files only). */
   scope: DiffScope
   onScopeChange: (next: DiffScope) => void
-  /** Active main view ('diff' here); the header hosts the switch. */
+  /** Active main view ('split' or 'unified' here); the header hosts the switch. */
   view: FileViewMode
   onViewChange: (next: FileViewMode) => void
   /** False hides the diff/file switch (a commit diff has no file view). */
   showViewSwitch?: boolean
-  /** Active content search query ('' = none); highlights rows + navigation. */
-  search: string
+  /** Active content search spec (query '' = none); highlights + navigation. */
+  search: SearchSpec
   /** True while a base-branch override is active (scope chips are hidden). */
   baseActive: boolean
   /** Session input channels for inline comments (absent = feature hidden). */
@@ -58,12 +58,51 @@ export interface DiffPaneProps {
 }
 
 /** One cell's text with search matches wrapped in <mark> (odd split parts). */
-function renderCellText(cell: DiffCell | null, search: string): ReactNode {
+function renderCellText(cell: DiffCell | null, engine: SearchEngine): ReactNode {
   if (cell === null) return ''
-  const parts = splitByMatch(cell.text, search)
+  const parts = engine.parts(cell.text)
   if (parts.length === 1) return parts[0]
   return parts.map((part, index) =>
     index % 2 === 1 ? <mark key={index} className={css.matchMark}>{part}</mark> : part,
+  )
+}
+
+/** One unified (single-column) line: gutter number + sign + text. */
+function UnifiedRow({ line, engine, ordinal, active, commentTitle, onComment }: {
+  line: { kind: 'ctx' | 'del' | 'add'; no: number; text: string; noNewline?: boolean; pair: PairRow }
+  engine: SearchEngine
+  ordinal: number | undefined
+  active: boolean
+  commentTitle: string
+  onComment: ((line: number) => void) | undefined
+}) {
+  const kindClass = line.kind === 'ctx' ? css.rowUCtx : line.kind === 'del' ? css.rowUDel : css.rowUAdd
+  const matched = ordinal !== undefined
+  return (
+    <div
+      className={css.rowU + ' ' + kindClass + (matched && active ? ' ' + css.rowMatchActive : '')}
+      data-diff-match={matched ? '' : undefined}
+    >
+      <span className={css.cellNoU + (line.kind !== 'ctx' ? ' ' + css.cellNoUSign : '')}>
+        {line.kind === 'del' ? '−' : line.kind === 'add' ? '+' : ''} {line.no}
+      </span>
+      <span className={css.cellText + (line.kind === 'del' ? ' ' + css.cellTextDel : line.kind === 'add' ? ' ' + css.cellTextAdd : '')}>
+        {renderCellText({ no: line.no, text: line.text, noNewline: line.noNewline }, engine)}
+        {line.noNewline === true && <em className={css.noNewline}>{'↩'}</em>}
+      </span>
+      {onComment !== undefined && (line.kind === 'ctx' || line.kind === 'add')
+        && line.pair.right !== null && (
+        <button
+          type="button"
+          className={css.rowCommentBtn}
+          title={commentTitle}
+          aria-label={commentTitle}
+          onClick={() => { onComment(line.pair.right!.no) }}
+        >
+          <CommentIcon />
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -72,7 +111,7 @@ function renderCellText(cell: DiffCell | null, search: string): ReactNode {
  *  the row must not wrap them in any intermediate element. Rows containing a
  *  search match carry data-diff-match (the navigation target), in document
  *  order equal to their match ordinal. */
-function Row({ row, search, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; search: string; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
+function Row({ row, engine, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; engine: SearchEngine; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
   const kindClass = row.kind === 'ctx' ? css.rowCtx
     : row.kind === 'del' ? css.rowDel
       : row.kind === 'add' ? css.rowAdd
@@ -85,12 +124,12 @@ function Row({ row, search, matchOrdinal, active, commentTitle, onComment }: { r
     >
       <span className={css.cellNo + (row.left === null ? ' ' + css.cellHatched : '')}>{row.left?.no ?? ''}</span>
       <span className={css.cellText + (row.left === null ? ' ' + css.cellHatched : '')}>
-        {renderCellText(row.left, search)}
+        {renderCellText(row.left, engine)}
         {row.left?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
       <span className={css.cellNo + (row.right === null ? ' ' + css.cellHatched : '')}>{row.right?.no ?? ''}</span>
       <span className={css.cellText + (row.right === null ? ' ' + css.cellHatched : '')}>
-        {renderCellText(row.right, search)}
+        {renderCellText(row.right, engine)}
         {row.right?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
       {onComment !== undefined && (
@@ -167,19 +206,25 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
     : truncated
       ? t('diff.truncated')
       : null
-  // In-file search navigation: matched rows are ordinals in document order;
-  // prev/next cycles and scrolls the active row into view.
+  // In-file search navigation: matched rows (side-by-side) or lines
+  // (unified) are ordinals in document order; prev/next cycles and scrolls
+  // the active one into view. The engine honors case/regex options.
+  const engine = useMemo(() => makeSearchEngine(search), [search])
+  const unified = view === 'unified'
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [activeMatch, setActiveMatch] = useState(0)
-  const matchRowCount = useMemo(() => countMatchRows(parsed, search), [parsed, search])
+  const matchRowCount = useMemo(
+    () => (unified ? countUnifiedMatches(parsed, engine) : countMatchRows(parsed, engine)),
+    [parsed, engine, unified],
+  )
   useEffect(() => {
     setActiveMatch(0)
   }, [search, file.path])
   useEffect(() => {
-    if (search === '' || matchRowCount === 0) return
+    if (!engine.active || matchRowCount === 0) return
     const nodes = scrollRef.current?.querySelectorAll('[data-diff-match]')
     nodes?.[activeMatch]?.scrollIntoView({ block: 'center' })
-  }, [activeMatch, search, matchRowCount])
+  }, [activeMatch, engine, matchRowCount])
   const gotoMatch = useCallback((delta: number) => {
     setActiveMatch(previous => {
       if (matchRowCount === 0) return 0
@@ -241,7 +286,8 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           full,
           onToggleFull,
           t,
-          search,
+          engine,
+          unified,
           activeMatch,
           file,
           commentTarget,
@@ -266,7 +312,8 @@ function renderHunks(
     full: boolean
     onToggleFull: () => void
     t: T
-    search: string
+    engine: SearchEngine
+    unified: boolean
     activeMatch: number
     file: ChangedFile
     commentTarget: { hi: number; ri: number; line: number } | null
@@ -301,14 +348,44 @@ function renderHunks(
         <div className={css.hunkHeader}>
           {'@@ -' + hunk.oldStart + ',' + hunk.oldCount + ' +' + hunk.newStart + ',' + hunk.newCount + ' @@' + (hunk.section === '' ? '' : ' ' + hunk.section)}
         </div>
-        {rows.map((row, ri) => {
-          const matched = rowHasMatch(row, ui.search)
-          const ordinal = matched ? matchCounter++ : undefined
-          return (
-            <Fragment key={ri}>
-              <Row
-                row={row}
-                search={ui.search}
+        {ui.unified
+          ? unifyHunkRows(rows).map((line, li) => {
+            const matched = ui.engine.test(line.text)
+            const ordinal = matched ? matchCounter++ : undefined
+            return (
+              <Fragment key={li}>
+                <UnifiedRow
+                  line={line}
+                  engine={ui.engine}
+                  ordinal={ordinal}
+                  active={ordinal === ui.activeMatch}
+                  commentTitle={ui.t('comment.add')}
+                  onComment={ui.onCommentStart !== undefined && line.pair.right !== null
+                    ? (num: number) => { ui.onCommentStart!(hi, li, num) }
+                    : undefined}
+                />
+                {ui.commentTarget !== null && ui.commentTarget.hi === hi && ui.commentTarget.ri === li
+                  && ui.useInput !== undefined && ui.inputActions !== undefined && (
+                  <CommentEditor
+                    path={ui.file.path}
+                    line={ui.commentTarget.line}
+                    useInput={ui.useInput}
+                    inputActions={ui.inputActions}
+                    onClose={ui.onCommentClose}
+                    t={ui.t}
+                  />
+                )}
+              </Fragment>
+            )
+          })
+          : rows.map((row, ri) => {
+            const matched = rowHasMatch(row, ui.engine)
+            const ordinal = matched ? matchCounter++ : undefined
+            return (
+              <Fragment key={ri}>
+                <Row
+                  row={row}
+                  engine={ui.engine}
                 matchOrdinal={ordinal}
                 active={ordinal === ui.activeMatch}
                 commentTitle={ui.t('comment.add')}

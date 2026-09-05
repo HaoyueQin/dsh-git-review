@@ -66,27 +66,198 @@ body[data-dsh-bg-glass] .root {
   text-overflow: ellipsis;
 }
 
-/* Ref-range mode hosts TWO dropdowns (base → target); wider than the single
+/* Ref-range mode hosts TWO pickers (base … target); wider than the single
    base picker. */
 .rangeChip {
-  max-width: 400px;
+  max-width: 430px;
 }
 
-.branchSelect {
-  max-width: 150px;
-  border: none;
-  outline: none;
+/* The worktree-mode compare row: [worktree chip] → [base picker]. */
+.compareRow {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The fixed side of a worktree-vs-* comparison (the other side is a picker). */
+.compareFixed {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.compareArrow {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* ── ref picker (custom dropdown replacing the native <select>) ────────── */
+
+.pickerWrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.pickerBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  padding: 3px 9px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.pickerBtn:hover,
+.pickerBtnOpen {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.pickerBtnOpen {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-border-secondary));
+}
+
+.pickerBtnText {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.baseArrow {
+.pickerPop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  max-height: 420px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+.pickerSearchWrap {
+  flex: none;
+  padding: 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.pickerSearch {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.pickerSearch:focus {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-border-secondary));
+}
+
+.pickerSearch::placeholder {
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11.5px;
+}
+
+.pickerScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.pickerGroupLabel {
+  padding: 6px 8px 3px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.pickerItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pickerItem:hover:not(:disabled) {
+  background: var(--dsw-alias-fill-hover);
+}
+
+.pickerItem:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.pickerItemActive {
+  background: var(--dsw-alias-fill-active);
+}
+
+.pickerItemIcon {
+  flex: none;
+  display: inline-flex;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.pickerItemName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pickerItemMeta {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pickerItemCheck {
+  flex: none;
+  display: inline-flex;
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.pickerEmpty {
+  padding: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
 }
 
 .totals {
@@ -124,7 +295,13 @@ body[data-dsh-bg-glass] .root {
   padding: 3px 9px;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-fill-hover) 55%, transparent);
   color: var(--dsw-alias-label-tertiary);
+}
+
+.searchBox:focus-within {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-border-secondary));
+  background: transparent;
 }
 
 .searchInput {
@@ -146,6 +323,59 @@ body[data-dsh-bg-glass] .root {
   font-size: 11px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* The toolbar search + its options gear (scope / case / regex popover). */
+.searchWrap {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.searchOptions {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.searchOptionsBtn {
+  padding: 3px 5px;
+}
+
+.searchOptionsPop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: 220px;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+.searchOptionsGroup {
+  padding: 6px 8px 3px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.searchFlag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .matchNav {
@@ -190,7 +420,7 @@ body[data-dsh-bg-glass] .root {
   align-items: center;
   gap: 5px;
   padding: 4px 8px;
-  border: none;
+  border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 6px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
@@ -199,9 +429,114 @@ body[data-dsh-bg-glass] .root {
   white-space: nowrap;
 }
 
-.toolBtn:hover {
+.toolBtn:hover:not(:disabled) {
   background: var(--dsw-alias-fill-hover);
   color: var(--dsw-alias-label-primary);
+  border-color: color-mix(in srgb, var(--dsw-alias-label-primary) 22%, var(--dsw-alias-border-secondary));
+}
+
+.toolBtn:focus-visible,
+.pickerBtn:focus-visible,
+.commitBtn:focus-visible,
+.branchBtn:focus-visible,
+.branchIconBtn:focus-visible,
+.branchNameBtn:focus-visible,
+.graphToggle:focus-visible,
+.gapBar:focus-visible,
+.rowCommentBtn:focus-visible,
+.fileRow:focus-visible,
+.dirRow:focus-visible,
+.commitRow:focus-visible {
+  outline: 1px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+/* ── file context menu ────────────────────────────────────────────────── */
+
+.fileMenuPop {
+  position: fixed;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+}
+
+.fileMenuTitle {
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileMenuApps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fileMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fileMenuItem:hover {
+  background: var(--dsw-alias-fill-hover);
+}
+
+.fileMenuItemIcon {
+  flex: none;
+  display: inline-flex;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.fileMenuDanger:hover {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.fileMenuDivider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--dsw-alias-border-secondary);
+}
+
+.fileMenuRenamePath,
+.fileMenuDeletePath {
+  padding: 2px 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  word-break: break-all;
+}
+
+.fileMenuActions {
+  display: flex;
+  gap: 6px;
+  padding: 6px 0 2px;
+}
+
+.pickerItemDisabled {
+  opacity: 0.5;
 }
 
 /* ── body split ──────────────────────────────────────────────────────── */
@@ -239,9 +574,17 @@ body[data-dsh-bg-glass] .root {
   align-items: center;
   gap: 6px;
   height: 32px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+  margin: 6px 8px 0;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dsw-alias-fill-hover) 55%, transparent);
   color: var(--dsw-alias-label-tertiary);
+}
+
+.filterRow:focus-within {
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-border-secondary));
+  background: transparent;
 }
 
 .filterInput {
@@ -706,7 +1049,7 @@ body[data-dsh-bg-glass] .root {
   min-width: 24px;
   height: 24px;
   padding: 0 5px;
-  border: none;
+  border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 5px;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
@@ -849,6 +1192,54 @@ body[data-dsh-bg-glass] .root {
   min-width: 0;
 }
 
+/* Unified (single-column) diff rows: gutter (number + sign) + one text cell. */
+.rowU {
+  position: relative;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.cellNoU {
+  padding: 0 4px 0 6px;
+  color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.cellNoUSign {
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.rowUDel > .cellNoU {
+  color: var(--dsw-alias-state-error-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+  box-shadow: inset -3px 0 0 0 var(--dsw-alias-state-error-primary);
+}
+
+.rowUDel .cellText {
+  color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 88%, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+}
+
+.rowUAdd > .cellNoU {
+  color: var(--dsw-alias-state-success-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
+  box-shadow: inset -3px 0 0 0 var(--dsw-alias-state-success-primary);
+}
+
+.rowUAdd .cellText {
+  color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 82%, var(--dsw-alias-label-primary));
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
+}
+
+.rowUCtx .cellNoU {
+  border-right: 1px solid var(--dsw-alias-border-secondary);
+}
+
 .fileNo {
   padding: 0 6px;
   color: var(--dsw-alias-label-tertiary);
@@ -932,11 +1323,13 @@ body[data-dsh-bg-glass] .root {
   overflow: auto;
 }
 
-/* Folded rail: topology column only — the detail pane gets the width while
-   every commit stays one click away. */
+/* Folded rail: the topology column plus each commit's subject + short
+   hash — a blind 64px dot rail told nobody which commit a node was, so the
+   rail keeps enough width for titles while the detail pane still gets the
+   rest. Hover shows a rich commit card (see .railTip). */
 .graphListNarrow {
-  width: 64px;
-  min-width: 64px;
+  width: 260px;
+  min-width: 260px;
 }
 
 .graphToggleRow {
@@ -950,8 +1343,88 @@ body[data-dsh-bg-glass] .root {
 }
 
 .graphListNarrow .graphToggleRow {
-  justify-content: center;
-  padding: 0;
+  justify-content: flex-end;
+  padding-right: 6px;
+}
+
+/* ── folded rail rows ─────────────────────────────────────────────────── */
+
+.railList {
+  padding-top: 2px;
+}
+
+.railRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--graph-w) minmax(0, 1fr) 56px;
+  gap: 7px;
+  align-items: center;
+  width: 100%;
+  height: 27px;
+  padding-right: 8px;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.railRow:hover {
+  background: var(--dsw-alias-fill-hover);
+}
+
+.railSubject {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.railHash {
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The hover card: fixed so the rail list's overflow can't clip it; left/top
+   are set inline from the hovered row's rect. */
+.railTip {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 320px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+  pointer-events: none;
+}
+
+.railTipSubject {
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.railTipMeta {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.railTipRefs {
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 11px;
+  word-break: break-word;
 }
 
 .graphToggle {
@@ -961,7 +1434,7 @@ body[data-dsh-bg-glass] .root {
   width: 20px;
   height: 18px;
   padding: 0;
-  border: none;
+  border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 4px;
   background: transparent;
   color: var(--dsw-alias-label-tertiary);

@@ -31,10 +31,15 @@ export interface TreePanelProps {
   onModeChange: (next: 'changes' | 'all') => void
   /** False hides the changes/all switch (ref-range mode pins to changes). */
   showModeRow?: boolean
+  /** False hides the panel's own filter input (the toolbar search drives
+   *  path filtering in the worktree view; the graph tree keeps its own). */
+  showFilter?: boolean
   /** True when the all-files list fetch failed. */
   listFailed: boolean
   /** Content-search match counts per file path (absent = no active search). */
   matchCounts?: ReadonlyMap<string, number>
+  /** Right-click one file row: called with the path + viewport coords. */
+  onFileMenu?: (path: string, x: number, y: number) => void
   t: T
 }
 
@@ -46,13 +51,14 @@ function badgeClass(tone: 'Success' | 'Business' | 'Error' | 'Muted'): string {
 }
 
 /** Render one file row. */
-function FileRow({ entry, depth, selected, onSelect, matchCount, t }: {
+function FileRow({ entry, depth, selected, onSelect, matchCount, onFileMenu, t }: {
   entry: TreeEntry & { kind: 'file' }
   depth: number
   selected: string | null
   onSelect: (path: string) => void
   /** Search match count for this file (no chip when 0/undefined). */
   matchCount: number | undefined
+  onFileMenu?: (path: string, x: number, y: number) => void
   t: T
 }) {
   const badges = badgesFor(entry.file)
@@ -62,6 +68,10 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, t }: {
       className={css.fileRow + (selected === entry.path ? ' ' + css.fileRowActive : '')}
       style={{ paddingLeft: 8 + depth * 12 }}
       onClick={() => { onSelect(entry.path) }}
+      onContextMenu={onFileMenu === undefined ? undefined : (event) => {
+        event.preventDefault()
+        onFileMenu(entry.path, event.clientX, event.clientY)
+      }}
       title={entry.file.origPath === undefined ? entry.path : entry.path + ' \u2190 ' + entry.file.origPath}
     >
       <FileTypeIcon path={entry.path} />
@@ -81,7 +91,7 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, t }: {
 }
 
 /** Render one tree node (dir or file) at its depth. */
-function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchCounts, t }: {
+function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchCounts, onFileMenu, t }: {
   entry: TreeEntry
   depth: number
   selected: string | null
@@ -89,10 +99,11 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
   collapsed: ReadonlySet<string>
   onToggleDir: (path: string) => void
   matchCounts: ReadonlyMap<string, number> | undefined
+  onFileMenu?: (path: string, x: number, y: number) => void
   t: T
 }) {
   if (entry.kind === 'file') {
-    return <FileRow entry={entry} depth={depth} selected={selected} onSelect={onSelect} matchCount={matchCounts?.get(entry.path)} t={t} />
+    return <FileRow entry={entry} depth={depth} selected={selected} onSelect={onSelect} matchCount={matchCounts?.get(entry.path)} onFileMenu={onFileMenu} t={t} />
   }
   const isCollapsed = collapsed.has(entry.path)
   return (
@@ -118,6 +129,7 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
           collapsed={collapsed}
           onToggleDir={onToggleDir}
           matchCounts={matchCounts}
+          onFileMenu={onFileMenu}
           t={t}
         />
       ))}
@@ -129,7 +141,7 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
  * The panel body: filter box above, tree (or flat filtered list) below.
  * @param props - files, selection, filter/collapse state and callbacks, locale.
  */
-export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, showModeRow = true, listFailed, matchCounts, t }: TreePanelProps) {
+export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, showModeRow = true, showFilter = true, listFailed, matchCounts, onFileMenu, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
   const tree = useMemo(() => buildFileTree(visible), [visible])
   const flat = filter.trim() !== ''
@@ -151,16 +163,18 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
           </span>
         </div>
       )}
-      <label className={css.filterRow}>
-        <SearchIcon />
-        <input
-          className={css.filterInput}
-          value={filter}
-          onChange={event => { onFilterChange(event.target.value) }}
-          placeholder={t('filter')}
-          spellCheck={false}
-        />
-      </label>
+      {showFilter && (
+        <label className={css.filterRow}>
+          <SearchIcon />
+          <input
+            className={css.filterInput}
+            value={filter}
+            onChange={event => { onFilterChange(event.target.value) }}
+            placeholder={t('filter')}
+            spellCheck={false}
+          />
+        </label>
+      )}
       <div className={css.treeScroll}>
         {visible.length === 0
           ? <div className={css.treeEmpty}>{t(listFailed ? 'tree.listFailed' : mode === 'all' ? 'tree.empty' : files.length === 0 ? 'tree.noChanges' : 'tree.empty')}</div>
@@ -173,6 +187,7 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
                 selected={selected}
                 onSelect={onSelect}
                 matchCount={matchCounts?.get(file.path)}
+                onFileMenu={onFileMenu}
                 t={t}
               />
             ))
@@ -186,6 +201,7 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
                 collapsed={collapsed}
                 onToggleDir={onToggleDir}
                 matchCounts={matchCounts}
+                onFileMenu={onFileMenu}
                 t={t}
               />
             ))}

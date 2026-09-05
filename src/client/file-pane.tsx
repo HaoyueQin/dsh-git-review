@@ -4,35 +4,53 @@
  * selecting an unchanged file in all-files tree mode. Rendering is capped by
  * the same global row cap the diff pane uses.
  */
-import { useMemo } from 'react'
-import { MAX_RENDER_ROWS } from './diff-parse.ts'
+import { useMemo, type ReactNode } from 'react'
+import { makeSearchEngine, MAX_RENDER_ROWS, type SearchSpec } from './diff-parse.ts'
+import { FileIcon, LineLeftIcon, LinesIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import type { ChangedFile } from '../contract.ts'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { NS, ReviewKey } from './locales.ts'
+import type { NS } from './locales.ts'
 import css from './review.module.css'
 
 type T = PropsLocale<typeof NS>['t']
 
-/** The main pane's view mode: side-by-side diff or whole file. */
-export type FileViewMode = 'diff' | 'file'
+/** The main pane's view mode: side-by-side, unified (single column) or the
+ *  whole file. */
+export type FileViewMode = 'split' | 'unified' | 'file'
 
-/** The diff/file switch shared by both pane headers. */
+/** One line with content-search matches wrapped in <mark>. */
+function highlightedLine(text: string, engine: ReturnType<typeof makeSearchEngine>): ReactNode {
+  const parts = engine.parts(text)
+  if (parts.length === 1) return parts[0]
+  return parts.map((part, index) =>
+    index % 2 === 1 ? <mark key={index} className={css.matchMark}>{part}</mark> : part,
+  )
+}
+
+/** The layout/view switch shared by both pane headers. */
 export function ViewSwitch({ active, onViewChange, t }: {
   active: FileViewMode
   onViewChange: (next: FileViewMode) => void
   t: T
 }) {
+  const options: ReadonlyArray<{ key: FileViewMode; icon: ReactNode; label: string }> = [
+    { key: 'split', icon: <LineLeftIcon />, label: t('view.split') },
+    { key: 'unified', icon: <LinesIcon />, label: t('view.unified') },
+    { key: 'file', icon: <FileIcon />, label: t('view.file') },
+  ]
   return (
     <span className={css.scopeSwitch} role="group" aria-label={t('view.label')}>
-      {(['diff', 'file'] as const).map(candidate => (
+      {options.map(candidate => (
         <button
-          key={candidate}
+          key={candidate.key}
           type="button"
-          className={css.scopeBtn + (active === candidate ? ' ' + css.scopeBtnActive : '')}
-          onClick={() => { onViewChange(candidate) }}
+          className={css.scopeBtn + (active === candidate.key ? ' ' + css.scopeBtnActive : '')}
+          onClick={() => { onViewChange(candidate.key) }}
+          title={candidate.label}
         >
-          {t(('view.' + candidate) as ReviewKey)}
+          {candidate.icon}
+          <span>{candidate.label}</span>
         </button>
       ))}
     </span>
@@ -42,6 +60,8 @@ export function ViewSwitch({ active, onViewChange, t }: {
 /** Props of the full-file pane. */
 export interface FilePaneProps {
   file: ChangedFile
+  /** Content-search spec (drives the line highlight; query '' = none). */
+  search: SearchSpec
   /** Whole-file text ('' while loading / for non-text states). */
   content: string
   /** True when the host served only a prefix (read cap). */
@@ -61,7 +81,8 @@ export interface FilePaneProps {
  * The pane showing one file's full content.
  * @param props - the file, its content state and the view switch.
  */
-export function FilePane({ file, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, t }: FilePaneProps) {
+export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, t }: FilePaneProps) {
+  const engine = useMemo(() => makeSearchEngine(search), [search])
   const lines = useMemo(() => {
     if (content === '') return []
     const rows = content.split('\n')
@@ -90,7 +111,7 @@ export function FilePane({ file, content, truncated, binary, size, loading, canS
         {!loading && !binary && visible.map((line, index) => (
           <div key={index} className={css.fileRowGrid}>
             <span className={css.fileNo}>{index + 1}</span>
-            <span className={css.cellText}>{line}</span>
+            <span className={css.cellText}>{highlightedLine(line, engine)}</span>
           </div>
         ))}
         {capped && <div className={css.noticeRow}>{t('diff.renderCapped', { count: MAX_RENDER_ROWS })}</div>}

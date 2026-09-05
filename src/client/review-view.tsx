@@ -7,13 +7,15 @@
  * fixes the view's height and floats the input card over its bottom, so the
  * review→agent feedback loop stays one keystroke away.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload } from '../contract.ts'
+import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
+import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
 import { hostCall } from './api.ts'
-import { BranchIcon, ChevronIcon, CommitIcon, GraphIcon, RefreshIcon, SearchIcon } from './icons.tsx'
+import { BranchIcon, CheckIcon, ChevronIcon, CommitIcon, FileIcon, GraphIcon, OptionsIcon, RefreshIcon, SearchIcon } from './icons.tsx'
+import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
@@ -106,7 +108,6 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [status, setStatus] = useState<StatusState>({ kind: 'loading' })
   const [reloadTick, setReloadTick] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
-  const [filter, setFilter] = useState('')
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [diffFull, setDiffFull] = useState(false)
   const [diffScope, setDiffScope] = useState<DiffScope>('all')
@@ -115,11 +116,18 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
   const [allFiles, setAllFiles] = useState<string[] | null>(null)
   const [allFilesFailed, setAllFilesFailed] = useState(false)
-  const [viewMode, setViewMode] = useState<FileViewMode>('diff')
+  const [viewMode, setViewMode] = useState<FileViewMode>('split')
   // Content search: the draft debounces into the committed query; matches map
   // drives the tree's per-file count chips and the diff pane's highlighting.
+  // The scope decides what is searched — file names (client-side tree
+  // filter), diff content (host git diff) or file content (host git grep) —
+  // and case/regex are optional toggles, both off by default.
   const [searchDraft, setSearchDraft] = useState('')
   const [search, setSearch] = useState('')
+  const [searchScope, setSearchScope] = useState<'path' | 'diff' | 'content'>('diff')
+  const [searchCS, setSearchCS] = useState(false)
+  const [searchRegex, setSearchRegex] = useState(false)
+  const [searchOptionsOpen, setSearchOptionsOpen] = useState(false)
   const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
   // Diff-base override: null compares against HEAD; the refs list feeds the
   // dropdowns (fetched alongside each status refresh). In refs mode the
@@ -128,6 +136,9 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [baseRef, setBaseRef] = useState<string | null>(null)
   const [targetRef, setTargetRef] = useState<string | null>(null)
   const [refs, setRefs] = useState<GitRefEntry[] | null>(null)
+  // The ref picker's commit section: recent commits, fetched once per
+  // refresh alongside the refs list (capped — a picker is not a browser).
+  const [pickerCommits, setPickerCommits] = useState<GitCommitSummary[] | null>(null)
   const refsMode = compareMode === 'refs'
   const rangeReady = !refsMode || (baseRef !== null && targetRef !== null)
   // Graph view: the log feed, the selected commit, and its file list/diff.
@@ -149,6 +160,25 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [writeState, setWriteState] = useState<{ kind: 'idle' } | { kind: 'busy' } | { kind: 'result'; ok: boolean; text: string }>({ kind: 'idle' })
   // Branch manager popover state (create/switch/rename/delete).
   const [branchOpen, setBranchOpen] = useState(false)
+  const branchPopRef = useRef<HTMLDivElement | null>(null)
+  const commitPopRef = useRef<HTMLDivElement | null>(null)
+  const branchBtnRef = useRef<HTMLButtonElement | null>(null)
+  const commitBtnRef = useRef<HTMLButtonElement | null>(null)
+  // Popovers spawned before RefPicker/FileMenu had no outside-click close;
+  // share the same document-mousedown rule those two use. The trigger buttons
+  // are excluded so their own click-to-toggle doesn't fight the closer.
+  useEffect(() => {
+    if (!branchOpen && !commitOpen) return
+    const onDown = (event: MouseEvent): void => {
+      const target = event.target as Node
+      if (branchOpen && branchPopRef.current !== null && !branchPopRef.current.contains(target)
+        && (branchBtnRef.current === null || !branchBtnRef.current.contains(target))) setBranchOpen(false)
+      if (commitOpen && commitPopRef.current !== null && !commitPopRef.current.contains(target)
+        && (commitBtnRef.current === null || !commitBtnRef.current.contains(target))) setCommitOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => { document.removeEventListener('mousedown', onDown) }
+  }, [branchOpen, commitOpen])
   const [branchName, setBranchName] = useState('')
   const [branchStart, setBranchStart] = useState('')
   const [branchBusy, setBranchBusy] = useState(false)
@@ -156,6 +186,10 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteArmed, setDeleteArmed] = useState<string | null>(null)
+  // File-tree context menu: the popover state + the open-with app list
+  // (availability probed once per page by the host).
+  const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null)
+  const [openApps, setOpenApps] = useState<OpenApp[] | null>(null)
 
   // Status lifecycle: on mount, on explicit refresh, and when the session's
   // workspace or comparison range changes. A refresh keeps the previous list
@@ -178,18 +212,33 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     return () => { alive = false }
   }, [cwd, reloadTick, baseRef, targetRef, compareMode])
 
-  // Selectable diff-base refs (branches, remotes, tags).
+  // Selectable diff-base refs (branches, remotes, tags) and the picker's
+  // recent-commit feed (a capped log — the picker is not a history browser).
   useEffect(() => {
     if (cwd === undefined) {
       setRefs(null)
+      setPickerCommits(null)
       return
     }
     let alive = true
     void hostCall<GitRefsPayload>('refs', { cwd }).then(payload => {
       if (alive) setRefs(payload !== null && payload.ok ? payload.refs : null)
     })
+    void hostCall<GitLogPayload>('log', { cwd, limit: 120 }).then(payload => {
+      if (alive) setPickerCommits(payload !== null && payload.ok ? payload.commits : null)
+    })
     return () => { alive = false }
   }, [cwd, reloadTick])
+
+  // Open-with app availability: probed once (the app list has no repo
+  // dependency; the menu just needs it before the first open-with click).
+  useEffect(() => {
+    let alive = true
+    void hostCall<OpenAppsPayload>('apps', {}).then(payload => {
+      if (alive) setOpenApps(payload !== null && payload.ok ? payload.apps : null)
+    })
+    return () => { alive = false }
+  }, [])
 
   // All-files list lifecycle: fetched when the tree switches to 'all' mode
   // (and again on refresh while that mode is active). Refs mode pins the
@@ -227,19 +276,27 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   }, [searchDraft])
 
   useEffect(() => {
-    if (search === '' || cwd === undefined || !rangeReady || viewTab !== 'changes') {
+    if (search === '' || searchScope === 'path' || cwd === undefined || !rangeReady || viewTab !== 'changes') {
       setSearchMatches(null)
       return
     }
     let alive = true
-    void hostCall<GitSearchPayload>('search', { cwd, query: search, base: baseRef, target: refsMode ? targetRef : null }).then(payload => {
+    void hostCall<GitSearchPayload>('search', {
+      cwd,
+      query: search,
+      base: baseRef,
+      target: refsMode ? targetRef : null,
+      mode: searchScope === 'content' ? 'content' : 'diff',
+      cs: searchCS,
+      rx: searchRegex,
+    }).then(payload => {
       if (!alive) return
       setSearchMatches(payload !== null && payload.ok
         ? new Map(payload.matches.map(match => [match.path, match.count] as const))
         : null)
     })
     return () => { alive = false }
-  }, [search, cwd, reloadTick, baseRef, targetRef, compareMode, viewTab])
+  }, [search, searchScope, searchCS, searchRegex, cwd, reloadTick, baseRef, targetRef, compareMode, viewTab])
 
   // Graph feed lifecycle: fetched when the graph view opens (and on refresh).
   useEffect(() => {
@@ -290,6 +347,11 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   }, [selectedCommit])
 
   const ready = status.kind === 'ready' ? status.data : null
+  /** The search spec every pane consumes (query + optional case/regex). */
+  const searchSpec = useMemo(
+    () => ({ query: search, caseSensitive: searchCS, regex: searchRegex }),
+    [search, searchCS, searchRegex],
+  )
   /** Graph feed with the local search filter applied (topology rows kept). */
   const graphCommits = logState.kind === 'ready' ? logState.commits : []
   const graphLanes = useMemo(() => computeGraphLanes(graphCommits), [graphCommits])
@@ -396,8 +458,8 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
   }, [])
 
   /** Pick the ref-range target; same reset semantics as the base. */
-  const changeTarget = useCallback((ref: string) => {
-    setTargetRef(ref === '' ? null : ref)
+  const changeTarget = useCallback((ref: string | null) => {
+    setTargetRef(ref)
     setSelected(null)
     setDiffScope('all')
   }, [])
@@ -472,6 +534,52 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
     }
   }, [cwd, refresh, t])
 
+  /** Run the file tree's context-menu action handlers. Every one returns an
+   *  error string to show in the popover, or null on success (the menu
+   *  closes and the tree refreshes). */
+  const openFileApp = useCallback(async (path: string, app: OpenApp['id']): Promise<string | null> => {
+    if (cwd === undefined) return t('state.hostUnavailable')
+    const payload = await hostCall<GitWritePayload>('open-with', { cwd, path, app })
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
+    return null
+  }, [cwd, t])
+  const copyFilePath = useCallback(async (path: string): Promise<string | null> => {
+    try {
+      await navigator.clipboard.writeText(path)
+      return null
+    } catch {
+      return t('menu.clipboardFailed')
+    }
+  }, [t])
+  const copyFileName = useCallback(async (path: string): Promise<string | null> => {
+    const name = path.split('/').pop() ?? path
+    try {
+      await navigator.clipboard.writeText(name)
+      return null
+    } catch {
+      return t('menu.clipboardFailed')
+    }
+  }, [t])
+  const renameFile = useCallback(async (path: string, newPath: string): Promise<string | null> => {
+    if (cwd === undefined) return t('state.hostUnavailable')
+    const payload = await hostCall<GitWritePayload>('file-op', { cwd, path, action: 'rename', newPath, confirm: true })
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
+    setSelected(null)
+    refresh()
+    return null
+  }, [cwd, refresh, t])
+  const removeFile = useCallback(async (path: string): Promise<string | null> => {
+    if (cwd === undefined) return t('state.hostUnavailable')
+    const payload = await hostCall<GitWritePayload>('file-op', { cwd, path, action: 'delete', confirm: true })
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
+    setSelected(null)
+    refresh()
+    return null
+  }, [cwd, refresh, t])
+
   /** Execute one armed write (commit / commit+push / push) against the host. */
   const executeWrite = useCallback(async (kind: 'commit' | 'commitPush' | 'push') => {
     if (cwd === undefined) return
@@ -518,6 +626,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
           type="button"
           className={css.branchBtn}
           title={t('branch.manage')}
+          ref={branchBtnRef}
           onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setBranchResult(null) }}
         >
           <BranchIcon />
@@ -536,40 +645,52 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
             </button>
           ))}
         </span>
+        {/* The comparison sides: worktree mode picks the base the worktree
+            is diffed against (current branch by default); refs mode picks
+            both ends of a base…target range. One themed picker per side with
+            branch/remote/tag/commit groups + search — the native <select>
+            is gone: its OS popup ignored the theme and mixed every kind. */}
         {!refsMode ? (
-          <label className={css.branchChip} title={t('base.label')}>
-            <BranchIcon />
-            <select
-              className={css.branchSelect}
-              value={baseRef ?? ''}
-              onChange={event => { changeBase(event.target.value === '' ? null : event.target.value) }}
-            >
-              <option value="">{data?.branch ?? 'HEAD'}</option>
-              <RefOptionGroups refs={refs} t={t} />
-            </select>
-            {baseRef !== null && <span className={css.baseArrow}>{'\u2192'}</span>}
-          </label>
+          <span className={css.compareRow} title={t('base.label')}>
+            <RefPicker
+              value={baseRef}
+              headLabel={data?.branch ?? 'HEAD'}
+              refs={refs}
+              commits={pickerCommits}
+              placeholder={t('compare.pickBase')}
+              onPick={changeBase}
+              t={t}
+            />
+            <span className={css.compareArrow}>{'\u2192'}</span>
+            <span className={css.compareFixed} title={t('base.worktree')}>
+              <FileIcon />
+              <span>{t('compare.worktree')}</span>
+            </span>
+          </span>
         ) : (
-          <label className={css.branchChip + ' ' + css.rangeChip} title={t('compare.pickHint')}>
-            <BranchIcon />
-            <select
-              className={css.branchSelect}
-              value={baseRef ?? ''}
-              onChange={event => { changeBase(event.target.value === '' ? null : event.target.value) }}
-            >
-              <option value="">{t('compare.pickBase')}</option>
-              <RefOptionGroups refs={refs} t={t} />
-            </select>
-            <span className={css.baseArrow}>{'\u2192'}</span>
-            <select
-              className={css.branchSelect}
-              value={targetRef ?? ''}
-              onChange={event => { changeTarget(event.target.value) }}
-            >
-              <option value="HEAD">HEAD</option>
-              <RefOptionGroups refs={refs} t={t} />
-            </select>
-          </label>
+          <span className={css.compareRow + ' ' + css.rangeChip} title={t('compare.pickHint')}>
+            <RefPicker
+              value={baseRef}
+              headLabel={data?.branch ?? 'HEAD'}
+              refs={refs}
+              commits={pickerCommits}
+              exclude={targetRef}
+              placeholder={t('compare.pickBase')}
+              onPick={changeBase}
+              t={t}
+            />
+            <span className={css.compareArrow}>{'\u2026'}</span>
+            <RefPicker
+              value={targetRef}
+              headLabel={null}
+              refs={refs}
+              commits={pickerCommits}
+              exclude={baseRef}
+              placeholder={t('compare.pickTarget')}
+              onPick={changeTarget}
+              t={t}
+            />
+          </span>
         )}
         {data !== null && (
           <span className={css.totals}>
@@ -578,20 +699,83 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
             <span className={css.fileCount}>{t('filesChanged', { count: data.files.length })}</span>
           </span>
         )}
-        <label className={css.searchBox}>
-          <SearchIcon />
-          <input
-            className={css.searchInput}
-            value={searchDraft}
-            onChange={event => { setSearchDraft(event.target.value) }}
-            onKeyDown={event => { if (event.key === 'Escape') setSearchDraft('') }}
-            placeholder={viewTab === 'graph' ? t('graph.search') : t('search.placeholder')}
-            spellCheck={false}
-          />
-          {viewTab === 'changes' && search !== '' && (
-            <span className={css.searchMeta}>{searchMatches === null ? '\u2026' : t('search.files', { count: searchMatches.size })}</span>
-          )}
-        </label>
+        {viewTab === 'changes' ? (
+          <span className={css.searchWrap}>
+            <label className={css.searchBox}>
+              <SearchIcon />
+              <input
+                className={css.searchInput}
+                value={searchDraft}
+                onChange={event => { setSearchDraft(event.target.value) }}
+                onKeyDown={event => { if (event.key === 'Escape') setSearchDraft('') }}
+                placeholder={searchScope === 'path' ? t('search.placeholderPath') : searchScope === 'content' ? t('search.placeholderContent') : t('search.placeholder')}
+                spellCheck={false}
+              />
+              {searchScope !== 'path' && search !== '' && (
+                <span className={css.searchMeta}>{searchMatches === null ? '\u2026' : t('search.files', { count: searchMatches.size })}</span>
+              )}
+              {searchCS && <span className={css.searchFlag} title={t('search.caseSensitive')}>{t('search.flagCS')}</span>}
+              {searchRegex && <span className={css.searchFlag} title={t('search.regex')}>{t('search.flagRegex')}</span>}
+            </label>
+            <span className={css.searchOptions}>
+              <button
+                type="button"
+                className={css.toolBtn + ' ' + css.searchOptionsBtn}
+                title={t('search.options')}
+                aria-label={t('search.options')}
+                aria-expanded={searchOptionsOpen}
+                onClick={() => { setSearchOptionsOpen(value => !value) }}
+              >
+                <OptionsIcon />
+              </button>
+              {searchOptionsOpen && (
+                <div className={css.searchOptionsPop} role="menu">
+                  <div className={css.searchOptionsGroup}>{t('search.scope')}</div>
+                  {(['diff', 'content', 'path'] as const).map(candidate => (
+                    <button
+                      key={candidate}
+                      type="button"
+                      className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
+                      onClick={() => { setSearchScope(candidate); setSearchOptionsOpen(false) }}
+                    >
+                      <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
+                      {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                    </button>
+                  ))}
+                  <div className={css.searchOptionsGroup}>{t('search.matching')}</div>
+                  <button
+                    type="button"
+                    className={css.pickerItem + (searchCS ? ' ' + css.pickerItemActive : '')}
+                    onClick={() => { setSearchCS(value => !value) }}
+                  >
+                    <span className={css.pickerItemName}>{t('search.caseSensitive')}</span>
+                    {searchCS && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                  </button>
+                  <button
+                    type="button"
+                    className={css.pickerItem + (searchRegex ? ' ' + css.pickerItemActive : '')}
+                    onClick={() => { setSearchRegex(value => !value) }}
+                  >
+                    <span className={css.pickerItemName}>{t('search.regex')}</span>
+                    {searchRegex && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                  </button>
+                </div>
+              )}
+            </span>
+          </span>
+        ) : (
+          <label className={css.searchBox}>
+            <SearchIcon />
+            <input
+              className={css.searchInput}
+              value={searchDraft}
+              onChange={event => { setSearchDraft(event.target.value) }}
+              onKeyDown={event => { if (event.key === 'Escape') setSearchDraft('') }}
+              placeholder={t('graph.search')}
+              spellCheck={false}
+            />
+          </label>
+        )}
         <span className={css.toolbarSpacer} />
         <span className={css.scopeSwitch} role="group" aria-label={t('view.label')}>
           {(['changes', 'graph'] as const).map(candidate => (
@@ -615,6 +799,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
           className={css.toolBtn + ' ' + css.commitToggle}
           disabled={data === null || running}
           title={running ? t('commit.running') : t('commit.title')}
+          ref={commitBtnRef}
           onClick={() => { setCommitOpen(value => !value); setArmed(null) }}
         >
           <CommitIcon />
@@ -622,7 +807,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
         </button>
       </header>
       {commitOpen && data !== null && (
-        <div className={css.commitPop}>
+        <div className={css.commitPop} ref={commitPopRef}>
           <textarea
             className={css.commitInput}
             value={commitMessage}
@@ -669,7 +854,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
         </div>
       )}
       {branchOpen && data !== null && (
-        <div className={css.branchPop}>
+        <div className={css.branchPop} ref={branchPopRef}>
           <div className={css.branchCreateRow}>
             <input
               className={css.branchNameInput}
@@ -679,14 +864,15 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
               placeholder={t('branch.newName')}
               spellCheck={false}
             />
-            <select
-              className={css.branchSelect}
-              value={branchStart}
-              onChange={event => { setBranchStart(event.target.value) }}
-            >
-              <option value="">{t('branch.fromHead')}</option>
-              <RefOptionGroups refs={refs} t={t} />
-            </select>
+            <RefPicker
+              value={branchStart === '' ? null : branchStart}
+              headLabel={data.branch ?? 'HEAD'}
+              refs={refs}
+              commits={pickerCommits}
+              placeholder={t('branch.fromHead')}
+              onPick={value => { setBranchStart(value ?? '') }}
+              t={t}
+            />
             <button
               type="button"
               className={css.commitBtn}
@@ -802,6 +988,23 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
           )}
         </div>
       )}
+      {fileMenu !== null && (
+        <FileMenu
+          state={fileMenu}
+          apps={openApps}
+          writable={!running}
+          refsMode={refsMode}
+          useInput={useInput}
+          inputActions={inputActions}
+          onClose={() => { setFileMenu(null) }}
+          openApp={openFileApp}
+          copyPath={copyFilePath}
+          copyName={copyFileName}
+          rename={renameFile}
+          remove={removeFile}
+          t={t}
+        />
+      )}
       <div className={css.body}>
         {viewTab === 'graph' ? (
           <>
@@ -910,6 +1113,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                               onModeChange={() => { /* pinned in graph view */ }}
                               showModeRow={false}
                               listFailed={false}
+                              onFileMenu={(path, x, y) => { setFileMenu({ path, x, y }) }}
                               t={t}
                             />
                           )}
@@ -927,10 +1131,10 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                           onToggleFull={() => { setDiffFull(value => !value) }}
                           scope={diffScope}
                           onScopeChange={setDiffScope}
-                          view="diff"
+                          view="split"
                           onViewChange={() => { /* pinned: a commit diff has no file view */ }}
                           showViewSwitch={false}
-                          search={search}
+                          search={searchSpec}
                           baseActive
                           useInput={useInput}
                           inputActions={inputActions}
@@ -967,6 +1171,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                     canShowDiff={selectedFile.unchanged !== true}
                     view={effectiveView}
                     onViewChange={setViewMode}
+                    search={searchSpec}
                     t={t}
                   />
                 )
@@ -985,7 +1190,7 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
                           view={effectiveView}
                           onViewChange={setViewMode}
                           showViewSwitch={!refsMode}
-                          search={search}
+                          search={searchSpec}
                           baseActive={baseRef !== null || refsMode}
                     useInput={useInput}
                     inputActions={inputActions}
@@ -998,15 +1203,17 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
             files={allRows ?? data.files}
             selected={selected}
             onSelect={selectFile}
-            filter={filter}
-            onFilterChange={setFilter}
+            filter={searchScope === 'path' ? search : ''}
+            onFilterChange={() => { /* the toolbar search drives the tree filter in path mode */ }}
             collapsed={collapsed}
             onToggleDir={toggleDir}
             mode={treeMode}
             onModeChange={changeTreeMode}
             showModeRow={!refsMode}
+            showFilter={false}
             listFailed={allFilesFailed}
             matchCounts={searchMatches ?? undefined}
+            onFileMenu={(path, x, y) => { setFileMenu({ path, x, y }) }}
             t={t}
           />
         )}
@@ -1014,33 +1221,6 @@ export function ReviewView({ cwd, t, useSession, useInput, inputActions }: Injec
         )}
       </div>
     </div>
-  )
-}
-
-/** The refs dropdown's optgroups: local branches, remote branches, tags —
- *  three separate groups (mixing branches and tags into one flat list was
- *  the old UI's complaint). */
-function RefOptionGroups({ refs, t }: { refs: GitRefEntry[] | null; t: T }) {
-  if (refs === null || refs.length === 0) return null
-  const groups: ReadonlyArray<{ kind: GitRefEntry['kind']; label: string }> = [
-    { kind: 'branch', label: t('ref.branches') },
-    { kind: 'remote', label: t('ref.remotes') },
-    { kind: 'tag', label: t('ref.tags') },
-  ]
-  return (
-    <>
-      {groups.map(group => {
-        const entries = refs.filter(ref => ref.kind === group.kind)
-        if (entries.length === 0) return null
-        return (
-          <optgroup key={group.kind} label={group.label}>
-            {entries.map(ref => (
-              <option key={group.kind + ':' + ref.name} value={ref.name}>{ref.name}</option>
-            ))}
-          </optgroup>
-        )
-      })}
-    </>
   )
 }
 

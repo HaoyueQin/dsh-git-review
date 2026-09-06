@@ -633,8 +633,10 @@ const LOG_CAP = 500
 
 /** One `log` answer: the commit-graph feed across all refs, newest first,
  *  in date order (minimizes edge crossings in the lane layout). An optional
- *  `limit` feeds the ref picker's commit section (capped by LOG_CAP). */
-async function gitLog(cwd: unknown, limit: unknown): Promise<GitLogPayload> {
+ *  `limit` feeds the ref picker's commit section; an optional `skip` pages
+ *  the graph feed forward ("load more", stable because --date-order is a
+ *  total order — earlier rows never shift). */
+async function gitLog(cwd: unknown, limit: unknown, skip: unknown): Promise<GitLogPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -642,9 +644,14 @@ async function gitLog(cwd: unknown, limit: unknown): Promise<GitLogPayload> {
   const maxCount = typeof limit === 'number' && Number.isFinite(limit) && limit >= 1
     ? Math.min(Math.floor(limit), LOG_CAP)
     : LOG_CAP
+  const skipCount = typeof skip === 'number' && Number.isFinite(skip) && skip >= 1
+    ? Math.min(Math.floor(skip), 100_000)
+    : 0
   try {
     raw = await runGit(repoRoot, [
-      'log', '--all', '--date-order', '--max-count=' + String(maxCount),
+      'log', '--all', '--date-order',
+      ...(skipCount > 0 ? ['--skip=' + String(skipCount)] : []),
+      '--max-count=' + String(maxCount),
       '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e',
     ])
   } catch (error) {
@@ -1273,7 +1280,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'log') {
-          respond(res, 200, await gitLog(body['cwd'], body['limit']))
+          respond(res, 200, await gitLog(body['cwd'], body['limit'], body['skip']))
           return
         }
         if (action === 'commit-files') {

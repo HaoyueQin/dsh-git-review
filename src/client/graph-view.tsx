@@ -5,7 +5,7 @@
  * layout). The lane layout itself lives in git-graph.ts (pure, check-script
  * tested); this file only draws it.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { GitCommitSummary } from '../contract.ts'
 import type { GraphLaneRow } from './git-graph.ts'
@@ -52,6 +52,7 @@ function GraphCell({ row, width }: { row: GraphLaneRow | undefined; width: numbe
       {row.pass.map((line, index) => (
         <line
           key={'p' + index}
+          data-color={String(line.color)}
           x1={x(line.lane)} y1={0} x2={x(line.lane)} y2={ROW_H}
           stroke={laneColor(line.color)} strokeWidth={1.5}
         />
@@ -59,6 +60,7 @@ function GraphCell({ row, width }: { row: GraphLaneRow | undefined; width: numbe
       {row.inEdges.map((edge, index) => (
         <path
           key={'i' + index}
+          data-color={String(edge.color)}
           d={curve(x(edge.from), 0, x(edge.to), mid, halfUp)}
           fill="none" stroke={laneColor(edge.color)} strokeWidth={1.5}
         />
@@ -66,11 +68,12 @@ function GraphCell({ row, width }: { row: GraphLaneRow | undefined; width: numbe
       {row.outEdges.map((edge, index) => (
         <path
           key={'o' + index}
+          data-color={String(edge.color)}
           d={curve(x(edge.from), mid, x(edge.to), ROW_H, halfDown)}
           fill="none" stroke={laneColor(edge.color)} strokeWidth={1.5}
         />
       ))}
-      <circle cx={x(row.lane)} cy={mid} r={row.inEdges.length > 1 ? 4.2 : 3.5} fill={laneColor(row.color)} />
+      <circle data-color={String(row.color)} cx={x(row.lane)} cy={mid} r={row.inEdges.length > 1 ? 4.2 : 3.5} fill={laneColor(row.color)} />
     </svg>
   )
 }
@@ -96,7 +99,40 @@ export interface CommitGraphProps {
   onSelect: (hash: string) => void
   /** Narrow rail: topology column only, still clickable per commit. */
   collapsed?: boolean
+  /** Uncommitted worktree changes (the virtual row above the tip); absent
+   *  when the worktree is clean or the status is not loaded. */
+  worktree?: { files: number } | null
+  worktreeSelected?: boolean
+  onSelectWorktree?: () => void
   t: T
+}
+
+/** The uncommitted-changes virtual row: a hollow dashed node dropping a
+ *  dashed line toward the tip below — the agent's in-flight work drawn INTO
+ *  the graph (the git-status/dock-git convention). Columns mirror the full
+ *  list's grid. */
+function WorktreeRow({ width, label, selected, onSelect }: { width: number; label: string; selected: boolean; onSelect: () => void }) {
+  const mid = ROW_H / 2
+  const cx = LANE_W / 2
+  return (
+    <button
+      type="button"
+      className={css.commitRow + (selected ? ' ' + css.commitRowActive : '')}
+      style={{ gridTemplateColumns: 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px' }}
+      onClick={onSelect}
+    >
+      <svg className={css.graphCell} width={width} height={ROW_H} aria-hidden="true">
+        <circle cx={cx} cy={mid} r={3.5} fill="none" stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.5} strokeDasharray="2 2" />
+        <line x1={cx} y1={mid + 4} x2={cx} y2={ROW_H} stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.2} strokeDasharray="2 3" />
+      </svg>
+      <span className={css.commitMain}>
+        <span className={css.chip}>{label}</span>
+      </span>
+      <span className={css.commitDate} />
+      <span className={css.commitAuthor} />
+      <span className={css.commitHash} />
+    </button>
+  )
 }
 
 /** The scrollable commit list: a header row, then one grid row per commit
@@ -104,7 +140,7 @@ export interface CommitGraphProps {
  *  via the shared --graph-w variable (the widest lane canvas). Collapsed, it
  *  degrades to the topology rail so the detail pane gets the width while
  *  commits stay one click away. */
-export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = false, t }: CommitGraphProps) {
+export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = false, worktree, worktreeSelected = false, onSelectWorktree, t }: CommitGraphProps) {
   const maxLanes = lanes.reduce((width, row) => Math.max(width, row !== undefined ? row.laneCount : 1), 1)
   const graphWidth = Math.max(maxLanes * LANE_W, LANE_W * 2)
   const columns = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px'
@@ -116,6 +152,23 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
     const top = Math.min(rect.top, window.innerHeight - 90)
     setTip({ x: rect.right, y: Math.max(8, top), commit })
   }
+  // Branch-line highlight on hover: dim every SVG element whose color id is
+  // not the hovered row's, via native style toggling on the list container —
+  // a React state re-render of 500 SVG rows per mouse move would stutter,
+  // and the DOM sweep is one querySelectorAll.
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const litLine = (color: number): void => {
+    const rootEl = listRef.current
+    if (rootEl === null) return
+    rootEl.querySelectorAll<SVGElement>('[data-color]').forEach(el => {
+      el.style.opacity = el.dataset.color === String(color) ? '1' : '0.22'
+    })
+  }
+  const unlitLine = (): void => {
+    const rootEl = listRef.current
+    if (rootEl === null) return
+    rootEl.querySelectorAll<SVGElement>('[data-color]').forEach(el => { el.style.opacity = '1' })
+  }
   if (collapsed) {
     // The folded rail keeps one column per commit — but the bare 64px of
     // dots was a blind jump: nothing said which commit a node was, and the
@@ -125,7 +178,19 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
     // one conditionally-rendered fixed-position node: absolute inside the
     // rail would be clipped by the list's overflow (the Menu portal lesson).
     return (
-      <div className={css.commitList + ' ' + css.railList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
+      <div ref={listRef} className={css.commitList + ' ' + css.railList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
+        {worktree !== null && worktree !== undefined && (
+          <div className={css.railRow + (worktreeSelected ? ' ' + css.commitRowActive : '')} style={{ gridTemplateColumns: 'var(--graph-w) minmax(0, 1fr) 56px' }}>
+            <svg className={css.graphCell} width={graphWidth} height={ROW_H} aria-hidden="true">
+              <circle cx={LANE_W / 2} cy={ROW_H / 2} r={3.5} fill="none" stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.5} strokeDasharray="2 2" />
+              <line x1={LANE_W / 2} y1={ROW_H / 2 + 4} x2={LANE_W / 2} y2={ROW_H} stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.2} strokeDasharray="2 3" />
+            </svg>
+            <button type="button" className={css.railSubject} onClick={() => { onSelectWorktree?.() }}>
+              <span className={css.chip}>{t('graph.worktree', { count: worktree.files })}</span>
+            </button>
+            <span className={css.railHash} />
+          </div>
+        )}
         {commits.map((commit, index) => (
           <button
             key={commit.hash}
@@ -133,10 +198,10 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
             className={css.railRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
             aria-label={commit.subject + ' \u00b7 ' + commit.hash.slice(0, 7)}
             onClick={() => { onSelect(commit.hash) }}
-            onMouseEnter={event => { showTip(event.currentTarget, commit) }}
-            onMouseLeave={() => { setTip(null) }}
+            onMouseEnter={event => { showTip(event.currentTarget, commit); const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
+            onMouseLeave={() => { setTip(null); unlitLine() }}
             onFocus={event => { showTip(event.currentTarget, commit) }}
-            onBlur={() => { setTip(null) }}
+            onBlur={() => { setTip(null); unlitLine() }}
           >
             <GraphCell row={lanes[index]} width={graphWidth} />
             <span className={css.railSubject}>{commit.subject}</span>
@@ -157,7 +222,7 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
     )
   }
   return (
-    <div className={css.commitList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
+    <div ref={listRef} className={css.commitList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
       <div className={css.commitHeader} style={{ gridTemplateColumns: columns }} aria-hidden="true">
         <span>{t('graph.col.graph')}</span>
         <span>{t('graph.col.subject')}</span>
@@ -165,6 +230,14 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
         <span>{t('graph.col.author')}</span>
         <span>{t('graph.col.commit')}</span>
       </div>
+      {worktree !== null && worktree !== undefined && (
+        <WorktreeRow
+          width={graphWidth}
+          label={t('graph.worktree', { count: worktree.files })}
+          selected={worktreeSelected}
+          onSelect={() => { onSelectWorktree?.() }}
+        />
+      )}
       {commits.map((commit, index) => (
         <button
           key={commit.hash}
@@ -172,6 +245,8 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
           className={css.commitRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
           style={{ gridTemplateColumns: columns }}
           onClick={() => { onSelect(commit.hash) }}
+          onMouseEnter={() => { const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
+          onMouseLeave={() => { unlitLine() }}
           title={commit.subject}
         >
           <GraphCell row={lanes[index]} width={graphWidth} />

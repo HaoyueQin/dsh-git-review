@@ -170,6 +170,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [graphFilter, setGraphFilter] = useState('')
   const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [graphListCollapsed, setGraphListCollapsed] = useState(initialPrefs.graphCollapsed)
+  // The worktree virtual row's detail state (the graph view can show the
+  // uncommitted changes as if they were a "commit").
+  const [graphWorktree, setGraphWorktree] = useState(false)
+  const [graphWorktreeFile, setGraphWorktreeFile] = useState<string | null>(null)
+  const [graphLoadingMore, setGraphLoadingMore] = useState(false)
   const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null)
   const [commitTotals, setCommitTotals] = useState<{ added: number; deleted: number } | null>(null)
   const [copiedHash, setCopiedHash] = useState(false)
@@ -514,6 +519,27 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     return () => { alive = false }
   }, [viewTab, cwd, selectedCommit, graphFileInfo, commitInfo, diffFull, wsIgnore])
 
+  // The worktree virtual row's file diff (graph view): plain worktree-vs-HEAD
+  // semantics — same loader the changes view uses, scoped to this pane.
+  useEffect(() => {
+    if (viewTab !== 'graph' || !graphWorktree || cwd === undefined) return
+    const file = ready?.files.find(item => item.path === graphWorktreeFile) ?? null
+    if (graphWorktreeFile === null || file === null) {
+      setDiff({ kind: 'idle' })
+      return
+    }
+    let alive = true
+    setDiff({ kind: 'loading' })
+    const wantFile = file.unchanged === true || effectiveView === 'file'
+    const loader = wantFile
+      ? loadFileContent(cwd, graphWorktreeFile)
+      : loadFileDiff(cwd, graphWorktreeFile, file.origPath, file.untracked, diffFull, diffScope, null, null, wsIgnore)
+    void loader.then(next => {
+      if (alive) setDiff(next)
+    })
+    return () => { alive = false }
+  }, [viewTab, graphWorktree, cwd, graphWorktreeFile, ready, effectiveView, diffFull, diffScope, wsIgnore])
+
   const toggleDir = useCallback((path: string) => {
     setCollapsed(previous => {
       const next = new Set(previous)
@@ -624,6 +650,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSelected(null)
     setSelectedCommit(null)
     setGraphFile(null)
+    setGraphWorktree(false)
+    setGraphWorktreeFile(null)
     setGraphListCollapsed(false)
   }, [])
 
@@ -631,6 +659,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
    *  detail gets the width (the rail keeps every commit one click away).
    *  Clicking the selected commit again deselects and unfolds the list. */
   const selectCommit = useCallback((hash: string) => {
+    setGraphWorktree(false)
+    setGraphWorktreeFile(null)
     if (selectedCommit === hash) {
       setSelectedCommit(null)
       setGraphFile(null)
@@ -642,6 +672,30 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setDiffScope('all')
     setGraphListCollapsed(true)
   }, [selectedCommit])
+
+  /** Show the worktree's uncommitted changes in the graph detail pane. */
+  const selectGraphWorktree = useCallback(() => {
+    setSelectedCommit(null)
+    setGraphFile(null)
+    setGraphWorktree(true)
+  }, [])
+
+  /** Page the graph feed forward ("load more"): --date-order is a total
+   *  order, so appended rows never shift the ones already drawn. */
+  const loadGraphMore = useCallback(() => {
+    if (cwd === undefined || logState.kind !== 'ready' || graphLoadingMore) return
+    setGraphLoadingMore(true)
+    void hostCall<GitLogPayload>('log', { cwd, skip: logState.commits.length }).then(payload => {
+      setGraphLoadingMore(false)
+      if (payload === null || !payload.ok) return
+      setLogState(previous => {
+        if (previous.kind !== 'ready') return previous
+        const seen = new Set(previous.commits.map(item => item.hash))
+        const merged = [...previous.commits, ...payload.commits.filter(item => !seen.has(item.hash))]
+        return { kind: 'ready', commits: merged, truncated: payload.truncated }
+      })
+    })
+  }, [cwd, logState, graphLoadingMore])
 
   const toggleGraphList = useCallback(() => {
     // The user-facing fold toggle is the one that updates the remembered
@@ -1461,7 +1515,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               )}
               {logState.kind === 'ready' && graphCommits.length > 0 && (
                 <>
-                  {logState.truncated && <div className={css.noticeRow}>{t('graph.truncated', { count: graphCommits.length })}</div>}
+                  {logState.truncated && (
+                    <button type="button" className={css.gapBar} disabled={graphLoadingMore} onClick={loadGraphMore}>
+                      {graphLoadingMore ? t('graph.loading') : t('graph.loadMore', { count: graphCommits.length })}
+                    </button>
+                  )}
                   {visibleGraph.length === 0
                     ? <div className={css.paneNotice}>{t('graph.noMatches')}</div>
                     : (
@@ -1471,6 +1529,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                         selected={selectedCommit}
                         onSelect={selectCommit}
                         collapsed={graphListCollapsed}
+                        worktree={refsMode === false && ready !== null && ready.files.length > 0 ? { files: ready.files.length } : null}
+                        worktreeSelected={graphWorktree}
+                        onSelectWorktree={selectGraphWorktree}
                         t={t}
                       />
                     )}
@@ -1478,7 +1539,76 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               )}
             </section>
             <main className={css.mainPane}>
-              {selectedCommit === null || commitInfo === null ? (
+              {graphWorktree ? (
+                <div className={css.commitDetail} data-git-review-diff="">
+                  <div className={css.commitInfo}>
+                    <div className={css.commitInfoTop}>
+                      <span className={css.commitInfoLabel}>{t('graph.col.subject')}</span>
+                      <div className={css.commitInfoSubjectArea}>
+                        <span className={css.commitInfoSubject}>{t('graph.worktree', { count: ready?.files.length ?? 0 })}</span>
+                        {ready !== null && (
+                          <span className={css.totals}>
+                            <span className={css.totalAdded}>{'+' + fmtCount(ready.totals.added)}</span>
+                            <span className={css.totalDeleted}>{'−' + fmtCount(ready.totals.deleted)}</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className={css.commitSplit}>
+                    <div className={css.commitTreePanel} data-git-review-tree="">
+                      {ready === null || ready.files.length === 0
+                        ? <div className={css.paneNotice}>{t('tree.noChanges')}</div>
+                        : (
+                          <TreePanel
+                            files={ready.files}
+                            selected={graphWorktreeFile}
+                            onSelect={setGraphWorktreeFile}
+                            filter=""
+                            onFilterChange={() => { /* no filter in this pane yet */ }}
+                            collapsed={graphCollapsed}
+                            onToggleDir={toggleGraphDir}
+                            mode="changes"
+                            onModeChange={() => { /* pinned */ }}
+                            showModeRow={false}
+                            showFilter={false}
+                            listFailed={false}
+                            onFileMenu={(path, x, y) => { setFileMenu({ path, x, y }) }}
+                            t={t}
+                          />
+                        )}
+                    </div>
+                    <div className={css.commitDiffArea}>
+                      {graphWorktreeFile !== null && diff.kind !== 'idle' && (
+                        <DiffPane
+                          file={ready?.files.find(item => item.path === graphWorktreeFile) ?? { path: graphWorktreeFile, x: '?', y: '?', added: 0, deleted: 0, binary: false, untracked: false }}
+                          diff={diff.kind === 'text' ? diff.diff : diff.kind === 'content' ? '' : ''}
+                          truncated={diff.kind === 'text' && diff.truncated}
+                          loading={diff.kind === 'loading'}
+                          binary={diff.kind === 'binary'}
+                          size={diff.kind === 'binary' || diff.kind === 'content' ? diff.size : 0}
+                          full={diffFull}
+                          onToggleFull={() => { setDiffFull(value => !value) }}
+                          scope={diffScope}
+                          onScopeChange={setDiffScope}
+                          view={effectiveView}
+                          onViewChange={changeViewMode}
+                          showViewSwitch
+                          wsIgnore={wsIgnore}
+                          syntaxHighlight={syntaxHighlight}
+                          onToggleWs={toggleWsIgnore}
+                          search={searchSpec}
+                          baseActive={false}
+                          useInput={useInput}
+                          inputActions={inputActions}
+                          onDraftAdd={addDraft}
+                          t={t}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : selectedCommit === null || commitInfo === null ? (
                 <div className={css.emptyState}>
                   <div className={css.emptyTitle}>{t('graph.selectCommit')}</div>
                   <div className={css.emptyHint}>{t('graph.selectHint')}</div>

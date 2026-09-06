@@ -1,18 +1,29 @@
-# dsh-git-review
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/banner-zh-dark.svg">
+    <img src="docs/banner-zh.svg" alt="DSH Git Review" width="720">
+  </picture>
+</p>
 
-DeepSeek Harness 的**只读「审查」标签页**——参照 Codex 桌面端审查页形态：在 harness 客户端内
-以并列 tab 展示当前工作区相对 `HEAD` 的全部未提交变更（文件树 + 状态徽标 + 每文件双列 diff）。
+# DSH Git Review
 
-- **Tab**：注册进公开插槽 `conversation.view`（`id: git-review`，order 20，排在「轨迹」右侧），
-  中英文案，语义色自动适配深浅主题。
-- **文件树**：目录聚合，`+ ± − R ?` 状态徽标，筛选框（筛选时降级为平铺列表），目录聚合计数。
-- **Diff 面板**：双列并排（左右行号、缺侧斜纹占位、`\ No newline` 标记），hunk 间未修改上下文
-  折叠条（点击以超大 `-U` 重取一次实现"展开全部"），2 万行渲染上限，二进制/截断/无文本变更提示。
-- **Host 半**：进程内 cordis 插件，挂在插件自己的前缀路由上——
-  `POST /dsh-git-review/api/status`、`POST /dsh-git-review/api/file-diff`、`GET .../ping`。
-  所有 git 输出走 NUL/原样安全通道（`-z`、`core.quotepath=false`），只读（`--no-optional-locks`），
-  路径一律围栏在会话工作区所属仓库内。diff 基线为 `HEAD`，未出生 HEAD（空仓库）用空树对象；
-  未跟踪文件做行数统计（含二进制探测）并在面板中合成 `/dev/null` 伪 diff。
+DeepSeek Harness 的**审查标签页 + 围栏 Git 工作台**：把 agent 改了什么摆在一页里做决定——文件树、差异、提交图谱，设防的 Git 操作同处一页。
+
+![demo](docs/demo-zh.svg)
+
+[English](README.md)
+
+## 它能做什么
+
+DSH Git Review 在会话视图里对话与轨迹旁边注册一个**审查**标签页。展示工作区仓库相对 HEAD（或任意两 ref）的状态，看完直接动手，不用切走：
+
+- **先审后动**：可过滤的文件树（状态徽标）、双列 / 单列 / 全文三档差异、hunk 折叠、词级改动高亮、语法着色，以及文件名 / 差异内容 / 文件内容三范围搜索。
+- **用历史做判断**：泳道提交图谱（每提交的文件与差异）、blame 边栏、单文件历史，可读历史中任意版本的文件全文。
+- **设防的操作**：按文件或按 hunk 暂存 / 取消暂存 / 放弃，提交（含 amend、Ctrl+Enter）与推送，分支（创建 / 切换 / 重命名 / 删除 / 合并 / 跟踪远端），轻量标签（创建 / 删除 / 推送），贮藏，以及合并冲突解决（ours / theirs，继续 / 中止）。每次写操作都要明确确认，破坏性操作确认两遍，agent 运行中全部上锁。
+- **审查闭环**：在任意差异行写评论并送入对话输入框，把文件标为已审（文件再改自动取消），评论草稿按工作区分存。
+- **文件预览**：markdown 用宿主自带的 Markdown 引擎渲染，图片与 SVG 内联展示，PDF 沙箱打开——办公文档请在文件树右键用外部应用打开。
+
+偏好（差异布局、默认搜索范围、图谱形态、匹配方式、空白、语法高亮）放在 harness 设置的插件标签页，与审查标签页即时互相同步。
 
 ## 安装
 
@@ -20,27 +31,32 @@ DeepSeek Harness 的**只读「审查」标签页**——参照 Codex 桌面端�
 pnpm install
 pnpm build
 pnpm pack
-dsh plugin --profile web add ./dsh-git-review-<version>.tgz
+dsh plugin --profile web add ./dsh-git-review-0.1.0.tgz
 dsh web
 ```
 
-要求会话工作区是 git 仓库、host 侧 PATH 有 `git`；其余情况（非仓库、host 半缺失）tab 内给出
-明确指引文案，绝不白屏报错。
+要求 harness 工作区位于 git 仓库内，且宿主 PATH 里有 git。其他情况下标签页内给出明确指引，绝不白屏。
 
-## 自检
+## 检查
 
 ```bash
 pnpm typecheck      # 严格类型检查
-pnpm check:parse    # 解析器/文件树回归测试（需 Node >= 23.6 原生 TS 剥离）
-pnpm build          # lib/index.js（node 半）+ lib/client.js（浏览器工厂包）
+pnpm check:parse    # 纯函数回归（Node >= 23.6 原生 TS 剥离）
+pnpm check:git      # 真实 git 夹具集成测试（仓库建在 .tmp-check-git/ 下）
+pnpm build          # lib/index.js（node 端）+ lib/client.js（浏览器端 bundle）
 ```
 
-## 边界说明
+## 工作原理
 
-- **为何不用 Remote API**：挂新客户端 namespace 需要 harness 构建期生成的编解码器与 api-remotes
-  装配的显式选择，第三方插件走插件自挂路由（与 dsh-diff-stat 围栏文件 API 同一信任模型）。
-- 仓库级而非子目录级：审查展示的是会话工作区所属仓库的整体状态（status/diff 天然是仓库级）。
-- V2 设想（未实现）：diff 内容搜索、行内评论回写输入框、暂存/未暂存分列、语法高亮、
-  agent 运行中的实时刷新。
+- **Host 半**：宿主进程内的 cordis 插件，经围栏前缀路由提供 JSON 动作接口（非 JSON 请求体直接 415，顺带关掉经典 no-cors 写向量）。所有路径围栏在会话工作区的仓库内，所有 ref 服务端复核，commit id 只收 40-hex，并清洗 GIT_DIR 一类环境劫持。
+- **浏览器半**：会话视图插槽组件；host 路由可选——缺席时标签页明示而不报错。
+- **规模护栏**：2 万行渲染帽、单文件 2 MiB 差异帽、图谱 500 提交分页加载、最大 git 输出 8 MiB 流式字节帽（超限杀进程）。
+- 界面语言：简体中文与英文，随 harness 语言切换；深浅主题走语义 token。
+
+## 范围说明
+
+- **为什么不用 Remote API**：新客户端命名空间要 harness 构建的生成编解码器加显式的 api-remotes 组装选择，第三方插件改走插件自营路由（与围栏文件 API 同一信任模型）。
+- 仓库级而非工作区子目录级：审查展示的是包含会话工作区的那个仓库（status/diff 本来就是仓库级语义）。
+- 明确不做：rebase 流程、三栏手动解冲突编辑、多仓库切换、worktree 管理、可编辑差异。
 
 MIT © HaoyueQin

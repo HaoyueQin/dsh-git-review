@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="260" viewBox="0 0 1200 260" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans', sans-serif" role="img" aria-label="DSH Git Review">
+<title>DSH Git Review</title>
+<defs>
+<linearGradient id="bbgd" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#161b22"/>
+<stop offset="1" stop-color="#0d1117"/>
+</linearGradient>
+</defs>
+<rect x="0" y="0" width="1200" height="260" fill="url(#bbgd)"/>
+<rect x="0" y="0" width="6" height="260" fill="#58a6ff"/>
+<text x="48" y="54" font-size="13" letter-spacing="3" fill="#8b949e">DEEPSEEK HARNESS PLUGIN</text>
+<text x="46" y="104" font-size="46" font-weight="700" fill="#f0f6fc">DSH Git Review</text>
+<text x="48" y="136" font-size="15" fill="#9aa4b2">Review what the agent changed, then act — diff, graph and guarded git writes in one tab.</text>
+<g font-size="13" fill="#e6edf3">
+<rect x="48" y="154" width="264" height="30" rx="15" fill="#161b22" stroke="#30363d"/>
+<circle cx="68" cy="169" r="5" fill="#58a6ff"/>
+<text x="80" y="173">three-dot compare across any refs</text>
+<rect x="320" y="154" width="240" height="30" rx="15" fill="#161b22" stroke="#30363d"/>
+<circle cx="340" cy="169" r="5" fill="#3fb950"/>
+<text x="352" y="173">search names · diffs · content</text>
+<rect x="568" y="154" width="154" height="30" rx="15" fill="#161b22" stroke="#30363d"/>
+<circle cx="588" cy="169" r="5" fill="#bc8cff"/>
+<text x="600" y="173">guarded git writes</text>
+</g>
+<text x="48" y="216" font-size="12" fill="#8b949e">file tree · side-by-side diff · lane graph · blame · stash · tags</text>
+<g>
+<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" keyTimes="0; 0.5; 1" dur="6s" repeatCount="indefinite"/>
+<rect x="756" y="34" width="396" height="192" rx="12" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+<circle cx="780" cy="58" r="5" fill="#ff5f57"/>
+<circle cx="796" cy="58" r="5" fill="#febc2e"/>
+<circle cx="812" cy="58" r="5" fill="#28c840"/>
+<text x="828" y="62" font-size="12" fill="#8b949e">Review · worktree vs HEAD</text>
+<text x="1136" y="62" font-size="12" font-weight="700" text-anchor="end"><tspan fill="#3fb950">+128</tspan><tspan fill="#f0f6fc"> </tspan><tspan fill="#f85149">−42</tspan></text>
+<line x1="756" y1="74" x2="1152" y2="74" stroke="#30363d"/>
+<g font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11">
+<rect x="772" y="84" width="364" height="20" rx="4" fill="#3c1a1d"/>
+<text x="780" y="98" fill="#ffb1a8">- const base = await diffBase(root)</text>
+<rect x="772" y="108" width="364" height="20" rx="4" fill="#122b1c"/>
+<text x="780" y="122" fill="#7ee787">+ const { base } = await diffBase(root, range)</text>
+<rect x="772" y="132" width="364" height="20" rx="4" fill="#0d1117"/>
+<text x="780" y="146" fill="#8b949e">  return { ok: true, base }</text>
+</g>
+<path d="M776 202 C 820 202, 820 184, 864 184 S 908 202, 952 184" fill="none" stroke="#bc8cff" stroke-width="2.5"/>
+<path d="M776 184 C 820 184, 820 202, 864 202 S 908 184, 952 202" fill="none" stroke="#58a6ff" stroke-width="2.5" opacity="0.6"/>
+<circle cx="776" cy="202" r="4" fill="#bc8cff"/>
+<circle cx="864" cy="184" r="4.5" fill="#161b22" stroke="#bc8cff" stroke-width="2.5"/>
+<circle cx="952" cy="184" r="4" fill="#bc8cff">
+<animate attributeName="r" values="4; 6; 4" keyTimes="0; 0.5; 1" dur="6s" repeatCount="indefinite"/>
+</circle>
+<circle cx="776" cy="184" r="4" fill="#58a6ff"/>
+<text x="1004" y="198" font-size="11" fill="#8b949e">graph</text>
+</g>
+</svg>

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="260" viewBox="0 0 1200 260" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" role="img" aria-label="DSH Git Review">
+<title>DSH Git Review</title>
+<defs>
+<linearGradient id="bbgz" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0" stop-color="#fbfcfe"/>
+<stop offset="1" stop-color="#edf0f5"/>
+</linearGradient>
+</defs>
+<rect x="0" y="0" width="1200" height="260" fill="url(#bbgz)"/>
+<rect x="0" y="0" width="6" height="260" fill="#0969da"/>
+<text x="48" y="54" font-size="13" letter-spacing="3" fill="#57606a">DEEPSEEK HARNESS 插件</text>
+<text x="46" y="104" font-size="46" font-weight="700" fill="#0f172a">DSH Git Review</text>
+<text x="48" y="136" font-size="14" fill="#424a53">看清 agent 改了什么再行动——差异、图谱与设防的 Git 操作，同处一个标签页。</text>
+<g font-size="13" fill="#24292f">
+<rect x="48" y="154" width="170" height="30" rx="15" fill="#ffffff" stroke="#d0d7de"/>
+<circle cx="68" cy="169" r="5" fill="#0969da"/>
+<text x="80" y="173">任意两 ref 三点对比</text>
+<rect x="226" y="154" width="240" height="30" rx="15" fill="#ffffff" stroke="#d0d7de"/>
+<circle cx="246" cy="169" r="5" fill="#1a7f37"/>
+<text x="258" y="173">文件名 · 差异 · 内容三范围搜索</text>
+<rect x="474" y="154" width="160" height="30" rx="15" fill="#ffffff" stroke="#d0d7de"/>
+<circle cx="494" cy="169" r="5" fill="#8250df"/>
+<text x="506" y="173">两段确认的写操作</text>
+</g>
+<text x="48" y="216" font-size="12" fill="#6e7781">文件树 · 双列差异 · 泳道图谱 · 追溯 · 贮藏 · 标签</text>
+<g>
+<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" keyTimes="0; 0.5; 1" dur="6s" repeatCount="indefinite"/>
+<rect x="756" y="34" width="396" height="192" rx="12" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5"/>
+<circle cx="780" cy="58" r="5" fill="#ff5f57"/>
+<circle cx="796" cy="58" r="5" fill="#febc2e"/>
+<circle cx="812" cy="58" r="5" fill="#28c840"/>
+<text x="828" y="62" font-size="12" fill="#57606a">审查 · 工作树 vs HEAD</text>
+<text x="1136" y="62" font-size="12" font-weight="700" text-anchor="end"><tspan fill="#1a7f37">+128</tspan><tspan fill="#24292f"> </tspan><tspan fill="#d1242f">−42</tspan></text>
+<line x1="756" y1="74" x2="1152" y2="74" stroke="#d0d7de"/>
+<g font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11">
+<rect x="772" y="84" width="364" height="20" rx="4" fill="#ffebe9"/>
+<text x="780" y="98" fill="#82071e">- const base = await diffBase(root)</text>
+<rect x="772" y="108" width="364" height="20" rx="4" fill="#dafbe1"/>
+<text x="780" y="122" fill="#116329">+ const { base } = await diffBase(root, range)</text>
+<rect x="772" y="132" width="364" height="20" rx="4" fill="#f6f8fa"/>
+<text x="780" y="146" fill="#57606a">  return { ok: true, base }</text>
+</g>
+<path d="M776 202 C 820 202, 820 184, 864 184 S 908 202, 952 184" fill="none" stroke="#8250df" stroke-width="2.5"/>
+<path d="M776 184 C 820 184, 820 202, 864 202 S 908 184, 952 202" fill="none" stroke="#0969da" stroke-width="2.5" opacity="0.55"/>
+<circle cx="776" cy="202" r="4" fill="#8250df"/>
+<circle cx="864" cy="184" r="4.5" fill="#ffffff" stroke="#8250df" stroke-width="2.5"/>
+<circle cx="952" cy="184" r="4" fill="#8250df">
+<animate attributeName="r" values="4; 6; 4" keyTimes="0; 0.5; 1" dur="6s" repeatCount="indefinite"/>
+</circle>
+<circle cx="776" cy="184" r="4" fill="#0969da"/>
+<text x="1004" y="198" font-size="11" fill="#6e7781">图谱</text>
+</g>
+</svg>

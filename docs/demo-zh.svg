@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', sans-serif" role="img" aria-label="DSH Git Review 演示">
+<title>DSH Git Review 演示</title>
+<rect x="16" y="12" width="688" height="396" rx="12" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5"/>
+<circle cx="40" cy="36" r="5" fill="#ff5f57"/>
+<circle cx="56" cy="36" r="5" fill="#febc2e"/>
+<circle cx="72" cy="36" r="5" fill="#28c840"/>
+<text x="88" y="40" font-size="13" font-weight="600" fill="#24292f">审查</text>
+<text x="688" y="40" font-size="13" font-weight="700" text-anchor="end"><tspan fill="#1a7f37">+128</tspan><tspan dx="6" fill="#d1242f">−42</tspan></text>
+<rect x="32" y="56" width="132" height="28" rx="14" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="48" y="74" font-size="12.5" fill="#24292f">main ↑1</text>
+<rect x="172" y="56" width="368" height="28" rx="7" fill="#ffffff" stroke="#d0d7de"/>
+<text x="186" y="74" font-size="12.5" fill="#57606a">搜索变更内容…</text>
+<rect x="548" y="56" width="140" height="28" rx="7" fill="#0969da"/>
+<text x="618" y="74" font-size="12.5" font-weight="600" fill="#ffffff" text-anchor="middle">提交或推送</text>
+<line x1="16" y1="96" x2="704" y2="96" stroke="#d0d7de"/>
+<g>
+<animate attributeName="opacity" values="1; 1; 0; 0; 1; 1" keyTimes="0; 0.5; 0.58; 0.9; 0.97; 1" dur="6s" repeatCount="indefinite"/>
+<text x="32" y="122" font-size="11" letter-spacing="1.5" fill="#57606a">已变更 3 个</text>
+<rect x="32" y="132" width="200" height="30" rx="6" fill="#f6f8fa"/>
+<rect x="40" y="139" width="16" height="16" rx="4" fill="#dafbe1"/>
+<text x="48" y="151" font-size="11" font-weight="700" fill="#116329" text-anchor="middle">+</text>
+<text x="62" y="151" font-size="12" fill="#24292f">src/index.ts</text>
+<text x="226" y="151" font-size="11" fill="#6e7781" text-anchor="end">
+<animate attributeName="opacity" values="1; 1; 0; 0; 1; 1" keyTimes="0; 0.3; 0.36; 0.9; 0.96; 1" dur="6s" repeatCount="indefinite"/>
+未暂存</text>
+<text x="226" y="151" font-size="11" font-weight="600" fill="#1a7f37" text-anchor="end" opacity="0">
+<animate attributeName="opacity" values="0; 0; 1; 1; 0; 0" keyTimes="0; 0.3; 0.36; 0.5; 0.56; 1" dur="6s" repeatCount="indefinite"/>
+已暂存</text>
+<rect x="32" y="166" width="200" height="30" rx="6" fill="#e8f1ff" stroke="#0969da" stroke-opacity="0.35"/>
+<rect x="40" y="173" width="16" height="16" rx="4" fill="#fff8c5"/>
+<text x="48" y="185" font-size="11" font-weight="700" fill="#9a6700" text-anchor="middle">±</text>
+<text x="62" y="185" font-size="12" fill="#24292f">review-view.tsx</text>
+<rect x="32" y="200" width="200" height="30" rx="6" fill="#f6f8fa"/>
+<rect x="40" y="207" width="16" height="16" rx="4" fill="#f6f8fa" stroke="#d0d7de"/>
+<text x="48" y="219" font-size="11" font-weight="700" fill="#57606a" text-anchor="middle">?</text>
+<text x="62" y="219" font-size="12" fill="#24292f">notes.md</text>
+<text x="244" y="122" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11" fill="#57606a">@@ -12,5 +12,6 @@ src/index.ts</text>
+<g font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11">
+<rect x="244" y="130" width="444" height="24" rx="4" fill="#f6f8fa"/>
+<text x="252" y="146" fill="#57606a">  import { execFile } from 'node:child_process'</text>
+<rect x="244" y="154" width="444" height="24" rx="4" fill="#ffebe9"/>
+<text x="252" y="170" fill="#82071e">- const base = headCommit</text>
+<rect x="244" y="178" width="444" height="24" rx="4" fill="#dafbe1"/>
+<text x="252" y="194" fill="#116329">+ const { base } = await diffBase(root, range)</text>
+<rect x="244" y="202" width="444" height="24" rx="4" fill="#f6f8fa"/>
+<text x="252" y="218" fill="#57606a">  return { ok: true, base }</text>
+<rect x="244" y="226" width="444" height="24" rx="4" fill="#f6f8fa"/>
+<text x="252" y="242" fill="#57606a">@@ -40,3 +41,4 @@ src/index.ts</text>
+<rect x="244" y="250" width="444" height="24" rx="4" fill="#ffebe9"/>
+<text x="252" y="266" fill="#82071e">- writeAnswer(await runGit(root, args))</text>
+<rect x="244" y="274" width="444" height="24" rx="4" fill="#dafbe1"/>
+<text x="252" y="290" fill="#116329">+ writeAnswer(await streamGit(root, args))</text>
+<rect x="244" y="298" width="444" height="24" rx="4" fill="#f6f8fa"/>
+<text x="252" y="314" fill="#57606a">  refresh()</text>
+</g>
+<g opacity="0">
+<animate attributeName="opacity" values="0; 0; 1; 1; 0; 0" keyTimes="0; 0.23; 0.3; 0.5; 0.56; 1" dur="6s" repeatCount="indefinite"/>
+<rect x="588" y="102" width="92" height="22" rx="11" fill="#0969da"/>
+<text x="634" y="117" font-size="11.5" font-weight="600" fill="#ffffff" text-anchor="middle">暂存此段</text>
+</g>
+</g>
+<g opacity="0">
+<animate attributeName="opacity" values="0; 0; 1; 1; 0; 0" keyTimes="0; 0.5; 0.58; 0.9; 0.96; 1" dur="6s" repeatCount="indefinite"/>
+<rect x="32" y="112" width="220" height="28" rx="7" fill="#ffffff" stroke="#d0d7de"/>
+<text x="46" y="130" font-size="12.5" fill="#8b949e">搜索提交…</text>
+<text x="46" y="130" font-size="12.5" fill="#24292f" opacity="0">
+<animate attributeName="opacity" values="0; 0; 1; 1; 0" keyTimes="0; 0.7; 0.75; 0.9; 0.95" dur="6s" repeatCount="indefinite"/>
+revert</text>
+<rect x="300" y="124" width="372" height="32" rx="8" fill="#e8f1ff"/>
+<path d="M320 112 L320 360" fill="none" stroke="#0969da" stroke-width="3"/>
+<path d="M352 112 L352 230 C 352 262, 320 262, 320 294" fill="none" stroke="#8250df" stroke-width="3"/>
+<circle cx="320" cy="140" r="0" fill="#ffffff" stroke="#0969da" stroke-width="3">
+<animate attributeName="r" values="0; 0; 6; 6; 6" keyTimes="0; 0.62; 0.7; 0.9; 1" dur="6s" repeatCount="indefinite"/>
+</circle>
+<g>
+<animate attributeName="opacity" values="1; 1; 0.3; 0.3; 1" keyTimes="0; 0.7; 0.76; 0.9; 0.96" dur="6s" repeatCount="indefinite"/>
+<circle cx="320" cy="196" r="5" fill="#0969da"/>
+<circle cx="352" cy="252" r="5" fill="#8250df"/>
+<circle cx="320" cy="308" r="5" fill="#0969da"/>
+<text x="392" y="200" font-size="13" font-weight="600" fill="#24292f">feat: lane graph</text>
+<text x="392" y="216" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11" fill="#57606a">4b825d6 · you</text>
+<text x="404" y="256" font-size="13" font-weight="600" fill="#24292f">fix: folded rail</text>
+<text x="404" y="272" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11" fill="#57606a">6ad5baf · you</text>
+<text x="392" y="312" font-size="13" font-weight="600" fill="#24292f">docs: headers</text>
+<text x="392" y="328" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11" fill="#57606a">1e356f2 · you</text>
+</g>
+<text x="392" y="144" font-size="13" font-weight="600" fill="#24292f">revert 'oops'</text>
+<text x="392" y="160" font-family="ui-monospace, SFMono-Regular, Consolas, monospace" font-size="11" fill="#57606a">9f3a2c1 · you</text>
+<text x="392" y="182" font-size="11.5" fill="#57606a" opacity="0">
+<animate attributeName="opacity" values="0; 0; 1; 1; 0" keyTimes="0; 0.7; 0.75; 0.9; 0.95" dur="6s" repeatCount="indefinite"/>
+反向提交落到顶部</text>
+</g>
+</svg>

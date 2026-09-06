@@ -13,7 +13,7 @@
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/v/dsh-git-review?style=flat-square" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/dt/dsh-git-review?style=flat-square" alt="npm downloads"></a>
   <img src="https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="dsh plugin">
-  <img src="https://img.shields.io/badge/dsh-%3E%3D0.1.2-rc.1-4D6BFE?style=flat-square" alt="harness >=0.1.2-rc.1">
+  <img src="https://img.shields.io/badge/dsh-%3E%3D0.1.2--rc.1-4D6BFE?style=flat-square" alt="harness >=0.1.2-rc.1">
   <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">

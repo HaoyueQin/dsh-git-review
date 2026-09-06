@@ -320,6 +320,62 @@ const HASH_RE = /^[0-9a-f]{40}$/
  * short records are skipped rather than mis-parsed. The leading newline
  * git inserts between records is trimmed off the hash field.
  */
+/** One blame row parsed from `git blame --porcelain`. */
+export interface BlameRow {
+  hash: string
+  origLine: number
+  finalLine: number
+  author: string
+  timestamp: number
+  summary: string
+}
+
+/**
+ * Parse `git blame --porcelain` output line by line. Each final line's
+ * record is `<hash> <origLine> <finalLine>[ <numLines>]` followed (FIRST
+ * occurrence of the commit only) by author/summary metadata and (always)
+ * by a tab-prefixed content line that closes the record. Commit metadata
+ * is cached so rows of repeated commits fill from the cache. A byte-truncated
+ * tail record without its content line still yields its row.
+ */
+export function parseBlamePorcelain(raw: string): BlameRow[] {
+  const rows: BlameRow[] = []
+  const meta = new Map<string, { author: string; timestamp: number; summary: string }>()
+  const HEADER = /^([0-9a-f]{40}) (\d+) (\d+)(?: \d+)?$/
+  let current: { hash: string; origLine: number; finalLine: number } | null = null
+  const flush = (): void => {
+    if (current === null) return
+    const cached = meta.get(current.hash) ?? { author: '', timestamp: 0, summary: '' }
+    rows.push({ hash: current.hash, origLine: current.origLine, finalLine: current.finalLine, author: cached.author, timestamp: cached.timestamp, summary: cached.summary })
+    current = null
+  }
+  for (const line of raw.split('\n')) {
+    if (line === '') continue
+    if (line.startsWith('\t')) { flush(); continue }
+    const header = HEADER.exec(line)
+    if (header !== null) {
+      flush()
+      current = { hash: header[1]!, origLine: Number(header[2]), finalLine: Number(header[3]) }
+      continue
+    }
+    if (current === null) continue
+    const cached = meta.get(current.hash) ?? { author: '', timestamp: 0, summary: '' }
+    if (line.startsWith('author ')) {
+      cached.author = line.slice(7)
+    } else if (line.startsWith('author-time ')) {
+      const t = Number(line.slice(12))
+      cached.timestamp = Number.isFinite(t) ? t : 0
+    } else if (line.startsWith('summary ')) {
+      cached.summary = line.slice(8)
+    } else {
+      continue
+    }
+    meta.set(current.hash, cached)
+  }
+  flush()
+  return rows
+}
+
 export function parseLogLines(raw: string): LogLine[] {
   const out: LogLine[] = []
   for (const record of raw.split('\x1e')) {

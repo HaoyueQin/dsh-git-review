@@ -7,7 +7,9 @@
  *
  *   POST /dsh-git-review/api/status       { cwd, base?, target? }
  *   POST /dsh-git-review/api/file-diff    { cwd, path, untracked?, full?, scope?, base?, target? }
- *   POST /dsh-git-review/api/file-content { cwd, path }
+ *   POST /dsh-git-review/api/file-content { cwd, path, ref? }
+ *   POST /dsh-git-review/api/blame        { cwd, path }
+ *   POST /dsh-git-review/api/file-history { cwd, path }
  *   POST /dsh-git-review/api/list-files   { cwd }
  *   POST /dsh-git-review/api/search       { cwd, query, base?, target? }
  *   POST /dsh-git-review/api/refs         { cwd }
@@ -72,9 +74,9 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
-import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
+import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
 import { installSettings } from './settings-schema.ts'
-import type { ChangedFile, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
+import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
 const HASH_ONLY_RE = /^[0-9a-f]{40}$/
@@ -585,11 +587,30 @@ export async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknow
 /** One `file-content` answer: fenced full-file read for the file view. The
  *  cap matches the untracked pseudo-diff read cap; larger files truncate at
  *  that prefix (flagged via `size`), and a NUL byte routes to the binary form. */
-async function gitFileContent(cwd: unknown, path: unknown): Promise<GitFileContentPayload> {
+export async function gitFileContent(cwd: unknown, path: unknown, ref: unknown): Promise<GitFileContentPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
+  const relPath = relative(repoRoot, absPath).replaceAll('\\', '/')
+
+  // History read: a ref names a commit whose tree serves the content
+  // (`cat-file`), so the file view works in ref-range mode where no
+  // worktree copy of that version exists.
+  if (typeof ref === 'string' && ref !== '') {
+    const normalized = normalizeBaseRef(ref)
+    if (normalized === null) throw new Error('invalid ref')
+    const resolved = await resolveRangeRef(repoRoot, normalized)
+    const spec = resolved + ':' + relPath
+    const size = Number((await runGit(repoRoot, ['cat-file', '-s', spec])).trim())
+    const text = await runGit(repoRoot, ['cat-file', '-p', spec])
+    const bytes = Buffer.from(text, 'utf8')
+    const truncated = bytes.length > READ_CAP
+    const capped = truncated ? bytes.subarray(0, READ_CAP) : bytes
+    if (capped.includes(0)) return { ok: true, binary: true, content: '', truncated, size }
+    return { ok: true, binary: false, content: capped.toString('utf8'), truncated, size }
+  }
+
   let size: number
   try {
     const stat = await lstat(absPath)
@@ -602,6 +623,47 @@ async function gitFileContent(cwd: unknown, path: unknown): Promise<GitFileConte
   const truncated = size > READ_CAP
   if (bytes.includes(0)) return { ok: true, binary: true, content: '', truncated, size }
   return { ok: true, binary: false, content: bytes.toString('utf8'), truncated, size }
+}
+
+/** Line cap for blame (a review tab is not a history aquarium). */
+const BLAME_LINE_CAP = 20_000
+
+/** One `blame` answer: per-final-line last-touched commit (porcelain). */
+export async function gitBlame(cwd: unknown, path: unknown): Promise<GitBlamePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
+  const raw = await runGit(repoRoot, ['blame', '--porcelain', '--', relPath])
+  const rows = parseBlamePorcelain(raw)
+  return { ok: true, lines: rows.slice(0, BLAME_LINE_CAP), truncated: rows.length > BLAME_LINE_CAP }
+}
+
+/** Commit cap for the per-file history popover. */
+const FILE_HISTORY_CAP = 500
+
+/** One `file-history` answer: commits that touched one path (--follow). */
+export async function gitFileHistory(cwd: unknown, path: unknown): Promise<GitFileHistoryPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
+  let raw: string
+  try {
+    raw = await runGit(repoRoot, [
+      'log', '--follow', '--date-order',
+      '--max-count=' + String(FILE_HISTORY_CAP),
+      '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e',
+      '--', relPath,
+    ])
+  } catch (error) {
+    if (/does not have any commits yet|bad revision/i.test(String((error as Error).message ?? error))) {
+      return { ok: true, commits: [], truncated: false }
+    }
+    throw error
+  }
+  const commits = parseLogLines(raw)
+  return { ok: true, commits, truncated: commits.length >= FILE_HISTORY_CAP }
 }
 
 /** Entry cap for the all-files tree (a review tab is not a file manager). */
@@ -1599,8 +1661,16 @@ export function apply(ctx: Context): void {
           respond(res, 200, await gitBranchRename(body['cwd'], body['name'], body['newName'], body['confirm']))
           return
         }
+        if (action === 'blame') {
+          respond(res, 200, await gitBlame(body['cwd'], body['path']))
+          return
+        }
+        if (action === 'file-history') {
+          respond(res, 200, await gitFileHistory(body['cwd'], body['path']))
+          return
+        }
         if (action === 'file-content') {
-          respond(res, 200, await gitFileContent(body['cwd'], body['path']))
+          respond(res, 200, await gitFileContent(body['cwd'], body['path'], body['ref']))
           return
         }
         if (action === 'list-files') {

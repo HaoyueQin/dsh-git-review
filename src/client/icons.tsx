@@ -203,6 +203,16 @@ export function SwapIcon({ size = 13 }: IconProps) {
   )
 }
 
+export function HistoryIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9" strokeLinecap="round" />
+      <path d="M2.3 1.8v2.7h2.7" strokeLinejoin="round" strokeLinecap="round" />
+      <path d="M8 5v3.2l2.2 1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export function PlusIcon({ size = 13 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">

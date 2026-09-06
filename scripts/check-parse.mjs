@@ -4,7 +4,7 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, splitDiffSections } from '../src/git-parse.ts'
+import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseBlamePorcelain, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, splitDiffSections } from '../src/git-parse.ts'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
@@ -599,5 +599,42 @@ assert.equal(buildHunkPatch(RAW_DIFF, 2), null)
 assert.equal(buildHunkPatch(RAW_DIFF, -1), null)
 assert.equal(buildHunkPatch('', 0), null)
 assert.equal(buildHunkPatch('diff --git a/x b/x\nBinary files a/x and b/x differ\n', 0), null)
+
+// 42. parseBlamePorcelain: header/first-occurrence metadata/repeat-commit
+//     cache/tab-content record ends; the trailing truncated record still
+//     yields its row.
+const BLAME_RAW = [
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 3 1 3',
+  'author Alice',
+  'author-mail <a@x>',
+  'author-time 1700000000',
+  'author-tz +0800',
+  'committer Alice',
+  'committer-time 1700000000',
+  'summary add header',
+  '\tpublic class X {',
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 4 2',
+  '\tint y;',
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1 3',
+  'author Bob',
+  'author-time 1700001000',
+  'summary bob line',
+  '\t// bob was here',
+  'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 5 4',
+  '\t}',
+].join('\n')
+const blameRows = parseBlamePorcelain(BLAME_RAW)
+assert.equal(blameRows.length, 4)
+assert.deepEqual(blameRows.map(row => row.hash.slice(0, 1)), ['a', 'a', 'b', 'a'])
+assert.deepEqual(blameRows.map(row => row.finalLine), [1, 2, 3, 4])
+assert.deepEqual(blameRows.map(row => row.origLine), [3, 4, 1, 5])
+assert.equal(blameRows[0].author, 'Alice')
+assert.equal(blameRows[1].author, 'Alice', 'repeat commit fills from cache')
+assert.equal(blameRows[2].author, 'Bob')
+assert.equal(blameRows[2].summary, 'bob line')
+assert.equal(blameRows[0].timestamp, 1700000000)
+const blameTrunc = parseBlamePorcelain('cccccccccccccccccccccccccccccccccccccccc 2 9')
+assert.equal(blameTrunc.length, 1)
+assert.equal(blameTrunc[0].author, '')
 
 console.log('check-parse: all assertions passed')

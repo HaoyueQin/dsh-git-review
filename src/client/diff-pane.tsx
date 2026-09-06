@@ -10,7 +10,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import type { ReactNode } from 'react'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec, type WordHighlighter, type WordSpans } from './diff-parse.ts'
 import { makeLineHighlighter, sliceTokens, type TokenSpan } from './highlight.ts'
-import { CommentIcon, ExpandIcon, CollapseIcon } from './icons.tsx'
+import { CommentIcon, ExpandIcon, CollapseIcon, HistoryIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
 import type { CommentDraft } from './comment-drafts.ts'
@@ -77,6 +77,11 @@ export interface DiffPaneProps {
   hunkBusy?: boolean
   /** Verbatim failure of the last hunk op (null/undefined hides the row). */
   hunkNotice?: string | null
+  /** Open the per-file history popover at the button's screen position
+   *  (absent hides the button — worktree semantics only). */
+  onFileHistory?: ((path: string, x: number, y: number) => void) | undefined
+  /** True while the history fetch is in flight (button shows busy). */
+  historyLoading?: boolean
   t: T
 }
 
@@ -279,7 +284,7 @@ function CommentEditor({ path, line, useInput, inputActions, onDraftAdd, onClose
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, syntaxHighlight, search, baseActive, useInput, inputActions, onDraftAdd, hunkOps, onHunkOp, hunkBusy, hunkNotice, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, syntaxHighlight, search, baseActive, useInput, inputActions, onDraftAdd, hunkOps, onHunkOp, hunkBusy, hunkNotice, onFileHistory, historyLoading, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -375,6 +380,21 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
               </button>
             ))}
           </span>
+        )}
+        {onFileHistory !== undefined && !baseActive && (
+          <button
+            type="button"
+            className={css.toolBtn}
+            disabled={historyLoading === true}
+            title={t('history.hint')}
+            onClick={event => {
+              const rect = event.currentTarget.getBoundingClientRect()
+              onFileHistory(file.path, Math.round(rect.right), Math.round(rect.bottom + 6))
+            }}
+          >
+            <HistoryIcon />
+            <span>{t('history.toggle')}</span>
+          </button>
         )}
         <button type="button" className={css.toolBtn} onClick={onToggleFull} title={full ? t('collapseAll') : t('expandAll')}>
           {full ? <CollapseIcon /> : <ExpandIcon />}

@@ -127,6 +127,38 @@ export interface GitFileContentBinary {
 
 export type GitFileContentPayload = GitFileContentText | GitFileContentBinary
 
+/** One blame row: the commit that last touched that final line. */
+export interface GitBlameLine {
+  /** 40-hex commit that introduced the line. */
+  hash: string
+  /** Line number in the originating commit (1-based). */
+  origLine: number
+  /** Line number in the final (blamed) file (1-based). */
+  finalLine: number
+  /** Author name; empty for lines whose commit metadata was capped. */
+  author: string
+  /** Author time, unix seconds (0 when unparseable). */
+  timestamp: number
+  /** Commit subject; empty when metadata was capped. */
+  summary: string
+}
+
+/** Successful blame payload: one row per final file line (order = lines). */
+export interface GitBlamePayload {
+  ok: true
+  lines: GitBlameLine[]
+  /** True when the file has more lines than the host blames. */
+  truncated: boolean
+}
+
+/** Successful file-history payload: commits that touched one file. */
+export interface GitFileHistoryPayload {
+  ok: true
+  commits: GitCommitSummary[]
+  /** True when the log was cut at the host's commit cap. */
+  truncated: boolean
+}
+
 /** Successful `list-files` payload: every repository file for all-files mode. */
 export interface GitListFilesPayload {
   ok: true

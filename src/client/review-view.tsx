@@ -12,7 +12,7 @@ import type { RefObject } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
+import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { CommitMenu, type CommitMenuState } from './commit-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
@@ -89,9 +89,11 @@ async function loadFileDiff(cwd: string, path: string, origPath: string | undefi
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
 }
 
-/** Fetch one file's full content; keeps non-ok payloads as explicit failures. */
-async function loadFileContent(cwd: string, path: string): Promise<Exclude<DiffState, { kind: 'loading' }>> {
-  const payload = await hostCall<GitFileContentPayload & { error?: string }>('file-content', { cwd, path })
+/** Fetch one file's full content; keeps non-ok payloads as explicit failures.
+ *  A `ref` reads that history tree instead of the worktree (cat-file) —
+ *  the ref-range mode's file view has no worktree copy to read. */
+async function loadFileContent(cwd: string, path: string, ref?: string | null): Promise<Exclude<DiffState, { kind: 'loading' }>> {
+  const payload = await hostCall<GitFileContentPayload & { error?: string }>('file-content', ref ? { cwd, path, ref } : { cwd, path })
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
   return payload.binary
@@ -124,6 +126,12 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [hunkBusy, setHunkBusy] = useState(false)
   const [hunkNotice, setHunkNotice] = useState<string | null>(null)
   const [diff, setDiff] = useState<DiffState>({ kind: 'idle' })
+  /** Blame mode for the file view: on/off + loaded rows. */
+  const [blameOn, setBlameOn] = useState(false)
+  const [blameState, setBlameState] = useState<{ kind: 'idle' | 'loading' | 'ready' | 'failed'; lines: GitBlameLine[] | null; message: string | null }>({ kind: 'idle', lines: null, message: null })
+  /** Per-file history popover state (the diff header's history button). */
+  const [historyState, setHistoryState] = useState<{ kind: 'closed' } | { kind: 'loading' } | { kind: 'open'; x: number; y: number; commits: GitCommitSummary[]; truncated: boolean }>({ kind: 'closed' })
+  const historyPopRef = useRef<HTMLDivElement | null>(null)
   // All-files tree mode: the whole repository file list (lazily fetched).
   const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
   const [allFiles, setAllFiles] = useState<string[] | null>(null)
@@ -239,6 +247,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     document.addEventListener('mousedown', onDown)
     return () => { document.removeEventListener('mousedown', onDown) }
   }, [searchOptionsOpen])
+  useEffect(() => {
+    if (historyState.kind !== 'open') return
+    const onDown = (event: MouseEvent): void => {
+      const root = historyPopRef.current
+      if (root !== null && !root.contains(event.target as Node)) setHistoryState({ kind: 'closed' })
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => { document.removeEventListener('mousedown', onDown) }
+  }, [historyState.kind])
   // Follow preference edits made in the settings card (and any other tab
   // instance) through the shared store. Every user flip inside this tab goes
   // through an explicit settings.set at its control (see the callbacks
@@ -493,7 +510,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setDiff({ kind: 'loading' })
     const wantFile = selectedFile.unchanged === true || effectiveView === 'file'
     const loader = wantFile
-      ? loadFileContent(cwd, selected)
+      ? loadFileContent(cwd, selected, refsMode && targetRef !== null ? targetRef : null)
       : loadFileDiff(cwd, selected, selectedFile.origPath, selectedFile.untracked, diffFull, diffScope, baseRef, refsMode ? targetRef : null, wsIgnore)
     void loader.then(next => {
       if (alive) setDiff(next)
@@ -577,7 +594,39 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSelected(path)
     setDiffScope('all')
     setHunkNotice(null)
+    setBlameOn(false)
+    setHistoryState({ kind: 'closed' })
   }, [])
+
+  /** Blame rows for the file view: loaded on demand when the toggle is on. */
+  useEffect(() => {
+    if (!blameOn || cwd === undefined || selected === null || effectiveView !== 'file') {
+      setBlameState({ kind: 'idle', lines: null, message: null })
+      return
+    }
+    let alive = true
+    setBlameState({ kind: 'loading', lines: null, message: null })
+    void hostCall<GitBlamePayload>('blame', { cwd, path: selected }).then(payload => {
+      if (!alive) return
+      if (payload === null) setBlameState({ kind: 'failed', lines: null, message: t('state.hostUnavailable') })
+      else if (!payload.ok) setBlameState({ kind: 'failed', lines: null, message: 'blame failed' })
+      else setBlameState({ kind: 'ready', lines: payload.lines, message: null })
+    })
+    return () => { alive = false }
+  }, [blameOn, cwd, selected, effectiveView, t])
+
+  /** Open the per-file history popover (fetches the follow log). */
+  const openFileHistory = useCallback((path: string, x: number, y: number) => {
+    if (cwd === undefined) return
+    setHistoryState({ kind: 'loading' })
+    void hostCall<GitFileHistoryPayload>('file-history', { cwd, path }).then(payload => {
+      setHistoryState(current => {
+        if (current.kind !== 'loading') return current
+        if (payload === null || !payload.ok) return { kind: 'open', x, y, commits: [], truncated: false }
+        return { kind: 'open', x, y, commits: payload.commits, truncated: payload.truncated }
+      })
+    })
+  }, [cwd])
 
   /** One per-hunk operation (stage/unstage/revert): cut the standalone
    *  patch from the raw diff the pane is showing and hand it to host
@@ -677,7 +726,13 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setCompareMode(mode)
     setSelected(null)
     setDiffScope('all')
-    if (mode === 'refs') setTargetRef(previous => previous ?? 'HEAD')
+    if (mode === 'refs') {
+      // Both ends default to HEAD: the range is immediately ready (HEAD vs
+      // HEAD shows no files — the picker invites real picks) instead of
+      // parking the user on the guide empty state with a null base.
+      setBaseRef(previous => previous ?? 'HEAD')
+      setTargetRef(previous => previous ?? 'HEAD')
+    }
   }, [])
 
   /** Switch the main view between workspace changes and the commit graph. */
@@ -708,6 +763,17 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setDiffScope('all')
     setGraphListCollapsed(true)
   }, [selectedCommit])
+
+  /** Jump from the history popover to the graph: switch tabs and select the
+   *  commit when the loaded graph window has it (500-cap); otherwise just
+   *  open the graph (its load-more reaches older commits). */
+  const jumpToCommit = useCallback((hash: string) => {
+    setHistoryState({ kind: 'closed' })
+    const known = logState.kind === 'ready' && logState.commits.some(commit => commit.hash === hash)
+    changeViewTab('graph')
+    if (known) selectCommit(hash)
+  }, [logState, changeViewTab, selectCommit])
+
 
   /** Show the worktree's uncommitted changes in the graph detail pane. */
   const selectGraphWorktree = useCallback(() => {
@@ -1665,6 +1731,31 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           t={t}
         />
       )}
+      {historyState.kind === 'open' && (
+        // Fixed-position card (the graph hover-card pattern): the diff pane's
+        // scroll container would clip an absolute popover.
+        <div
+          ref={historyPopRef}
+          className={css.historyPop}
+          style={{ top: historyState.y, left: Math.max(8, historyState.x - 340) }}
+          onClick={event => { event.stopPropagation() }}
+        >
+          <div className={css.pickerGroupLabel}>{t('history.title')}</div>
+          <div className={css.historyScroll}>
+            {historyState.commits.length === 0 && <div className={css.pickerEmpty}>{t('history.empty')}</div>}
+            {historyState.commits.map(commit => {
+              const known = logState.kind === 'ready' && logState.commits.some(item => item.hash === commit.hash)
+              return (
+                <button key={commit.hash} type="button" className={css.pickerItem} title={known ? t('history.jumpHint') : t('history.unknownHint')} onClick={() => { jumpToCommit(commit.hash) }}>
+                  <span className={css.pickerItemName}>{commit.subject}</span>
+                  <span className={css.pickerItemMeta}>{commit.hash.slice(0, 7) + ' \u00b7 ' + fmtGraphDate(commit.timestamp)}</span>
+                </button>
+              )
+            })}
+            {historyState.truncated && <div className={css.pickerEmpty}>{t('history.truncated')}</div>}
+          </div>
+        </div>
+      )}
       <div className={css.body}>
         {viewTab === 'graph' ? (
           <>
@@ -1937,6 +2028,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                     onViewChange={changeViewMode}
                     syntaxHighlight={syntaxHighlight}
                     search={searchSpec}
+                    blameOn={blameOn}
+                    onToggleBlame={() => { setBlameOn(value => !value) }}
+                    blameState={blameState}
                     t={t}
                   />
                 )
@@ -1954,7 +2048,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           onScopeChange={setDiffScope}
                           view={effectiveView}
                           onViewChange={changeViewMode}
-                          showViewSwitch={!refsMode}
+                          showViewSwitch
                           wsIgnore={wsIgnore}
                           syntaxHighlight={syntaxHighlight}
                           onToggleWs={toggleWsIgnore}
@@ -1965,6 +2059,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                       : undefined}
                     onHunkOp={(action, hi) => { void executeHunkOp(action, hi, selectedFile.path, diff.kind === 'text' ? diff.diff : '') }}
                     hunkBusy={hunkBusy}
+                    onFileHistory={openFileHistory}
+                    historyLoading={historyState.kind === 'loading'}
                     hunkNotice={hunkNotice}
                     useInput={useInput}
                     inputActions={inputActions}

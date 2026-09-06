@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
-import { gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileDiff, gitHunkOp, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
+import { gitBlame, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileDiff, gitFileHistory, gitFileContent, gitHunkOp, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -296,6 +296,35 @@ assert.ok(patch0 !== null && patch1 !== null)
   const unconfirmed = await gitHunkOp(repo, HUNK_FILE, patch0, 'stage', false).catch(error => ({ ok: false, error: String(error && error.message) }))
   assert.equal(unconfirmed.ok, false)
   assert.match(unconfirmed.error, /confirm/)
+}
+
+// 10. blame + file-history + file-content@ref: the history-tracing trio.
+{
+  const blamed = await gitBlame(repo, 'hunk.txt', true)
+  assert.equal(blamed.ok, true)
+  assert.ok(blamed.lines.length >= 20)
+  const authors = new Set(blamed.lines.map(row => row.author))
+  // 'Not Committed Yet' = the worktree drift left by the hunk-op tests —
+  // git's own label for uncommitted lines.
+  assert.ok(authors.has('tester'))
+  assert.ok(authors.has('Not Committed Yet'))
+  assert.equal(blamed.lines[0].summary, 'hunk baseline')
+
+  const history = await gitFileHistory(repo, 'hunk.txt')
+  assert.equal(history.ok, true)
+  assert.ok(history.commits.length >= 1)
+  assert.equal(history.commits[0].subject, 'hunk baseline')
+  assert.ok(/^[0-9a-f]{40}$/.test(history.commits[0].hash))
+
+  const tip = history.commits[0].hash
+  const atRef = await gitFileContent(repo, 'hunk.txt', tip)
+  assert.equal(atRef.ok, true)
+  if (atRef.binary) throw new Error('expected text content')
+  assert.ok(atRef.content.startsWith('line 1\n'))
+  // a bad ref bounces before git runs
+  let rejected = false
+  try { await gitFileContent(repo, 'hunk.txt', '../escape') } catch { rejected = true }
+  assert.equal(rejected, true)
 }
 
 for (const root of roots) rmSync(root, { recursive: true, force: true })

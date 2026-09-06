@@ -1724,6 +1724,45 @@ body[data-dsh-bg-glass] .root {
   min-width: 0;
 }
 
+/* Blame mode adds an author/hash gutter column in front of the line number. */
+.fileRowGridBlame {
+  grid-template-columns: minmax(64px, 120px) 44px minmax(0, 1fr);
+}
+
+.blameGutter {
+  padding: 0 6px 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 10.5px;
+  line-height: 1.6;
+  user-select: none;
+}
+
+/* The per-file history card: fixed-position (scroll containers clip
+ * absolute popovers), grouped like the pickers. */
+.historyPop {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  width: 340px;
+  max-width: calc(100vw - 48px);
+  max-height: min(50vh, 380px);
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+.historyScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
 /* Unified (single-column) diff rows: gutter (number + sign) + one text cell. */
 .rowU {
   position: relative;

@@ -9,7 +9,7 @@ import { makeSearchEngine, MAX_RENDER_ROWS, type SearchSpec } from './diff-parse
 import { makeLineHighlighter, type TokenSpan } from './highlight.ts'
 import { FileIcon, LineLeftIcon, LinesIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
-import type { ChangedFile } from '../contract.ts'
+import type { ChangedFile, GitBlameLine } from '../contract.ts'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS } from './locales.ts'
 import css from './review.module.css'
@@ -91,6 +91,11 @@ export interface FilePaneProps {
   onViewChange: (next: FileViewMode) => void
   /** Whether lines get lightweight syntax coloring (the preference). */
   syntaxHighlight: boolean
+  /** Blame mode: per-line last-touched author/hash gutter. */
+  blameOn: boolean
+  onToggleBlame: () => void
+  /** Blame rows (when loaded); same order/length as the file's lines. */
+  blameState: { kind: 'idle' | 'loading' | 'ready' | 'failed'; lines: GitBlameLine[] | null; message: string | null }
   t: T
 }
 
@@ -98,7 +103,7 @@ export interface FilePaneProps {
  * The pane showing one file's full content.
  * @param props - the file, its content state and the view switch.
  */
-export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, t }: FilePaneProps) {
+export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, blameOn, onToggleBlame, blameState, t }: FilePaneProps) {
   const engine = useMemo(() => makeSearchEngine(search), [search])
   const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight])
   const lines = useMemo(() => {
@@ -116,18 +121,45 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
         <span className={css.diffPath}>{file.path}</span>
         <span className={css.diffHeaderSpacer} />
         {canShowDiff && <ViewSwitch active={view} onViewChange={onViewChange} t={t} />}
+        {/* Blame toggle: the gutter answers "who last touched this line". */}
+        <button
+          type="button"
+          className={css.toolBtn + (blameOn ? ' ' + css.toolBtnActive : '')}
+          aria-pressed={blameOn}
+          title={t('blame.hint')}
+          onClick={onToggleBlame}
+        >
+          <span>{t('blame.toggle')}</span>
+        </button>
       </div>
       {binary && (
         <div className={css.noticeRow}>{size > 0 ? t('diff.binarySize', { size }) : t('diff.binary')}</div>
       )}
       {!binary && truncated && <div className={css.noticeRow}>{t('file.truncated')}</div>}
+      {blameOn && blameState.kind === 'loading' && <div className={css.noticeRow}>{t('blame.loading')}</div>}
+      {blameOn && blameState.kind === 'failed' && <div className={css.noticeRow + ' ' + css.noticeError}>{blameState.message ?? ''}</div>}
       <div className={css.diffScroll}>
         {loading && <div className={css.paneNotice}>{t('file.loading')}</div>}
         {!loading && !binary && lines.length === 0 && (
           <div className={css.paneNotice}>{t('file.empty')}</div>
         )}
         {!loading && !binary && visible.map((line, index) => (
-          <div key={index} className={css.fileRowGrid}>
+          <div key={index} className={css.fileRowGrid + (blameOn && blameState.kind === 'ready' && blameState.lines !== null ? ' ' + css.fileRowGridBlame : '')}>
+            {blameOn && blameState.kind === 'ready' && blameState.lines !== null && (
+              (() => {
+                const row = blameState.lines![index] ?? null
+                if (row === null) return <span className={css.blameGutter} />
+                const previous = index > 0 ? blameState.lines![index - 1] ?? null : null
+                const repeated = previous !== null && previous.hash === row.hash
+                const short = row.hash.slice(0, 7)
+                const author = row.author.length > 10 ? row.author.slice(0, 9) + '\u2026' : row.author
+                return (
+                  <span className={css.blameGutter} title={repeated ? undefined : row.author + ' \u00b7 ' + row.hash + ' \u00b7 ' + row.summary}>
+                    {repeated ? '' : author + ' ' + short}
+                  </span>
+                )
+              })()
+            )}
             <span className={css.fileNo}>{index + 1}</span>
             <span className={css.cellText}>{highlightedLine(line, engine, highlighter?.line(line) ?? null)}</span>
           </div>

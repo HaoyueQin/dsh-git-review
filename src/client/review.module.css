@@ -2373,9 +2373,10 @@ body[data-dsh-bg-glass] .commitHeader {
 }
 
 /* Commit-message body under the subject (subject-only messages hide it).
- * Capped: a release-notes body must not push the files/diff off the pane. */
+ * Capped: a release-notes body must not push the files/diff off the pane.
+ * Tall enough for typical hard-wrapped bodies; longer ones keep scrolling. */
 .commitBody {
-  max-height: 120px;
+  max-height: 300px;
   overflow: auto;
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;

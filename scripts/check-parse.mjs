@@ -9,7 +9,7 @@ import { buildHunkPatch } from '../src/client/diff-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { langOf, makeLineHighlighter, sliceTokens, splitLineByTokens, tokenizeLine } from '../src/client/highlight.ts'
-import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
+import { badgeFor, badgesFor, buildFileTree, filterFiles, isUnmerged, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
 import { previewKindForPath } from '../src/client/preview-kind.ts'
@@ -218,6 +218,19 @@ assert.deepEqual(addDelete.map(b => b.glyph), ['+', '\u2212'])
 assert.deepEqual(addDelete.map(b => b.staged), [true, false])
 assert.deepEqual(badgesFor({ path: 'x', x: ' ', y: ' ', added: 0, deleted: 0, binary: false, untracked: false }).map(b => b.key), ['modified'])
 assert.deepEqual(badgesFor({ ...treeFiles[2] }).map(b => [b.key, b.staged]), [['untracked', undefined]])
+// 17b. Unmerged states (both-sided DD included) collapse to one red conflict
+//      badge; staged-add + worktree-delete (A/D) stays two normal badges.
+for (const pair of ['UU', 'AA', 'DD', 'AU', 'UA', 'DU', 'UD']) {
+  assert.ok(isUnmerged(pair[0], pair[1]), pair + ' is unmerged')
+  assert.deepEqual(badgesFor({ path: 'x', x: pair[0], y: pair[1], added: 0, deleted: 0, binary: false, untracked: false }).map(b => b.key), ['conflict'])
+}
+assert.ok(!isUnmerged('A', 'D') && !isUnmerged('M', ' ') && !isUnmerged(' ', ' '))
+const subTree = buildFileTree([
+  { path: 'lib/z.ts', x: ' ', y: 'M', added: 1, deleted: 0, binary: false, untracked: false },
+  { path: 'lib/a.ts', x: ' ', y: 'M', added: 1, deleted: 0, binary: false, untracked: false },
+])
+const subLib = subTree.children[0]
+assert.deepEqual(subLib.kind === 'dir' ? subLib.children.map(c => c.name) : [], ['a.ts', 'z.ts'])
 
 // 18. mergeAllFiles: changed rows pass through, other paths become unchanged
 //     rows with no badge; input order is preserved.

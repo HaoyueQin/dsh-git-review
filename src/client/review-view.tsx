@@ -29,7 +29,7 @@ import { collectMdAssets, htmlFallbackForPreview, MD_ASSET_CAP, resolveMdAsset, 
 import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
-import { filterFiles, mergeAllFiles } from './file-tree.ts'
+import { filterFiles, isUnmerged, mergeAllFiles } from './file-tree.ts'
 import { createViewedStore } from './viewed.ts'
 import { createDraftBox, type CommentDraft } from './comment-drafts.ts'
 import { TreePanel } from './tree-panel.tsx'
@@ -975,7 +975,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
    *  and the banner's continue/abort actions. */
   const inProgress = ready?.inProgress ?? null
   const conflictCount = useMemo(
-    () => (ready === null ? 0 : ready.files.filter(file => /[UA]{2}|U[AD]|DU/.test(file.x + file.y)).length),
+    () => (ready === null ? 0 : ready.files.filter(file => isUnmerged(file.x, file.y)).length),
     [ready],
   )
   const conflictFinish = useCallback(async (action: 'continue' | 'abort') => {
@@ -2404,7 +2404,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                   staged: !file.untracked && file.x !== ' ',
                   unstaged: file.y !== ' ',
                   untracked: file.untracked,
-                  conflicted: /[UA]{2}|U[AD]|DU/.test(file.x + file.y),
+                  conflicted: isUnmerged(file.x, file.y),
                 },
               })
             }}

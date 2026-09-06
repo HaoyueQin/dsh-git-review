@@ -71,8 +71,24 @@ export function buildFileTree(files: readonly ChangedFile[]): TreeDir {
     return total
   }
   countFiles(root)
-  sortChildren(root.children)
+  const sortDeep = (dir: TreeDir): void => {
+    sortChildren(dir.children)
+    for (const child of dir.children) {
+      if (child.kind === 'dir') sortDeep(child)
+    }
+  }
+  sortDeep(root)
   return root
+}
+
+/** True when a porcelain X/Y pair is an unmerged conflict state (both sides
+ *  touched the path: UU/AA/DD/AU/UA/DU/UD). Single-sided D (staged delete
+ *  vs worktree delete is DD; A+D is a normal staged-add + worktree-delete)
+ *  never counts — one shared predicate for badges, banner counts and menus. */
+export function isUnmerged(x: string, y: string): boolean {
+  const pair = x + y
+  return pair === 'UU' || pair === 'AA' || pair === 'DD'
+    || pair === 'AU' || pair === 'UA' || pair === 'DU' || pair === 'UD'
 }
 
 /** Flat filter over the file list (empty query returns the input order). */
@@ -135,9 +151,9 @@ function badgeForCode(code: string): FileBadge | null {
 export function badgesFor(file: ChangedFile): FileBadge[] {
   if (file.unchanged === true) return []
   if (file.untracked) return [{ glyph: '?', key: 'untracked', tone: 'Muted' }]
-  // An unmerged row (UU/AA/DD/UA/DU…) shows one red conflict badge; the
-  // split staged/unstaged halves have no meaning mid-conflict.
-  if (/[UA]{2}|U[AD]|DU/.test(file.x + file.y)) return [{ glyph: 'U', key: 'conflict', tone: 'Error' }]
+  // An unmerged row (UU/AA/DD/AU/UA/DU/UD) shows one red conflict badge;
+  // the split staged/unstaged halves have no meaning mid-conflict.
+  if (isUnmerged(file.x, file.y)) return [{ glyph: 'U', key: 'conflict', tone: 'Error' }]
   const out: FileBadge[] = []
   const x = badgeForCode(file.x)
   if (x !== null) out.push({ ...x, staged: true })

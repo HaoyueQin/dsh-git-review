@@ -24,6 +24,7 @@ export interface TokenSpan {
 /** Map a file path to its highlighting language family (null = no highlighting). */
 export function langOf(path: string): string | null {
   const name = path.split('/').pop() ?? path
+  if (/^dockerfile/i.test(name) && (name.length === 10 || name[10] === '.')) return 'sh'
   const dot = name.lastIndexOf('.')
   if (dot <= 0) return null
   const ext = name.slice(dot + 1).toLowerCase()
@@ -56,7 +57,8 @@ const LINE_COMMENT: Record<string, readonly string[]> = {
   py: ['#'],
   sh: ['#'],
   json: ['//'],
-  css: ['//'],
+  // CSS has no line comments: '//' would eat url(https://...) tails.
+  css: [],
 }
 
 const STRING_QUOTES: Record<string, readonly string[]> = {
@@ -100,19 +102,41 @@ export function tokenizeLine(line: string, lang: string): TokenSpan[] {
       at = Math.min(end, line.length)
       continue
     }
-    // number: word-adjacent digits (1.5e3, 0xFF, 1_000)
+    // number: decimal with _ separators, fraction and exponent tails, plus
+    // 0x/0o/0b-prefixed literals. Letters ride along only inside a prefix,
+    // so '404abc' highlights '404' and leaves 'abc' plain.
     if (/[0-9]/.test(ch) && (at === 0 || !isWordChar(line[at - 1]!))) {
       let end = at
-      while (end < line.length && /[0-9a-fA-FxXoObB._]/.test(line[end]!)) end += 1
+      const afterZero = line[at] === '0' ? (line[at + 1] ?? '') : ''
+      const prefixed = afterZero === 'x' || afterZero === 'X' || afterZero === 'o' || afterZero === 'O' || afterZero === 'b' || afterZero === 'B'
+      if (prefixed) {
+        end += 2
+        while (end < line.length && /[0-9a-zA-Z_]/.test(line[end]!)) end += 1
+      } else {
+        while (end < line.length && /[0-9_]/.test(line[end]!)) end += 1
+        if (line[end] === '.' && /[0-9]/.test(line[end + 1] ?? '')) {
+          end += 1
+          while (end < line.length && /[0-9_]/.test(line[end]!)) end += 1
+        }
+        const expLead = line[end] === 'e' || line[end] === 'E' ? 1 : 0
+        const expSign = expLead === 1 && (line[end + 1] === '+' || line[end + 1] === '-') ? 1 : 0
+        if (expLead === 1 && /[0-9]/.test(line[end + 1 + expSign] ?? '')) {
+          end += 1 + expSign
+          while (end < line.length && /[0-9_]/.test(line[end]!)) end += 1
+        }
+      }
       push(at, end, 'num')
       at = end
       continue
     }
-    // identifier: keyword check on word boundaries
+    // identifier: keyword check on word boundaries, case-insensitively -
+    // 'SELECT' lights up like 'select', while cased words such as Python's
+    // True/False/None still hit their literal entries first.
     if (isWordChar(ch)) {
       let end = at
       while (end < line.length && isWordChar(line[end]!)) end += 1
-      if (keywords.has(line.slice(at, end))) push(at, end, 'kw')
+      const word = line.slice(at, end)
+      if (keywords.has(word) || keywords.has(word.toLowerCase())) push(at, end, 'kw')
       at = end
       continue
     }
@@ -133,10 +157,13 @@ export function makeLineHighlighter(path: string, budget = 4_000_000): { line(te
   return {
     line(text: string): TokenSpan[] | null {
       if (cache.has(text)) return cache.get(text)!
-      if (left <= 0) return null
+      if (left < 0) return null
       left -= text.length
-      const tokens = left > 0 ? tokenizeLine(text, lang) : null
-      if (cache.size > 8000) cache.clear()
+      const tokens = left >= 0 ? tokenizeLine(text, lang) : null
+      if (cache.size > 8000) {
+        const oldest = Array.from(cache.keys()).slice(0, 4000)
+        for (let d = 0; d < oldest.length; d++) cache.delete(oldest[d]!)
+      }
       cache.set(text, tokens)
       return tokens
     },

@@ -171,6 +171,20 @@ parsed = parseUnifiedDiff([
 ].join('\n'))
 assert.equal(parsed.rename, true)
 assert.deepEqual(parseUnifiedDiff(''), { hunks: [], binary: false, oldPath: null, newPath: null, newFile: false, deletedFile: false, rename: false })
+// 13b. Parser edges: empty results are fresh copies, stray '@' lines end
+//      the hunk, quoted headers strip, and no-newline markers never leak
+//      across file boundaries.
+const emptyA = parseUnifiedDiff('')
+emptyA.hunks.push({ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, section: '', rows: [] })
+assert.equal(parseUnifiedDiff('').hunks.length, 0, 'empty base is not shared-mutable')
+const strayAt = parseUnifiedDiff(['diff --git a/a b/a', '--- a/a', '+++ b/a', '@@ -1,1 +1,1 @@', '-old', '@stray', '+new'].join('\n'))
+assert.equal(strayAt.hunks.length, 1)
+assert.equal(strayAt.hunks[0].rows.length, 1, 'stray @ ends the hunk')
+const quoted = parseUnifiedDiff(['diff --git "a/we ird" "b/we ird"', '--- "a/we ird"', '+++ "b/we ird"', '@@ -1,1 +1,1 @@', '-o', '+n'].join('\n'))
+assert.equal(quoted.newPath, 'we ird')
+const leaky = parseUnifiedDiff(['diff --git a/a b/a', '--- a/a', '+++ b/a', '@@ -1,1 +1,1 @@', '-old', '+new', 'diff --git a/b b/b', '\\ No newline at end of file'].join('\n'))
+const leakyDel = leaky.hunks[0].rows.find(r => r.kind === 'del')
+assert.equal(leakyDel?.left?.noNewline, undefined, 'marker after boundary marks nothing')
 
 // 14. Untracked pseudo diff (host-synthesized shape) parses as a new file.
 parsed = parseUnifiedDiff([
@@ -593,6 +607,17 @@ assert.equal(hl.line('y = 2'), null, 'budget exhausted -> plain')
 const sliced = sliceTokens([{ start: 0, end: 10, kind: 'kw' }], 2, 5)
 assert.deepEqual(sliced, [{ start: 0, end: 3, kind: 'kw' }])
 assert.equal(sliceTokens(null, 0, 5), null)
+// 40b. Tokenizer edges: uppercase keywords, bare Dockerfile, CSS urls,
+//      tight numbers, exact-budget lines.
+assert.deepEqual(tokenizeLine('SELECT * FROM tbl WHERE x', 'sql').map(t => t.kind), ['kw', 'kw', 'kw'])
+assert.equal(langOf('Dockerfile'), 'sh')
+assert.equal(langOf('Dockerfile.dev'), 'sh')
+assert.ok(tokenizeLine('background: url(https://e.com/a.png)', 'css').every(t => t.kind !== 'com'), 'css has no line comments')
+const numToks = tokenizeLine('x = 404abc + 0xFF + 1.5e3', 'c')
+assert.deepEqual(numToks.filter(t => t.kind === 'num').map(t => 'x = 404abc + 0xFF + 1.5e3'.slice(t.start, t.end)), ['404', '0xFF', '1.5e3'])
+const exactHl = makeLineHighlighter('a.ts', 5)
+assert.notEqual(exactHl.line('ab = '), null, 'exact-budget line still tokenizes')
+assert.equal(exactHl.line('more'), null, 'spent budget degrades')
 // 40b. Gap-preserving segments: tokens plus the plain text between them tile
 //      the line exactly, so highlight rendering never drops identifiers or
 //      whitespace (regression: renderers that mapped tokens alone lost text).

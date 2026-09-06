@@ -97,9 +97,12 @@ export function buildHunkPatch(raw: string, hunkIndex: number): string | null {
   return [...lines.slice(0, headEnd), ...lines.slice(bodyStart, bodyEnd), ''].join('\n')
 }
 
-/** Strip the a/ b/ prefix git prepends to diff paths. */
+/** Strip the a/ b/ prefix git prepends to diff paths. Headers C-quote
+ *  exotic names, so one layer of double quotes comes off first (a quoted
+ *  'a/...' is a prefix, a literal leading quote is pathological input). */
 function stripPrefix(field: string): string {
-  return field.startsWith('a/') || field.startsWith('b/') ? field.slice(2) : field
+  const unquoted = field.length >= 2 && field.startsWith('"') && field.endsWith('"') ? field.slice(1, -1) : field
+  return unquoted.startsWith('a/') || unquoted.startsWith('b/') ? unquoted.slice(2) : unquoted
 }
 
 /** Pair one changed run: i-th deletion with i-th addition, extras one-sided. */
@@ -118,7 +121,9 @@ function pairRun(dels: readonly DiffCell[], adds: readonly DiffCell[], rows: Pai
  * unknown line inside a hunk ends it (hunks resume on the next @@).
  */
 export function parseUnifiedDiff(text: string): ParsedDiff {
-  if (text === '') return EMPTY_DIFF
+  // Fresh copy: the shared base must never escape mutably (a caller pushing
+  // into .hunks would poison every later empty parse).
+  if (text === '') return { ...EMPTY_DIFF, hunks: [] }
   const lines = text.split('\n')
   // A trailing '' from the final newline is a split artifact, not a line.
   if (lines[lines.length - 1] === '') lines.pop()
@@ -151,6 +156,8 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     result.hunks.push(created)
     oldNo = created.oldStart
     newNo = created.newStart
+    // A new hunk owns its cells: a stale marker must not leak across.
+    lastCell = null
     return created
   }
   let hunk: ParsedHunk | null = null
@@ -158,6 +165,9 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     if (line.startsWith('diff --git ')) {
       flushRun(hunk)
       hunk = null
+      // A later '\ No newline' marker must not annotate the previous
+      // file's last cell (multi-file texts share this walk).
+      lastCell = null
       continue
     }
     if (hunk === null) {
@@ -181,8 +191,11 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       continue
     }
     if (line.startsWith('@')) {
+      // A non-hunk '@' line is malformed input: end the hunk (per the
+      // docstring above), never silently continue it.
       const hunkMatch = HUNK_RE.exec(line)
-      hunk = hunkMatch !== null ? startHunk(hunkMatch, hunk) : (flushRun(hunk), hunk)
+      hunk = hunkMatch !== null ? startHunk(hunkMatch, hunk) : (flushRun(hunk), null)
+      lastCell = null
       continue
     }
     if (line.startsWith('\\')) {
@@ -222,7 +235,6 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
 export function splitByMatch(text: string, search: string): string[] {
   if (search === '') return [text]
   const q = search.toLowerCase()
-  if (q === '') return [text]
   const lower = text.toLowerCase()
   const parts: string[] = []
   let cursor = 0
@@ -289,7 +301,7 @@ export function makeSearchEngine(spec: SearchSpec): SearchEngine {
     active: false,
   }
   if (query.trim() === '') return empty
-  const flags = (spec.caseSensitive ? '' : 'i') + (spec.regex ? 'g' : 'g')
+  const flags = (spec.caseSensitive ? '' : 'i') + 'g'
   if (spec.regex === true) {
     let re: RegExp
     try {
@@ -309,7 +321,7 @@ export function makeSearchEngine(spec: SearchSpec): SearchEngine {
           cursor = match.index + match[0].length
         }
         out.push(text.slice(cursor))
-        return out.length === 1 ? out : out
+        return out
       },
       count: (text: string) => {
         let countValue = 0
@@ -328,10 +340,13 @@ export function makeSearchEngine(spec: SearchSpec): SearchEngine {
   const q = spec.caseSensitive ? query : query.toLowerCase()
   const lowerCached = new Map<string, string>()
   const lower = (text: string): string => {
+    // Long lines skip the cache: they are the memory hogs (full text kept
+    // twice per entry) and the least likely to repeat.
+    if (text.length > 1024) return spec.caseSensitive ? text : text.toLowerCase()
     const cached = lowerCached.get(text)
     if (cached !== undefined) return cached
     const value = spec.caseSensitive ? text : text.toLowerCase()
-    if (lowerCached.size < 5000) lowerCached.set(text, value)
+    if (lowerCached.size < 2000) lowerCached.set(text, value)
     return value
   }
   return {

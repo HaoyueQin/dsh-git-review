@@ -43,6 +43,12 @@ export interface ReviewSettingsSection {
   syntaxHighlight: boolean
 }
 
+/** Schema field names (check-meta locks these to DEFAULT_PREFS' keys — a
+ *  preference added on one side but not the other breaks the build). */
+export const REVIEW_SETTINGS_FIELDS = [
+  'viewMode', 'searchScope', 'graphCollapsed', 'searchCS', 'searchRegex', 'wsIgnore', 'syntaxHighlight',
+] as const
+
 export const ReviewSettingsSchema: z<ReviewSettingsSection> = z.object({
   // Loose: a stale persisted value degrades to the default instead of
   // rejecting the whole section (same discipline as dsh-context's schema).

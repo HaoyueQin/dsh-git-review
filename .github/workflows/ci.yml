@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches:
+      # No 'v*' branch pattern: releases ride version TAGS (release.yml),
+      # and a v*-named branch should never be mistaken for one.
       - main
-      - 'v*'
     paths:
       - 'src/**'
       - 'scripts/**'
@@ -24,6 +25,7 @@ on:
       - 'tsconfig.json'
       - 'package.json'
       - 'pnpm-lock.yaml'
+      - 'lib/**'
       - '.github/workflows/ci.yml'
 
 # Cancel a superseded run when a newer push lands on the same branch.
@@ -54,6 +56,9 @@ jobs:
       - run: pnpm check:parse
       # Real-git fixture integration (repositories under .tmp-check-git/).
       - run: pnpm check:git
+      # Compilers-blind consistency (css refs, dynamic locale keys,
+      # manifest, prefs/schema lock, dispatch coverage).
+      - run: pnpm check:meta
       - run: pnpm build
       # lib/ is committed so the tab runs without build rights; a source
       # change without a rebuilt lib would ship stale artifacts. All bundled

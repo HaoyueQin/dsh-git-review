@@ -35,6 +35,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "check:parse": "node scripts/check-parse.mjs",
     "check:git": "node scripts/check-git.mjs",
+    "check:meta": "node scripts/check-meta.mjs",
     "build:clean": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\""
   },
   "exports": {

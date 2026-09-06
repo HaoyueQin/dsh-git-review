@@ -277,3 +277,94 @@ export interface GitLastCommitPayload {
   /** Full commit message body (the textarea prefill). */
   message: string
 }
+
+/* ── request shapes (client → host, POST JSON bodies) ──────────────────
+ *
+ * One entry per dispatch action (see apply() in src/index.ts): the client's
+ * hostCall bodies are checked against this map at compile time, so a
+ * renamed/added wire field breaks the build instead of the tab. Actions the
+ * client composes dynamically ('branch-'+x, history/stage unions) bypass
+ * the map through hostCall's string fallback — deliberately, with a note
+ * at each site. */
+
+export interface GitStatusArgs { cwd: string; base: string | null; target: string | null; ws: boolean }
+export interface GitFileDiffArgs {
+  cwd: string; path: string; origPath: string | undefined; untracked: boolean
+  full: boolean; scope: 'all' | 'staged' | 'unstaged'
+  base: string | null; target: string | null; ws: boolean
+}
+export interface GitFileRefArgs { cwd: string; path: string; ref?: string }
+export interface GitCwdArgs { cwd: string }
+export interface GitLogArgs { cwd: string; limit?: number; skip?: number }
+export interface GitCommitFilesArgs { cwd: string; commit: string }
+export interface GitCommitArgs { cwd: string; message: string; mode: 'all' | 'staged'; amend: boolean; confirm: true }
+export interface GitConfirmArgs { cwd: string; confirm: true }
+export interface GitPathsArgs { cwd: string; paths: string[]; confirm: true }
+export interface GitHunkOpArgs { cwd: string; path: string; patch: string; action: 'stage' | 'unstage' | 'revert'; confirm: true }
+export type GitStashArgs =
+  | { cwd: string; action: 'list' }
+  | { cwd: string; action: 'push' | 'apply' | 'pop' | 'drop'; index?: number; includeUntracked?: boolean; confirm: true }
+export interface GitResetArgs { cwd: string; commit: string; mode?: 'soft' | 'mixed' | 'hard'; confirm: true }
+export interface GitCommitTargetArgs { cwd: string; commit: string; confirm: true }
+export interface GitMergeArgs { cwd: string; name: string; noFf: boolean; confirm: true }
+export interface GitPullArgs { cwd: string; rebase: boolean; confirm: true }
+export interface GitConflictResolveArgs { cwd: string; path: string; side: 'ours' | 'theirs'; confirm: true }
+export interface GitConflictFinishArgs { cwd: string; action: 'continue' | 'abort'; kind: 'merge' | 'rebase' | 'cherry-pick' | 'revert'; confirm: true }
+export interface GitBranchCreateArgs { cwd: string; name: string; startPoint?: string; confirm: true }
+export interface GitBranchNameArgs { cwd: string; name: string; confirm: true }
+export interface GitBranchDeleteArgs { cwd: string; name: string; force?: boolean; confirm: true }
+export interface GitBranchRenameArgs { cwd: string; name: string; newName: string; confirm: true }
+export interface GitBranchTrackArgs { cwd: string; remote: string; local?: string; confirm: true }
+export interface GitTagCreateArgs { cwd: string; name: string; target?: string; confirm: true }
+export interface GitTagNameArgs { cwd: string; name: string; confirm: true }
+export interface GitBlameArgs { cwd: string; path: string; ref?: string }
+export interface GitFileHistoryArgs { cwd: string; path: string }
+export interface GitSearchArgs {
+  cwd: string; query: string; base: string | null; target: string | null
+  mode: 'diff' | 'content'; cs: boolean; rx: boolean; ws: boolean
+}
+export type GitFileOpArgs =
+  | { cwd: string; path: string; action: 'rename'; newPath: string; confirm: true }
+  | { cwd: string; path: string; action: 'delete'; confirm: true }
+export interface GitOpenWithArgs { cwd: string; path: string; app: OpenApp['id']; confirm: true }
+/** Action → request-body map (38 dispatch actions; ping/asset are GET). */
+export interface GitActionArgs {
+  status: GitStatusArgs
+  'file-diff': GitFileDiffArgs
+  refs: GitCwdArgs
+  log: GitLogArgs
+  'commit-files': GitCommitFilesArgs
+  commit: GitCommitArgs
+  push: GitConfirmArgs
+  stage: GitPathsArgs
+  unstage: GitPathsArgs
+  discard: GitPathsArgs
+  'hunk-op': GitHunkOpArgs
+  fetch: GitConfirmArgs
+  stash: GitStashArgs
+  'last-commit': GitCwdArgs
+  reset: GitResetArgs
+  revert: GitCommitTargetArgs
+  'cherry-pick': GitCommitTargetArgs
+  merge: GitMergeArgs
+  pull: GitPullArgs
+  'conflict-resolve': GitConflictResolveArgs
+  'conflict-finish': GitConflictFinishArgs
+  'branch-create': GitBranchCreateArgs
+  'branch-switch': GitBranchNameArgs
+  'branch-delete': GitBranchDeleteArgs
+  'branch-rename': GitBranchRenameArgs
+  'branch-track': GitBranchTrackArgs
+  'tag-create': GitTagCreateArgs
+  'tag-delete': GitTagNameArgs
+  'tag-push': GitTagNameArgs
+  blame: GitBlameArgs
+  'file-history': GitFileHistoryArgs
+  'file-content': GitFileRefArgs
+  'file-bytes': GitFileRefArgs
+  'list-files': GitCwdArgs
+  search: GitSearchArgs
+  'file-op': GitFileOpArgs
+  'open-with': GitOpenWithArgs
+  apps: Record<string, never>
+}

@@ -5,7 +5,7 @@
 // history / content, plus J8 tags + remote tracking, J3 log paging, J9 search
 // modes, file-op rename/delete — plus the GIT_DIR env sanitization and the
 // J9-2 streaming caps. Requires Node >= 23.6 (native TS stripping) and git
-// on PATH.
+// >= 2.28 on PATH (`init -b` fixtures).
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'

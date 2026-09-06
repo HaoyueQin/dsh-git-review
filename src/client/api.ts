@@ -34,10 +34,21 @@ async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): P
   }
 }
 
+import type { GitActionArgs } from '../contract.ts'
+
 /**
  * POST one action to the fenced API.
+ *
+ * The body is checked against the contract's per-action request map, so a
+ * renamed/added wire field breaks the build instead of the tab. Actions
+ * the client composes dynamically (a `string`-typed key) fall back to
+ * unchecked bodies — the four such sites say so explicitly.
  * @returns the parsed payload, or null when the host half is absent/unreachable.
  */
+export async function hostCall<T, A extends keyof GitActionArgs>(action: A, body: GitActionArgs[A]): Promise<T | null>;
+// Dynamically composed actions ('branch-'+x — a plain string key) bypass
+// the map: the two such sites are one line each and covered by check-git.
+export async function hostCall<T>(action: string, body: unknown): Promise<T | null>;
 export async function hostCall<T>(action: string, body: unknown): Promise<T | null> {
   try {
     const res = await fetchWithTimeout(BASE + '/' + encodeURIComponent(action), {

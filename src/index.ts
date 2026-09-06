@@ -847,22 +847,25 @@ export async function gitFileHistory(cwd: unknown, path: unknown): Promise<GitFi
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
-  let raw: string
-  try {
-    raw = await runGit(repoRoot, [
-      'log', '--follow', '--date-order',
-      '--max-count=' + String(FILE_HISTORY_CAP),
-      '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%b%x1e',
-      '--', relPath,
-    ])
-  } catch (error) {
-    if (/does not have any commits yet|bad revision/i.test(String((error as Error).message ?? error))) {
+  // Streamed: %b bodies are unbounded per commit, so the feed's real size is
+  // 500 × body, not 500 × subject — buffer-whole would risk host OOM.
+  const streamed = await runGitStreamed(repoRoot, [
+    'log', '--follow', '--date-order',
+    '--max-count=' + String(FILE_HISTORY_CAP),
+    '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%b%x1e',
+    '--', relPath,
+  ])
+  if (streamed.code !== 0) {
+    if (/does not have any commits yet|bad revision/i.test(streamed.stderr + streamed.stdout)) {
       return { ok: true, commits: [], truncated: false }
     }
-    throw error
+    throw new Error('git log failed: ' + (streamed.stderr.trim() || streamed.stdout.trim()))
   }
+  // A cut feed ends mid-record: drop everything after the last record
+  // terminator rather than parsing a phantom partial commit.
+  const raw = streamed.truncated ? streamed.stdout.slice(0, streamed.stdout.lastIndexOf('\x1e') + 1) : streamed.stdout
   const commits = parseLogLines(raw)
-  return { ok: true, commits, truncated: commits.length >= FILE_HISTORY_CAP }
+  return { ok: true, commits, truncated: streamed.truncated || commits.length >= FILE_HISTORY_CAP }
 }
 
 /** Entry cap for the all-files tree (a review tab is not a file manager). */
@@ -873,15 +876,26 @@ export async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
-  const [trackedRaw, othersRaw] = await Promise.all([
-    runGit(repoRoot, ['ls-files', '-z']),
-    runGit(repoRoot, ['ls-files', '-z', '--others', '--exclude-standard']),
+  // Streamed: a huge repo's full listing dwarfs every other answer here;
+  // the shared byte cap bounds it instead of execFile's 64MB backstop.
+  const [tracked, others] = await Promise.all([
+    runGitStreamed(repoRoot, ['ls-files', '-z']),
+    runGitStreamed(repoRoot, ['ls-files', '-z', '--others', '--exclude-standard']),
   ])
+  if (tracked.code !== 0) throw new Error('git ls-files failed: ' + (tracked.stderr.trim() || tracked.stdout.trim()))
+  if (others.code !== 0) throw new Error('git ls-files failed: ' + (others.stderr.trim() || others.stdout.trim()))
+  // A cut feed ends mid-token: drop the unterminated tail rather than
+  // adding a phantom partial path.
+  const tokens = (out: string, cut: boolean): string[] => {
+    const parts = out.split('\0')
+    if (cut) parts.pop()
+    return parts
+  }
   const files = new Set<string>()
-  for (const chunk of trackedRaw.split('\0')) if (chunk !== '') files.add(chunk)
-  for (const chunk of othersRaw.split('\0')) if (chunk !== '') files.add(chunk)
+  for (const chunk of tokens(tracked.stdout, tracked.truncated)) if (chunk !== '') files.add(chunk)
+  for (const chunk of tokens(others.stdout, others.truncated)) if (chunk !== '') files.add(chunk)
   const sorted = [...files].sort()
-  return { ok: true, files: sorted.slice(0, LIST_FILES_CAP), truncated: sorted.length > LIST_FILES_CAP }
+  return { ok: true, files: sorted.slice(0, LIST_FILES_CAP), truncated: tracked.truncated || others.truncated || sorted.length > LIST_FILES_CAP }
 }
 
 /** Untracked files scanned by `search` (bounded: 64 files × 256 KiB). */
@@ -999,11 +1013,57 @@ export async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<Git
  *  worktree-vs-HEAD diff (or a ref-range diff when `target` is given) plus
  *  untracked file content (bounded, worktree mode only). The response sorts
  *  loudest-first so the tree's top hit is the most-changed file. */
-export async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: unknown, mode: unknown, cs: unknown, rx: unknown): Promise<GitSearchPayload> {
+/** Regex source cap for the in-process matcher: a pathological pattern
+ *  ((a+)+$ on 20k rows) backtracks inside ONE exec call, which no iteration
+ *  cap can stop — and the host loop is shared by the whole harness. Overlong
+ *  patterns degrade to literal matching (still useful, never hangs); git
+ *  grep itself stays uncapped (its own process is timeout-killed). */
+export const SEARCH_REGEX_CAP = 100
+
+/** Count matches with the host-stall guard: overlong regex degrades to literal. */
+function safeCount(haystack: string, needle: string, options: { caseSensitive: boolean; regex: boolean }): number {
+  if (options.regex && needle.length > SEARCH_REGEX_CAP) {
+    return countMatches(haystack, needle, { ...options, regex: false })
+  }
+  return countMatches(haystack, needle, options)
+}
+
+/** Scan untracked files' bounded prefixes for the needle, adding into
+ *  `counts`. Shared by content and diff search modes (same caps, same
+ *  FIFO/binary guards) — returns true when the scan was partial. */
+async function scanUntrackedMatches(repoRoot: string, counts: Map<string, number>, needle: string, options: { caseSensitive: boolean; regex: boolean }): Promise<boolean> {
+  let untracked: string[] = []
+  try {
+    const porcelain = await runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
+    untracked = parsePorcelainV1(porcelain).filter(entry => entry.x === '?').map(entry => entry.path)
+  } catch { /* no untracked scan on status failure */ }
+  let partial = untracked.length > SEARCH_UNTRACKED_CAP
+  for (const relPath of untracked.slice(0, SEARCH_UNTRACKED_CAP)) {
+    const absPath = resolve(repoRoot, relPath)
+    if (!inside(repoRoot, absPath)) continue
+    try {
+      // Regular files only: a FIFO here would block open() forever.
+      const stat = await lstat(absPath)
+      if (!stat.isFile()) continue
+      const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
+      if (bytes.includes(0)) continue
+      const count = safeCount(bytes.toString('utf8'), needle, options)
+      if (count > 0) counts.set(relPath, (counts.get(relPath) ?? 0) + count)
+    } catch {
+      partial = true
+    }
+  }
+  return partial
+}
+
+export async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: unknown, mode: unknown, cs: unknown, rx: unknown, ws: unknown = false): Promise<GitSearchPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (typeof query !== 'string' || query.trim() === '') return { ok: true, matches: [], truncated: false }
   const needle = query.slice(0, 200)
   const options = { caseSensitive: cs === true, regex: rx === true }
+  // Diff-mode search must agree with the visible diff: the toolbar's
+  // whitespace toggle hides whitespace-only hunks, so the counts do too.
+  const wsFlags = ws === true ? WS_FLAG : []
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const targetRef = normalizeBaseRef(target)
@@ -1031,27 +1091,7 @@ export async function gitSearch(cwd: unknown, query: unknown, base: unknown, tar
     }
     const counts = new Map(parseGrepCounts(result.stdout).map(match => [match.path, match.count] as const))
     // Untracked content never appears in git grep — scan bounded prefixes.
-    let untracked: string[] = []
-    try {
-      const porcelain = await runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
-      untracked = parsePorcelainV1(porcelain).filter(entry => entry.x === '?').map(entry => entry.path)
-    } catch { /* no untracked scan on status failure */ }
-    let truncated = untracked.length > SEARCH_UNTRACKED_CAP
-    for (const relPath of untracked.slice(0, SEARCH_UNTRACKED_CAP)) {
-      const absPath = resolve(repoRoot, relPath)
-      if (!inside(repoRoot, absPath)) continue
-      try {
-        // Regular files only: a FIFO here would block open() forever.
-        const stat = await lstat(absPath)
-        if (!stat.isFile()) continue
-        const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
-        if (bytes.includes(0)) continue
-        const count = countMatches(bytes.toString('utf8'), needle, options)
-        if (count > 0) counts.set(relPath, (counts.get(relPath) ?? 0) + count)
-      } catch {
-        truncated = true
-      }
-    }
+    const truncated = await scanUntrackedMatches(repoRoot, counts, needle, options)
     const matches = [...counts.entries()]
       .map(([path, count]) => ({ path, count }))
       .sort((a, b) => b.count - a.count)
@@ -1074,44 +1114,27 @@ export async function gitSearch(cwd: unknown, query: unknown, base: unknown, tar
     const baseCommit = await resolveRangeRef(repoRoot, normalizeBaseRef(base) ?? 'HEAD')
     const targetCommit = await resolveRangeRef(repoRoot, targetRef)
     if (baseCommit === null || targetCommit === null) throw new Error('cannot resolve diff range refs')
-    diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', ...refRange(baseCommit, targetCommit)])
+    diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', ...wsFlags, ...refRange(baseCommit, targetCommit)])
     refsMode = true
   } else {
     const { base } = await diffBase(repoRoot)
     try {
-      diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', base])
+      diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', ...wsFlags, base])
     } catch {
       // The empty-tree literal is the one sha256-incompatible path; git's own
       // words surface if the retry fails too.
-      diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', 'HEAD'])
+      diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', ...wsFlags, 'HEAD'])
     }
   }
   const counts = new Map<string, number>()
   for (const section of splitDiffSections(diffText)) {
     if (section.path === null || section.body === '') continue
-    const count = countMatches(section.body, needle, options)
+    const count = safeCount(section.body, needle, options)
     if (count > 0) counts.set(section.path, count)
   }
   if (refsMode) return { ok: true, matches: [...counts.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count), truncated: searchCut }
   // Untracked content never appears in `git diff` — scan bounded prefixes.
-  let untracked: string[] = []
-  try {
-    const porcelain = await runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
-    untracked = parsePorcelainV1(porcelain).filter(entry => entry.x === '?').map(entry => entry.path)
-  } catch { /* no untracked scan on status failure */ }
-  let truncated = untracked.length > SEARCH_UNTRACKED_CAP
-  for (const relPath of untracked.slice(0, SEARCH_UNTRACKED_CAP)) {
-    const absPath = resolve(repoRoot, relPath)
-    if (!inside(repoRoot, absPath)) continue
-    try {
-      const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
-      if (bytes.includes(0)) continue
-      const count = countMatches(bytes.toString('utf8'), needle, options)
-      if (count > 0) counts.set(relPath, (counts.get(relPath) ?? 0) + count)
-    } catch {
-      truncated = true
-    }
-  }
+  const truncated = await scanUntrackedMatches(repoRoot, counts, needle, options)
   const matches = [...counts.entries()]
     .map(([path, count]) => ({ path, count }))
     .sort((a, b) => b.count - a.count)
@@ -2073,7 +2096,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'search') {
-          respond(res, 200, await gitSearch(body['cwd'], body['query'], body['base'], body['target'], body['mode'], body['cs'], body['rx']))
+          respond(res, 200, await gitSearch(body['cwd'], body['query'], body['base'], body['target'], body['mode'], body['cs'], body['rx'], body['ws']))
           return
         }
         if (action === 'file-op') {

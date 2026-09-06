@@ -475,6 +475,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       mode: searchScope === 'content' ? 'content' : 'diff',
       cs: searchCS,
       rx: searchRegex,
+      ws: wsIgnore,
     }).then(payload => {
       if (!alive) return
       setSearchMatches(payload !== null && payload.ok
@@ -482,7 +483,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         : null)
     })
     return () => { alive = false }
-  }, [search, searchScope, searchCS, searchRegex, cwd, reloadTick, baseRef, targetRef, compareMode, viewTab])
+  }, [search, searchScope, searchCS, searchRegex, wsIgnore, cwd, reloadTick, baseRef, targetRef, compareMode, viewTab])
 
   // Graph feed lifecycle: fetched when the graph view opens (and on refresh).
   useEffect(() => {

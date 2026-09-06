@@ -383,6 +383,13 @@ assert.ok(patch0 !== null && patch1 !== null)
   const rxBad = await gitSearch(repo, '([', null, null, 'diff', false, true)
   assert.equal(rxBad.ok, true)
   assert.equal(rxBad.matches.length, 0, 'invalid regex counts as 0')
+  // Overlong regex degrades to literal matching (host-stall guard), and the
+  // whitespace flag threads through without breaking the call shape.
+  const rxLong = await gitSearch(repo, 'needle' + 'x'.repeat(120), null, null, 'diff', false, true)
+  assert.equal(rxLong.ok, true)
+  const wsCall = await gitSearch(repo, 'needle', null, null, 'diff', false, false, true)
+  assert.equal(wsCall.ok, true)
+  assert.ok(wsCall.matches.some(m => m.path === 'searchable.txt'), 'ws flag keeps real matches')
   sh(repo, 'checkout', '--', 'searchable.txt')
 }
 

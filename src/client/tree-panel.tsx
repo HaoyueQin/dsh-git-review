@@ -10,6 +10,7 @@ import type { ChangedFile } from '../contract.ts'
 import { badgesFor, buildFileTree, filterFiles, type TreeEntry } from './file-tree.ts'
 import { ChevronIcon, SearchIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
+import { FileCounts } from './file-counts.tsx'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS, ReviewKey } from './locales.ts'
 import css from './review.module.css'
@@ -115,6 +116,7 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, viewedHas, onTo
       )}
       <FileTypeIcon path={entry.path} />
       <span className={css.fileName}>{entry.name}</span>
+      <FileCounts file={entry.file} />
       {badges.map((badge, index) => (
         <span
           key={index}

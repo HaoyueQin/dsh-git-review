@@ -9,6 +9,7 @@ import { makeSearchEngine, MAX_RENDER_ROWS, type SearchSpec } from './diff-parse
 import { makeLineHighlighter, sliceTokens, splitLineByTokens, type TokenSpan } from './highlight.ts'
 import { FileIcon, LineLeftIcon, LinesIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
+import { FileCounts } from './file-counts.tsx'
 import type { ChangedFile, GitBlameLine } from '../contract.ts'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS } from './locales.ts'
@@ -141,6 +142,7 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
       <div className={css.diffHeader}>
         <FileTypeIcon path={file.path} />
         <span className={css.diffPath}>{file.path}</span>
+        <FileCounts file={file} />
         <span className={css.diffHeaderSpacer} />
         {canShowDiff && <ViewSwitch active={view} onViewChange={onViewChange} t={t} />}
         {previewAvailable === true && onShowPreview !== undefined && (

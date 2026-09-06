@@ -11,6 +11,7 @@ import type { ChangedFile } from '../contract.ts'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS } from './locales.ts'
 import { FileTypeIcon } from './file-type-icon.tsx'
+import { FileCounts } from './file-counts.tsx'
 import css from './review.module.css'
 import type { PreviewKind } from './preview-kind.ts'
 
@@ -120,6 +121,7 @@ export function PreviewPane({ file, kind, text, textLoading, textTruncated = fal
       <div className={css.diffHeader}>
         <FileTypeIcon path={file.path} />
         <span className={css.diffPath}>{file.path}</span>
+        <FileCounts file={file} />
         <span className={css.diffHeaderSpacer} />
         {imageReady && (
           <span className={css.zoomGroup} role="group" aria-label={t('preview.zoomHint')}>

@@ -12,6 +12,7 @@ import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighligh
 import { makeLineHighlighter, sliceTokens, splitLineByTokens, type TokenSpan } from './highlight.ts'
 import { CommentIcon, ExpandIcon, CollapseIcon, HistoryIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
+import { FileCounts } from './file-counts.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
 import type { CommentDraft } from './comment-drafts.ts'
 import type { ChangedFile } from '../contract.ts'
@@ -345,6 +346,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
       <div className={css.diffHeader}>
         <FileTypeIcon path={file.path} />
         <span className={css.diffPath}>{file.path}</span>
+        <FileCounts file={file} />
         {file.untracked && <span className={css.chip}>{t('badge.untracked')}</span>}
         {parsed.newFile && <span className={css.chip}>{t('diff.newFile')}</span>}
         {parsed.deletedFile && <span className={css.chip}>{t('diff.deletedFile')}</span>}

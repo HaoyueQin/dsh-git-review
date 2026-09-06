@@ -49,23 +49,42 @@ body[data-dsh-bg-glass] .root {
  * auto contexts lifts every toolbar popout with it. The popovers that hang
  * off the root (commit/branch z-40, file menu z-90) already outrank them.
  *
- * The toolbar WRAPS instead of squeezing: a side-by-side session view with
- * the sidebar open leaves far less width than the content needs, and a
- * squeezed flex row renders the totals as a one-character-per-line column
- * that overflows this header and paints over the tab bar and sidebar. Every
- * child is flex:none + nowrap so wrap moves whole controls, never glyphs. */
+ * Two semantic rows, not one long flex line: row 1 is the context (branch,
+ * compare range, view tab), row 2 the working tools (search) and global
+ * actions. A session view beside the conversation leaves ~600-900px — ten
+ * controls on one line either squeezed into a one-character column or
+ * wrapped arbitrarily; two labeled bands read as hierarchy instead of
+ * overflow. Each row still wraps whole controls (children flex:none +
+ * nowrap) so a very narrow pane degrades gracefully instead of clipping. */
 .toolbar {
   position: relative;
   z-index: 30;
   display: flex;
   flex: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px 12px 8px;
+  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.toolbarRow {
+  display: flex;
+  flex: none;
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
-  min-height: 40px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+  gap: 6px 8px;
+  min-height: 26px;
+}
+
+/* Row 1's compare cluster: the mode switch, picker(s) and totals move
+   together when the row wraps — they are one thought ("compare WHAT against
+   WHAT"), so they travel as a unit. */
+.compareCluster {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
 }
 
 .branchChip {
@@ -116,6 +135,29 @@ body[data-dsh-bg-glass] .root {
   color: var(--dsw-alias-label-tertiary);
   font-size: 11.5px;
   white-space: nowrap;
+}
+
+/* The ref-range swap control: replaces the static `…` separator so flipping
+   the comparison direction is one click (GitHub Compare's swap). */
+.swapBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.swapBtn:hover {
+  border-color: var(--dsw-alias-border-secondary);
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
 /* ── ref picker (custom dropdown replacing the native <select>) ────────── */
@@ -386,24 +428,14 @@ body[data-dsh-bg-glass] .root {
   background: var(--dsw-alias-fill-hover);
 }
 
-.searchOptions {
-  position: relative;
-  display: inline-flex;
-  flex: none;
-}
-
-.searchOptionsBtn {
-  padding: 3px 5px;
-}
-
 .searchOptionsPop {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
+  left: 0;
   z-index: 60;
   display: flex;
   flex-direction: column;
-  width: 220px;
+  width: 230px;
   max-width: calc(100vw - 48px);
   padding: 4px;
   border: 1px solid var(--dsw-alias-border-secondary);
@@ -493,6 +525,7 @@ body[data-dsh-bg-glass] .root {
 .toolBtn:focus-visible,
 .pickerBtn:focus-visible,
 .commitBtn:focus-visible,
+.commitToggle:focus-visible,
 .branchBtn:focus-visible,
 .branchIconBtn:focus-visible,
 .branchNameBtn:focus-visible,
@@ -504,6 +537,89 @@ body[data-dsh-bg-glass] .root {
 .commitRow:focus-visible {
   outline: 1px solid var(--dsw-alias-state-business-primary);
   outline-offset: 1px;
+}
+
+/* Square icon-only toolbar buttons (refresh, draft box): low-frequency
+   global actions that used to spend ~150px of text on a cramped row. Their
+   identity lives in the tooltip/aria-label; the draft badge carries the
+   only state worth seeing at a glance. */
+.iconBtn {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.iconBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
+  border-color: color-mix(in srgb, var(--dsw-alias-label-primary) 22%, var(--dsw-alias-border-secondary));
+}
+
+.iconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Refresh spins while a status load is in flight — the icon replaces the
+   old 刷新/刷新中… text pair, the motion is the loading state. */
+.iconBtnSpinning svg {
+  animation: review-spin 900ms linear infinite;
+}
+
+@keyframes review-spin {
+  to { transform: rotate(360deg); }
+}
+
+.iconBtnBadge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-bg-layer-1);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The row-2 primary action: the only filled/brand-tinted control in the
+   toolbar, so "commit or push" outranks the icon-only neighbors the way
+   Codex's ⊙ 提交或推送 does. Disabled (agent running) drops the tint. */
+.commitToggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-business-primary) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.commitToggle:hover:not(:disabled) {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 16%, transparent);
 }
 
 /* ── file context menu ────────────────────────────────────────────────── */
@@ -1066,7 +1182,10 @@ body[data-dsh-bg-glass] .root {
   flex-direction: column;
   gap: 8px;
   width: 360px;
-  max-height: 60%;
+  /* Percentages resolve against the toolbar (the positioning ancestor) —
+     60% of a 73px two-row toolbar is 44px and crushes the list. Cap in
+     viewport units instead; the list scrolls inside. */
+  max-height: min(60vh, 420px);
   padding: 10px;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 8px;

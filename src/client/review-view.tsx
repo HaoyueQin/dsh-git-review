@@ -16,7 +16,7 @@ import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileConte
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
 import { hostCall } from './api.ts'
-import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, OptionsIcon, RefreshIcon, SearchIcon } from './icons.tsx'
+import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, RefreshIcon, SearchIcon, SwapIcon } from './icons.tsx'
 import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
@@ -144,7 +144,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // Whitespace-only edits hide behind the ignore-whitespace toggle (a
   // preference, so the choice follows the user across sessions).
   const [wsIgnore, setWsIgnore] = useState(initialPrefs.wsIgnore)
-  const [searchMenu, setSearchMenu] = useState<'scope' | 'match' | null>(null)
+  // One search popover holds BOTH the scope choice and the matching toggles
+  // (scope used to be a chip dropdown, matching a separate gear button — two
+  // popovers for one box read as clutter and the gear was undiscoverable).
+  const [searchOptionsOpen, setSearchOptionsOpen] = useState(false)
   const [searchMatches, setSearchMatches] = useState<ReadonlyMap<string, number> | null>(null)
   // Diff-base override: null compares against HEAD; the refs list feeds the
   // dropdowns (fetched alongside each status refresh). In refs mode the
@@ -183,8 +186,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const commitBtnRef = useRef<HTMLButtonElement | null>(null)
   const draftPopRef = useRef<HTMLDivElement | null>(null)
   const draftBtnRef = useRef<HTMLButtonElement | null>(null)
-  const searchScopeRef = useRef<HTMLSpanElement | null>(null)
-  const searchMatchRef = useRef<HTMLSpanElement | null>(null)
+  const searchOptionsRef = useRef<HTMLSpanElement | null>(null)
   // Comment draft box: pending comments keyed per workspace, surfaced in a
   // toolbar popover with a bulk send into the composer draft.
   const draftBox = useMemo(() => (cwd === undefined ? null : createDraftBox(cwd)), [cwd])
@@ -216,14 +218,14 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     return () => { document.removeEventListener('mousedown', onDown) }
   }, [branchOpen, commitOpen, draftOpen])
   useEffect(() => {
-    if (searchMenu === null) return
+    if (!searchOptionsOpen) return
     const onDown = (event: MouseEvent): void => {
-      const root = searchMenu === 'scope' ? searchScopeRef.current : searchMatchRef.current
-      if (root !== null && !root.contains(event.target as Node)) setSearchMenu(null)
+      const root = searchOptionsRef.current
+      if (root !== null && !root.contains(event.target as Node)) setSearchOptionsOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => { document.removeEventListener('mousedown', onDown) }
-  }, [searchMenu])
+  }, [searchOptionsOpen])
   // Follow preference edits made in the settings card (and any other tab
   // instance) through the shared store. Every user flip inside this tab goes
   // through an explicit settings.set at its control (see the callbacks
@@ -576,6 +578,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setDiffScope('all')
   }, [])
 
+  /** Swap the two range ends: flipping `A…B` to `B…A` is the fastest way to
+   *  compare in the other direction (and to get HEAD back as an end). */
+  const swapEnds = useCallback(() => {
+    setBaseRef(targetRef)
+    setTargetRef(baseRef)
+    setSelected(null)
+    setDiffScope('all')
+  }, [baseRef, targetRef])
+
   /** Switch the comparison side between worktree and ref-range modes. */
   const changeCompareMode = useCallback((mode: CompareMode) => {
     setCompareMode(mode)
@@ -738,118 +749,179 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const data = ready
   return (
     <div className={css.root} data-conversation-composer-overlay="">
+      {/* Two semantic rows instead of one long flex line (a side-by-side
+          session view leaves ~600-900px, where ten controls either squeezed
+          or wrapped arbitrarily): row 1 answers "what am I looking at"
+          (branch, compare range, view tab), row 2 holds the working tools
+          (search) and global actions. The graph view drops the compare
+          cluster — its base/target picks only drive the changes view, so
+          showing them there invited picks that visibly did nothing. */}
       <header className={css.toolbar} data-git-review-toolbar="">
-        <button
-          type="button"
-          className={css.branchBtn}
-          title={t('branch.manage')}
-          ref={branchBtnRef}
-          onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setBranchResult(null) }}
-        >
-          <BranchIcon />
-          <span>{data?.branch ?? 'HEAD'}</span>
-          <ChevronIcon rotated={branchOpen} />
-        </button>
-        <span className={css.scopeSwitch} role="group" aria-label={t('compare.mode')}>
-          {(['worktree', 'refs'] as const).map(candidate => (
-            <button
-              key={candidate}
-              type="button"
-              className={css.scopeBtn + (compareMode === candidate ? ' ' + css.scopeBtnActive : '')}
-              title={t(('compare.' + candidate + 'Hint') as ReviewKey)}
-              onClick={() => { changeCompareMode(candidate) }}
-            >
-              {t(('compare.' + candidate) as ReviewKey)}
-            </button>
-          ))}
-        </span>
-        {/* The comparison sides: worktree mode picks the base the worktree
-            is diffed against (current branch by default); refs mode picks
-            both ends of a base…target range. One themed picker per side with
-            branch/remote/tag/commit groups + search — the native <select>
-            is gone: its OS popup ignored the theme and mixed every kind. */}
-        {!refsMode ? (
-          <span className={css.compareRow} title={t('base.label')}>
-            <RefPicker
-              value={baseRef}
-              headLabel={data?.branch ?? 'HEAD'}
-              refs={refs}
-              commits={pickerCommits}
-              placeholder={t('compare.pickBase')}
-              onPick={changeBase}
-              t={t}
-            />
-            <span className={css.compareArrow}>{'\u2192'}</span>
-            <span className={css.compareFixed} title={t('base.worktree')}>
-              <FileIcon />
-              <span>{t('compare.worktree')}</span>
-            </span>
-          </span>
-        ) : (
-          <span className={css.compareRow + ' ' + css.rangeChip} title={t('compare.pickHint')}>
-            <RefPicker
-              value={baseRef}
-              headLabel={data?.branch ?? 'HEAD'}
-              refs={refs}
-              commits={pickerCommits}
-              exclude={targetRef}
-              placeholder={t('compare.pickBase')}
-              onPick={changeBase}
-              t={t}
-            />
-            <span className={css.compareArrow}>{'\u2026'}</span>
-            <RefPicker
-              value={targetRef}
-              headLabel={null}
-              refs={refs}
-              commits={pickerCommits}
-              exclude={baseRef}
-              placeholder={t('compare.pickTarget')}
-              onPick={changeTarget}
-              t={t}
-            />
-          </span>
-        )}
-        {data !== null && (
-          <span className={css.totals}>
-            <span className={css.totalAdded}>{'+' + fmtCount(data.totals.added)}</span>
-            <span className={css.totalDeleted}>{'\u2212' + fmtCount(data.totals.deleted)}</span>
-            <span className={css.fileCount}>{t('filesChanged', { count: data.files.length })}</span>
-          </span>
-        )}
-        {viewTab === 'changes' ? (
-          <span className={css.searchWrap}>
-            {/* Scope dropdown leads the box so the classified search is
-                discoverable — it used to hide inside the gear popover and
-                users read the box as one generic full-text field. */}
-            <span className={css.searchScope} ref={searchScopeRef}>
-              <button
-                type="button"
-                className={css.searchScopeBtn}
-                title={t('search.scope')}
-                aria-haspopup="menu"
-                aria-expanded={searchMenu === 'scope'}
-                onClick={() => { setSearchMenu(value => value === 'scope' ? null : 'scope') }}
-              >
-                <span>{t(('search.scope.' + searchScope) as ReviewKey)}</span>
-                <ChevronIcon size={10} rotated={searchMenu === 'scope'} />
-              </button>
-              {searchMenu === 'scope' && (
-                <div className={css.searchOptionsPop} role="menu">
-                  {(['diff', 'content', 'path'] as const).map(candidate => (
-                    <button
-                      key={candidate}
-                      type="button"
-                      className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
-                      onClick={() => { changeSearchScope(candidate); setSearchMenu(null) }}
-                    >
-                      <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
-                      {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
-                    </button>
-                  ))}
-                </div>
+        <div className={css.toolbarRow}>
+          <button
+            type="button"
+            className={css.branchBtn}
+            title={t('branch.manage')}
+            ref={branchBtnRef}
+            onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setBranchResult(null) }}
+          >
+            <BranchIcon />
+            <span>{data?.branch ?? 'HEAD'}</span>
+            <ChevronIcon rotated={branchOpen} />
+          </button>
+          {viewTab === 'changes' && (
+            <span className={css.compareCluster} title={t('compare.pickHint')}>
+              <span className={css.scopeSwitch} role="group" aria-label={t('compare.mode')}>
+                {(['worktree', 'refs'] as const).map(candidate => (
+                  <button
+                    key={candidate}
+                    type="button"
+                    className={css.scopeBtn + (compareMode === candidate ? ' ' + css.scopeBtnActive : '')}
+                    title={t(('compare.' + candidate + 'Hint') as ReviewKey)}
+                    onClick={() => { changeCompareMode(candidate) }}
+                  >
+                    {t(('compare.' + candidate) as ReviewKey)}
+                  </button>
+                ))}
+              </span>
+              {/* The comparison sides: worktree mode picks the base the
+                  worktree is diffed against (current branch by default);
+                  refs mode picks both ends of a base…target range. One
+                  themed picker per side with branch/remote/tag/commit
+                  groups + search — the native <select> is gone: its OS
+                  popup ignored the theme and mixed every kind. */}
+              {!refsMode ? (
+                <span className={css.compareRow} title={t('base.label')}>
+                  <RefPicker
+                    value={baseRef}
+                    headLabel={data?.branch ?? 'HEAD'}
+                    refs={refs}
+                    commits={pickerCommits}
+                    placeholder={t('compare.pickBase')}
+                    onPick={changeBase}
+                    t={t}
+                  />
+                  <span className={css.compareArrow}>{'\u2192'}</span>
+                  <span className={css.compareFixed} title={t('base.worktree')}>
+                    <FileIcon />
+                    <span>{t('base.worktree')}</span>
+                  </span>
+                </span>
+              ) : (
+                <span className={css.compareRow + ' ' + css.rangeChip}>
+                  <RefPicker
+                    value={baseRef}
+                    headLabel={data?.branch ?? 'HEAD'}
+                    refs={refs}
+                    commits={pickerCommits}
+                    exclude={targetRef}
+                    placeholder={t('compare.pickBase')}
+                    // The HEAD entry picks null, but a null end means "not
+                    // picked yet" (rangeReady) — in refs mode remap it to the
+                    // literal HEAD ref, which resolves like any other ref.
+                    onPick={value => { changeBase(refsMode ? (value ?? 'HEAD') : value) }}
+                    t={t}
+                  />
+                  <button
+                    type="button"
+                    className={css.swapBtn}
+                    title={t('compare.swap')}
+                    aria-label={t('compare.swap')}
+                    onClick={swapEnds}
+                  >
+                    <SwapIcon />
+                  </button>
+                  <RefPicker
+                    value={targetRef}
+                    headLabel={data?.branch ?? 'HEAD'}
+                    refs={refs}
+                    commits={pickerCommits}
+                    exclude={baseRef}
+                    placeholder={t('compare.pickTarget')}
+                    onPick={value => { changeTarget(value ?? 'HEAD') }}
+                    t={t}
+                  />
+                </span>
+              )}
+              {data !== null && (
+                <span className={css.totals}>
+                  <span className={css.totalAdded}>{'+' + fmtCount(data.totals.added)}</span>
+                  <span className={css.totalDeleted}>{'\u2212' + fmtCount(data.totals.deleted)}</span>
+                  <span className={css.fileCount}>{'\u00b7 ' + t('filesChanged', { count: data.files.length })}</span>
+                </span>
               )}
             </span>
+          )}
+          <span className={css.toolbarSpacer} />
+          <span className={css.scopeSwitch} role="group" aria-label={t('view.label')}>
+            {(['changes', 'graph'] as const).map(candidate => (
+              <button
+                key={candidate}
+                type="button"
+                className={css.scopeBtn + (viewTab === candidate ? ' ' + css.scopeBtnActive : '')}
+                onClick={() => { changeViewTab(candidate) }}
+              >
+                {candidate === 'changes' ? <FileIcon /> : <GraphIcon />}
+                <span>{t(('viewTab.' + candidate) as ReviewKey)}</span>
+              </button>
+            ))}
+          </span>
+        </div>
+        <div className={css.toolbarRow}>
+          <span className={css.searchWrap}>
+            {viewTab === 'changes' && (
+              // Scope chip leads the box so the classified search stays
+              // discoverable; its popover also carries the matching toggles
+              // (case/regex) — the old separate gear button was one more
+              // piece of toolbar clutter nobody associated with the box.
+              <span className={css.searchScope} ref={searchOptionsRef}>
+                <button
+                  type="button"
+                  className={css.searchScopeBtn}
+                  title={t('search.scope')}
+                  aria-haspopup="menu"
+                  aria-expanded={searchOptionsOpen}
+                  onClick={() => { setSearchOptionsOpen(value => !value) }}
+                >
+                  <span>{t(('search.scope.' + searchScope) as ReviewKey)}</span>
+                  <ChevronIcon size={10} rotated={searchOptionsOpen} />
+                </button>
+                {searchOptionsOpen && (
+                  <div className={css.searchOptionsPop} role="menu">
+                    <div className={css.searchOptionsGroup}>{t('search.scope')}</div>
+                    {(['diff', 'content', 'path'] as const).map(candidate => (
+                      <button
+                        key={candidate}
+                        type="button"
+                        className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
+                        onClick={() => { changeSearchScope(candidate) }}
+                      >
+                        <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
+                        {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                      </button>
+                    ))}
+                    <div className={css.fileMenuDivider} />
+                    <div className={css.searchOptionsGroup}>{t('search.matching')}</div>
+                    <button
+                      type="button"
+                      className={css.pickerItem + (searchCS ? ' ' + css.pickerItemActive : '')}
+                      onClick={() => { toggleSearchCS() }}
+                    >
+                      <span className={css.pickerItemName}>{t('search.caseSensitive')}</span>
+                      {searchCS && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                    </button>
+                    <button
+                      type="button"
+                      className={css.pickerItem + (searchRegex ? ' ' + css.pickerItemActive : '')}
+                      onClick={() => { toggleSearchRegex() }}
+                    >
+                      <span className={css.pickerItemName}>{t('search.regex')}</span>
+                      {searchRegex && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                    </button>
+                  </div>
+                )}
+              </span>
+            )}
             <label className={css.searchBox}>
               <SearchIcon />
               <input
@@ -857,103 +929,52 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 value={searchDraft}
                 onChange={event => { setSearchDraft(event.target.value) }}
                 onKeyDown={event => { if (event.key === 'Escape') setSearchDraft('') }}
-                placeholder={searchScope === 'path' ? t('search.placeholderPath') : searchScope === 'content' ? t('search.placeholderContent') : t('search.placeholder')}
+                placeholder={viewTab === 'changes'
+                  ? (searchScope === 'path' ? t('search.placeholderPath') : searchScope === 'content' ? t('search.placeholderContent') : t('search.placeholder'))
+                  : t('graph.search')}
                 spellCheck={false}
               />
-              {searchScope !== 'path' && search !== '' && (
+              {viewTab === 'changes' && searchScope !== 'path' && search !== '' && (
                 <span className={css.searchMeta}>{searchMatches === null ? '\u2026' : t('search.files', { count: searchMatches.size })}</span>
               )}
-              {searchCS && <span className={css.searchFlag} title={t('search.caseSensitive')}>{t('search.flagCS')}</span>}
-              {searchRegex && <span className={css.searchFlag} title={t('search.regex')}>{t('search.flagRegex')}</span>}
+              {viewTab === 'changes' && searchCS && <span className={css.searchFlag} title={t('search.caseSensitive')}>{t('search.flagCS')}</span>}
+              {viewTab === 'changes' && searchRegex && <span className={css.searchFlag} title={t('search.regex')}>{t('search.flagRegex')}</span>}
             </label>
-            <span className={css.searchOptions} ref={searchMatchRef}>
-              <button
-                type="button"
-                className={css.toolBtn + ' ' + css.searchOptionsBtn}
-                title={t('search.matching')}
-                aria-label={t('search.matching')}
-                aria-expanded={searchMenu === 'match'}
-                onClick={() => { setSearchMenu(value => value === 'match' ? null : 'match') }}
-              >
-                <OptionsIcon />
-              </button>
-              {searchMenu === 'match' && (
-                <div className={css.searchOptionsPop} role="menu">
-                  <button
-                    type="button"
-                    className={css.pickerItem + (searchCS ? ' ' + css.pickerItemActive : '')}
-                    onClick={() => { toggleSearchCS() }}
-                  >
-                    <span className={css.pickerItemName}>{t('search.caseSensitive')}</span>
-                    {searchCS && <span className={css.pickerItemCheck}><CheckIcon /></span>}
-                  </button>
-                  <button
-                    type="button"
-                    className={css.pickerItem + (searchRegex ? ' ' + css.pickerItemActive : '')}
-                    onClick={() => { toggleSearchRegex() }}
-                  >
-                    <span className={css.pickerItemName}>{t('search.regex')}</span>
-                    {searchRegex && <span className={css.pickerItemCheck}><CheckIcon /></span>}
-                  </button>
-                </div>
-              )}
-            </span>
           </span>
-        ) : (
-          <label className={css.searchBox}>
-            <SearchIcon />
-            <input
-              className={css.searchInput}
-              value={searchDraft}
-              onChange={event => { setSearchDraft(event.target.value) }}
-              onKeyDown={event => { if (event.key === 'Escape') setSearchDraft('') }}
-              placeholder={t('graph.search')}
-              spellCheck={false}
-            />
-          </label>
-        )}
-        <span className={css.toolbarSpacer} />
-        <span className={css.scopeSwitch} role="group" aria-label={t('view.label')}>
-          {(['changes', 'graph'] as const).map(candidate => (
-            <button
-              key={candidate}
-              type="button"
-              className={css.scopeBtn + (viewTab === candidate ? ' ' + css.scopeBtnActive : '')}
-              onClick={() => { changeViewTab(candidate) }}
-            >
-              {candidate === 'changes' ? null : <GraphIcon />}
-              <span>{t(('viewTab.' + candidate) as ReviewKey)}</span>
-            </button>
-          ))}
-        </span>
-        <button type="button" className={css.toolBtn} onClick={refresh} title={t('refresh')}>
-          <RefreshIcon />
-          <span>{status.kind === 'loading' ? t('refreshing') : t('refresh')}</span>
-        </button>
-        <button
-          type="button"
-          className={css.toolBtn + ' ' + css.commitToggle + (draftList.length > 0 ? ' ' + css.toolBtnActive : '')}
-          disabled={useInput === undefined || inputActions === undefined}
-          title={t('comment.draftsTitle')}
-          ref={draftBtnRef}
-          aria-expanded={draftOpen}
-          onClick={() => { setDraftOpen(value => !value) }}
-        >
-          <CommentIcon />
-          <span>{t('comment.draftsTitle')}</span>
-          {draftList.length > 0 && <span className={css.badge}>{String(draftList.length)}</span>}
-        </button>
-        <button
-          type="button"
-          className={css.toolBtn + ' ' + css.commitToggle}
-          disabled={data === null || running}
-          title={running ? t('commit.running') : t('commit.title')}
-          ref={commitBtnRef}
-          onClick={() => { setCommitOpen(value => !value); setArmed(null) }}
-        >
-          <CommitIcon />
-          <span>{t('commit.title')}</span>
-        </button>
+          <button
+            type="button"
+            className={css.iconBtn + (status.kind === 'loading' ? ' ' + css.iconBtnSpinning : '')}
+            onClick={refresh}
+            title={t('refresh')}
+            aria-label={t('refresh')}
+          >
+            <RefreshIcon />
+          </button>
+          <button
+            type="button"
+            className={css.iconBtn}
+            disabled={useInput === undefined || inputActions === undefined}
+            title={t('comment.draftsTitle')}
+            aria-label={t('comment.draftsTitle')}
+            ref={draftBtnRef}
+            aria-expanded={draftOpen}
+            onClick={() => { setDraftOpen(value => !value) }}
+          >
+            <CommentIcon />
+            {draftList.length > 0 && <span className={css.iconBtnBadge}>{draftList.length > 9 ? '9+' : String(draftList.length)}</span>}
+          </button>
+          <button
+            type="button"
+            className={css.commitToggle}
+            disabled={data === null || running}
+            title={running ? t('commit.running') : t('commit.title')}
+            ref={commitBtnRef}
+            onClick={() => { setCommitOpen(value => !value); setArmed(null) }}
+          >
+            <CommitIcon />
+            <span>{t('commit.title')}</span>
+          </button>
+        </div>
       {draftOpen && useInput !== undefined && inputActions !== undefined && (
         <DraftPopover
           items={draftList}

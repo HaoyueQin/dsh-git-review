@@ -193,3 +193,12 @@ export function OptionsIcon({ size = 13 }: IconProps) {
     </svg>
   )
 }
+
+export function SwapIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M4 5.5h8.5M10 3l2.7 2.5L10 8" strokeLinejoin="round" strokeLinecap="round" />
+      <path d="M12 10.5H3.5M6 13l-2.7-2.5L6 8" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}

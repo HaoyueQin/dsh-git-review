@@ -28,12 +28,39 @@ const ICON_COLORS: Record<string, string> = {
   docker: '#2496ED',
 }
 
+/** Silhouette tint per extension (GitHub-language / product accents) for
+ *  types without an inlined brand logo: logo-less code, docs & data,
+ *  office files, images, archives and media. Anything unlisted keeps the
+ *  neutral tertiary tint. */
+const EXT_TINTS: Record<string, string> = {
+  c: '#555555', h: '#555555', cpp: '#f34b7d', hpp: '#f34b7d', cc: '#f34b7d', cxx: '#f34b7d',
+  cs: '#178600', vue: '#41b883', scss: '#c6538c', less: '#1d365d', sass: '#a53b70', styl: '#ff6347',
+  sh: '#89e051', bash: '#89e051', zsh: '#89e051', ps1: '#5391fe', sql: '#e38c00',
+  xml: '#0060ac', lua: '#000080', r: '#198ce7', scala: '#c22d40', dart: '#00b4ab',
+  pl: '#0298c3', pm: '#0298c3', ex: '#6e4a7e', exs: '#6e4a7e', erl: '#b83998',
+  hs: '#5e5086', elm: '#60b5cc', clj: '#db5855', groovy: '#4298b8', gradle: '#02303a',
+  astro: '#ff5a03', ipynb: '#da5b0b', proto: '#8e44ad',
+  txt: '#6e7781', log: '#6e7781', text: '#6e7781', csv: '#217346', tsv: '#217346',
+  tex: '#3d6117', rtf: '#2b579a', pdf: '#d1242f',
+  doc: '#2b579a', docx: '#2b579a', odt: '#2b579a', xls: '#217346', xlsx: '#217346',
+  ods: '#217346', ppt: '#d24726', pptx: '#d24726', odp: '#d24726',
+  png: '#8250df', jpg: '#8250df', jpeg: '#8250df', gif: '#8250df', webp: '#8250df',
+  bmp: '#8250df', avif: '#8250df', svg: '#e34c26', tif: '#8250df', tiff: '#8250df',
+  ico: '#8250df', heic: '#8250df', heif: '#8250df',
+  zip: '#6e7781', tar: '#6e7781', gz: '#6e7781', tgz: '#6e7781', '7z': '#6e7781',
+  rar: '#6e7781', jar: '#6e7781', exe: '#6e7781', dll: '#6e7781', so: '#6e7781',
+  ttf: '#6e7781', otf: '#6e7781', woff: '#6e7781', woff2: '#6e7781',
+  mp3: '#8250df', mp4: '#8250df', wav: '#8250df', mov: '#8250df',
+  env: '#ecd53f', gitignore: '#f14e32', dockerignore: '#2496ed',
+}
+
 /** Extension -> icon key. */
 const EXT_ICONS: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
   js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
-  py: 'python', pyi: 'python',
-  md: 'markdown', markdown: 'markdown',
+  py: 'python', pyi: 'python', pyw: 'python',
+  md: 'markdown', markdown: 'markdown', mdown: 'markdown',
+  json5: 'json',
   rs: 'rust',
   html: 'html5', htm: 'html5', xhtml: 'html5',
   css: 'css3',
@@ -84,5 +111,5 @@ export function FileTypeIcon({ path }: FileTypeIconProps) {
       </svg>
     )
   }
-  return <FileSilhouette color="var(--dsw-alias-label-tertiary)" />
+  return <FileSilhouette color={EXT_TINTS[ext] ?? 'var(--dsw-alias-label-tertiary)'} />
 }

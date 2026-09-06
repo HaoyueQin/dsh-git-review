@@ -718,8 +718,18 @@ assert.equal(previewKindForPath('assets/logo.png'), 'image')
 assert.equal(previewKindForPath('shot.JPG'), 'image')
 assert.equal(previewKindForPath('fig.svg'), 'image')
 assert.equal(previewKindForPath('paper.pdf'), 'pdf')
+assert.equal(previewKindForPath('page.html'), 'html')
+assert.equal(previewKindForPath('docs/UPPER.HTM'), 'html')
 assert.equal(previewKindForPath('src/index.ts'), null)
 assert.equal(previewKindForPath('archive.zip'), null)
 assert.equal(previewKindForPath('Makefile'), null)
+
+// 46. file-type coverage: logo-less code still highlights (vue -> c,
+//     sql -> its own family with -- comments), so the tree + source view
+//     stay useful for the common types without brand logos.
+assert.equal(langOf('app.vue'), 'c')
+assert.equal(langOf('query.sql'), 'sql')
+assert.deepEqual(tokenizeLine('select * from t -- hi', 'sql')[0], { start: 0, end: 6, kind: 'kw' })
+assert.equal(tokenizeLine('-- only a comment', 'sql')[0].kind, 'com')
 
 console.log('check-parse: all assertions passed')

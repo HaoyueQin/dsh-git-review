@@ -1,9 +1,9 @@
 /**
- * In-tab file preview: markdown (the shell's shared renderer), raster
- * images + SVG (image context, scripts never run), and PDF (sandboxed
- * iframe). Office formats stay out on purpose — mammoth (~2.2MB unpacked)
- * and xlsx (~7.5MB) buy megabytes for poor fidelity; those open externally
- * through the tree's context menu.
+ * In-tab file preview: markdown (the shell's shared renderer), HTML
+ * (sandboxed iframe, scripts dead), raster images + SVG (image context,
+ * scripts never run), and PDF (sandboxed iframe). Office formats stay out
+ * on purpose — mammoth (~2.2MB unpacked) and xlsx (~7.5MB) buy megabytes
+ * for poor fidelity; those open externally through the tree's context menu.
  */
 import { useMemo, type ComponentType } from 'react'
 import type { MarkdownLabels } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -90,6 +90,9 @@ export function PreviewPane({ file, kind, text, textLoading, dataUrl, bytesFaile
           ? <iframe className={css.previewPdf} src={dataUrl} sandbox="" title={file.path} />
           : <div className={css.paneNotice}>{
             bytesFailed ? t('preview.loadFailed') : bytesTruncated ? t('preview.tooLarge') : t('preview.loading')}</div>)}
+        {kind === 'html' && (textLoading
+          ? <div className={css.paneNotice}>{t('file.loading')}</div>
+          : <iframe className={css.previewPdf} srcDoc={text} sandbox="" title={file.path} />)}
         <div className={css.diffBottomReserve} />
       </div>
     </div>

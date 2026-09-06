@@ -565,7 +565,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const previewSvgOk = !previewSvg || (diff.kind === 'content' && diff.content.includes('<svg'))
   const previewAvailable = previewKind !== null && previewMdOk && previewSvgOk
   const showPreview = previewAvailable && !previewSource && (
-    previewKind === 'markdown' || previewSvg ? diff.kind === 'content' : true
+    previewKind === 'markdown' || previewKind === 'html' || previewSvg ? diff.kind === 'content' : true
   )
   /** data: URL for the preview — encoded text for SVG, bytes otherwise. */
   const previewDataUrl: string | null = !showPreview || previewKind === null ? null
@@ -1260,13 +1260,14 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const data = ready
   return (
     <div ref={rootRef} tabIndex={-1} onKeyDown={onRootKeyDown} className={css.root} data-conversation-composer-overlay="">
-      {/* Two semantic rows instead of one long flex line (a side-by-side
-          session view leaves ~600-900px, where ten controls either squeezed
-          or wrapped arbitrarily): row 1 answers "what am I looking at"
-          (branch, compare range, view tab), row 2 holds the working tools
-          (search) and global actions. The graph view drops the compare
-          cluster — its base/target picks only drive the changes view, so
-          showing them there invited picks that visibly did nothing. */}
+      {/* One wrapping row, single-line-first: every control is flex:none
+          except the search box, which grows into spare width and shrinks
+          down to its min-width before the row wraps — so wide views read
+          one line and narrow views (side-by-side session, right-side panel)
+          fall to two lines only when the search can no longer shrink. The
+          graph view drops the compare cluster — its base/target picks only
+          drive the changes view, so showing them there invited picks that
+          visibly did nothing. */}
       <header className={css.toolbar} data-git-review-toolbar="">
         <div className={css.toolbarRow}>
           <button
@@ -1376,7 +1377,6 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               )}
             </span>
           )}
-          <span className={css.toolbarSpacer} />
           <span className={css.scopeSwitch} role="group" aria-label={t('view.label')}>
             {(['changes', 'graph'] as const).map(candidate => (
               <button
@@ -1390,8 +1390,6 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               </button>
             ))}
           </span>
-        </div>
-        <div className={css.toolbarRow}>
           <span className={css.searchWrap}>
             <label className={css.searchBox}>
               {viewTab === 'changes' && (

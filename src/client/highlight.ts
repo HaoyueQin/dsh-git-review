@@ -32,7 +32,8 @@ export function langOf(path: string): string | null {
   if (['py', 'pyw', 'pyi'].includes(ext)) return 'py'
   if (['sh', 'bash', 'zsh', 'ps1', 'dockerfile'].includes(ext) || /^dockerfile/i.test(name)) return 'sh'
   if (['css', 'scss', 'less'].includes(ext)) return 'css'
-  if (['go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'dart'].includes(ext)) return 'c'
+  if (['go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs', 'php', 'dart', 'vue'].includes(ext)) return 'c'
+  if (ext === 'sql') return 'sql'
   if (['yml', 'yaml', 'toml', 'ini', 'conf'].includes(ext)) return 'sh'
   if (['md', 'markdown'].includes(ext)) return null
   return null
@@ -44,11 +45,13 @@ const KEYWORDS: Record<string, ReadonlySet<string>> = {
   c: new Set(['abstract', 'as', 'async', 'await', 'base', 'break', 'case', 'catch', 'class', 'const', 'const_cast', 'continue', 'crate', 'debugger', 'declare', 'default', 'delete', 'do', 'dyn', 'else', 'enum', 'export', 'extends', 'false', 'final', 'finally', 'fn', 'for', 'from', 'func', 'function', 'get', 'go', 'goto', 'if', 'impl', 'implements', 'import', 'in', 'instanceof', 'interface', 'is', 'let', 'loop', 'match', 'mod', 'mut', 'namespace', 'new', 'not', 'null', 'nullptr', 'operator', 'or', 'package', 'private', 'protected', 'public', 'pub', 'readonly', 'ref', 'require', 'return', 'self', 'set', 'signed', 'static', 'std', 'struct', 'super', 'switch', 'template', 'this', 'throw', 'throws', 'trait', 'true', 'try', 'type', 'typedef', 'typeof', 'union', 'unsigned', 'unsafe', 'use', 'using', 'var', 'virtual', 'void', 'where', 'while', 'with', 'yield']),
   py: new Set(['and', 'as', 'assert', 'async', 'await', 'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'False', 'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'None', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'True', 'try', 'while', 'with', 'yield']),
   sh: new Set(['case', 'do', 'done', 'elif', 'else', 'esac', 'fi', 'for', 'function', 'if', 'in', 'return', 'select', 'then', 'until', 'while', 'export', 'local', 'set', 'source', 'echo', 'cd']),
+  sql: new Set(['select', 'from', 'where', 'join', 'left', 'right', 'inner', 'outer', 'on', 'group', 'order', 'by', 'having', 'limit', 'offset', 'insert', 'into', 'values', 'update', 'set', 'delete', 'create', 'table', 'alter', 'drop', 'index', 'view', 'as', 'and', 'or', 'not', 'null', 'true', 'false', 'distinct', 'union', 'all', 'exists', 'in', 'between', 'like', 'is', 'case', 'when', 'then', 'else', 'end', 'primary', 'key', 'foreign', 'references', 'default', 'constraint', 'unique']),
   json: new Set(['true', 'false', 'null']),
   css: new Set(['important', 'inherit', 'initial', 'unset', 'var', 'url', 'calc', 'rgba', 'rgb', 'color-mix']),
 }
 
 const LINE_COMMENT: Record<string, readonly string[]> = {
+  sql: ['--'],
   c: ['//'],
   py: ['#'],
   sh: ['#'],
@@ -57,6 +60,7 @@ const LINE_COMMENT: Record<string, readonly string[]> = {
 }
 
 const STRING_QUOTES: Record<string, readonly string[]> = {
+  sql: ["'", '"'],
   c: ['"', "'", '`'],
   py: ['"', "'"],
   sh: ['"', "'"],

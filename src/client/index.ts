@@ -76,11 +76,16 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
     const unsubscribe = subscribeGlassReady(glass => {
       if (disposed) return
       unregister?.()
-      unregister = glass.register({
-        plugin: 'dsh-git-review',
-        selectors: ['[data-git-review-toolbar]', '[data-git-review-tree]', '[data-git-review-diff]'],
-        mode: 'fill',
-      })
+      // A hostile or broken bridge must never take the tab factory down.
+      try {
+        unregister = glass.register({
+          plugin: 'dsh-git-review',
+          selectors: ['[data-git-review-toolbar]', '[data-git-review-tree]', '[data-git-review-diff]'],
+          mode: 'fill',
+        })
+      } catch {
+        unregister = undefined
+      }
     })
     return () => {
       disposed = true

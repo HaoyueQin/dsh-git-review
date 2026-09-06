@@ -574,7 +574,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const previewKind: PreviewKind | null = selectedFile !== null ? previewKindForPath(selectedFile.path) : null
   const previewSvg = selectedFile !== null && selectedFile.path.toLowerCase().endsWith('.svg')
   const previewMdOk = previewKind !== 'markdown' || markdownRenderer() !== null
-  const previewSvgOk = !previewSvg || (diff.kind === 'content' && diff.content.includes('<svg'))
+  const previewSvgOk = !previewSvg || (diff.kind === 'content' && diff.content.toLowerCase().includes('<svg'))
   const previewAvailable = previewKind !== null && previewMdOk && previewSvgOk
   const showPreview = previewAvailable && !previewSource && (
     previewKind === 'markdown' || previewKind === 'html' || previewSvg ? diff.kind === 'content' : true
@@ -2354,6 +2354,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                       kind={previewKind}
                       text={previewKind === 'markdown' ? mdText : (diff.kind === 'content' ? diff.content : '')}
                       textLoading={diff.kind === 'loading'}
+                      textTruncated={previewKind === 'markdown' && diff.kind === 'content' && diff.truncated}
                       dataUrl={previewDataUrl}
                       bytesFailed={previewBytesFailed}
                       bytesTruncated={previewBytes.kind === 'ready' && previewBytes.truncated}

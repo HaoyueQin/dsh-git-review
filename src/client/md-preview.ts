@@ -20,8 +20,11 @@
 export const MD_ASSET_CAP = 10
 
 function attr(tag: string, name: string): string | null {
-  const hit = new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i').exec(tag)
-  return hit === null ? null : hit[1]!
+  // Double- or single-quoted values (README sources mix both); unquoted
+  // values stay unmatched and the tag degrades the same as a missing attr.
+  const hit = new RegExp(name + '\\s*=\\s*(?:"([^"]*)"|\'([^\']*)\')', 'i').exec(tag)
+  if (hit === null) return null
+  return hit[1] ?? hit[2] ?? null
 }
 
 /**
@@ -49,8 +52,10 @@ export function htmlFallbackForPreview(text: string): string {
       const src = attr(tag, 'src') ?? ''
       return src === '' ? '' : '![' + (attr(tag, 'alt') ?? '') + '](' + src + ')'
     })
-    .replace(/^[ \t]*<a\b[^>]*href\s*=\s*"([^"]*)"[^>]*>([\s\S]*?)<\/a>/gim, '[$2]($1)')
-    .replace(/<a\b[^>]*href\s*=\s*"([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, '[$2]($1)')
+    .replace(/^[ \t]*<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gim,
+      (_whole, dbl: string | undefined, sqt: string | undefined, text: string) => '[' + text + '](' + (dbl ?? sqt ?? '') + ')')
+    .replace(/<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gi,
+      (_whole, dbl: string | undefined, sqt: string | undefined, text: string) => '[' + text + '](' + (dbl ?? sqt ?? '') + ')')
     .replace(/<\/?p\b[^>]*>/gi, '\n\n')
 }
 

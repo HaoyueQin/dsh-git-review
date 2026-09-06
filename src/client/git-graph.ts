@@ -122,7 +122,12 @@ export function computeGraphLanes(commits: readonly GraphCommit[]): GraphLaneRow
         pass.push({ lane: i, color: tips[i]!.color })
       }
     }
-    rows.push({ lane, color, inEdges, outEdges, pass, laneCount: tips.length })
+    // Trailing dead slots (freed lanes) must not widen the canvas: count
+    // only up to the last live slot, or straight histories after a big
+    // merge keep drawing at peak width.
+    let live = tips.length
+    while (live > 1 && tips[live - 1]!.hash === null) live -= 1
+    rows.push({ lane, color, inEdges, outEdges, pass, laneCount: live })
   }
   return rows
 }

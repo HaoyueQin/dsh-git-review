@@ -476,10 +476,13 @@ function renderHunks(
   },
 ): readonly ReactNode[] {
   let budget = MAX_RENDER_ROWS
+  // True only when rows were actually dropped (a diff of exactly MAX rows
+  // renders whole — the old `budget <= 0` check cried capped for that).
+  let cut = false
   let matchCounter = 0
   const out: React.ReactNode[] = []
   parsed.hunks.forEach((hunk, hi) => {
-    if (budget <= 0) return
+    if (budget <= 0) { cut = true; return }
     const previous = parsed.hunks[hi - 1]
     const skipped = previous === undefined
       ? 0
@@ -489,6 +492,7 @@ function renderHunks(
         hunk.newStart - (previous.newStart + previous.newCount),
       )
     const rows = hunk.rows.slice(0, budget)
+    if (rows.length < hunk.rows.length) cut = true
     budget -= rows.length
     out.push(
       <Fragment key={hi}>
@@ -613,7 +617,7 @@ function renderHunks(
       </Fragment>,
     )
   })
-  if (budget <= 0) {
+  if (cut) {
     out.push(<div key="capped" className={css.noticeRow}>{ui.t('diff.renderCapped', { count: MAX_RENDER_ROWS })}</div>)
   }
   return out

@@ -120,7 +120,7 @@ function WorktreeRow({ width, label, selected, onSelect }: { width: number; labe
     <button
       type="button"
       className={css.commitRow + (selected ? ' ' + css.commitRowActive : '')}
-      style={{ gridTemplateColumns: 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px' }}
+      style={{ gridTemplateColumns: GRAPH_COLUMNS }}
       onClick={onSelect}
     >
       <svg className={css.graphCell} width={width} height={ROW_H} aria-hidden="true">
@@ -142,17 +142,23 @@ function WorktreeRow({ width, label, selected, onSelect }: { width: number; labe
  *  via the shared --graph-w variable (the widest lane canvas). Collapsed, it
  *  degrades to the topology rail so the detail pane gets the width while
  *  commits stay one click away. */
+/** Full-list grid columns (topology | subject | date | author | hash) — one
+ *  shared template so header, rows and the worktree row never drift apart. */
+export const GRAPH_COLUMNS = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px'
+
 export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = false, worktree, worktreeSelected = false, onSelectWorktree, onCommitMenu, t }: CommitGraphProps) {
   const maxLanes = lanes.reduce((width, row) => Math.max(width, row !== undefined ? row.laneCount : 1), 1)
   const graphWidth = Math.max(maxLanes * LANE_W, LANE_W * 2)
-  const columns = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px'
+  const columns = GRAPH_COLUMNS
   // Hover-card state for the folded rail (kept at the top: hooks never go
   // below an early return).
   const [tip, setTip] = useState<{ x: number; y: number; commit: GitCommitSummary } | null>(null)
   const showTip = (node: Element, commit: GitCommitSummary): void => {
     const rect = node.getBoundingClientRect()
     const top = Math.min(rect.top, window.innerHeight - 90)
-    setTip({ x: rect.right, y: Math.max(8, top), commit })
+    // Clamp horizontally: the card is ~320px wide and the rail hugs the
+    // view's right edge in narrow layouts.
+    setTip({ x: Math.min(rect.right, window.innerWidth - 330), y: Math.max(8, top), commit })
   }
   // Branch-line highlight on hover: dim every SVG element whose color id is
   // not the hovered row's, via native style toggling on the list container —
@@ -206,7 +212,7 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
             }}
             onMouseEnter={event => { showTip(event.currentTarget, commit); const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
             onMouseLeave={() => { setTip(null); unlitLine() }}
-            onFocus={event => { showTip(event.currentTarget, commit) }}
+            onFocus={event => { showTip(event.currentTarget, commit); const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
             onBlur={() => { setTip(null); unlitLine() }}
           >
             <GraphCell row={lanes[index]} width={graphWidth} />

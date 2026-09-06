@@ -40,15 +40,21 @@ export function CommitMenu({ state, running, onClose, run, t }: CommitMenuProps)
   const [pos, setPos] = useState({ left: state.x, top: state.y })
 
   useEffect(() => {
-    if (mode === 'busy') return
-    const onDown = (event: MouseEvent): void => {
-      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) onClose()
-    }
+    // Escape always dismisses (even mid-flight — completion is idempotent);
+    // outside-click stays disabled while busy (same discipline as FileMenu).
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
     }
-    document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
+    if (mode === 'busy') {
+      return () => {
+        document.removeEventListener('keydown', onKey)
+      }
+    }
+    const onDown = (event: MouseEvent): void => {
+      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', onDown)
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)

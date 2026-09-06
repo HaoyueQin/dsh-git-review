@@ -395,6 +395,9 @@ assert.deepEqual(mergeBase[0].outEdges, [{ from: 0, to: 0, color: 0 }, { from: 0
 assert.deepEqual(mergeBase[1].inEdges, [{ from: 0, to: 0, color: 0 }])
 assert.deepEqual(mergeBase[1].pass, [{ lane: 1, color: 1 }])
 assert.deepEqual(mergeBase[2].inEdges, [{ from: 1, to: 1, color: 1 }])
+// 29b. Dead trailing slots don't widen the canvas: after the merge above
+//      every lane is freed, so the last row draws at width 1, not 2.
+assert.equal(mergeBase[2].laneCount, 1)
 
 // 30. countMatches: literal case-insensitive default; the optional case and
 //     regex toggles; an invalid regex counts 0 (never throws).
@@ -750,6 +753,8 @@ assert.equal(sniffPreviewMime(new TextEncoder().encode('<svg\x00>')), null, 'NUL
 assert.equal(sniffPreviewMime(new TextEncoder().encode('hello, world')), null)
 assert.equal(sniffPreviewMime(new Uint8Array(0)), null)
 assert.equal(sniffPreviewMime(new Uint8Array([0x00, 0x01, 0x02])), null)
+assert.equal(sniffPreviewMime(new Uint8Array([0x00, 0x00, 0x01, 0x00, 0x01])), 'image/x-icon')
+assert.equal(sniffPreviewMime(new Uint8Array([0x00, 0x00, 0x02])), null, 'truncated ico signature')
 
 // 45. previewKindForPath: extension gate for the in-tab preview (the server
 //     mime wins on conflict; unknown extensions stay on the source view).
@@ -762,6 +767,8 @@ assert.equal(previewKindForPath('paper.pdf'), 'pdf')
 assert.equal(previewKindForPath('page.html'), 'html')
 assert.equal(previewKindForPath('docs/UPPER.HTM'), 'html')
 assert.equal(previewKindForPath('src/index.ts'), null)
+assert.equal(previewKindForPath('notes.mkd'), 'markdown')
+assert.equal(previewKindForPath('icon.ICO'), 'image')
 assert.equal(previewKindForPath('archive.zip'), null)
 assert.equal(previewKindForPath('Makefile'), null)
 
@@ -783,6 +790,8 @@ assert.equal(htmlFallbackForPreview('# Title\n\nplain **md** stays'), '# Title\n
 assert.equal(htmlFallbackForPreview('<img alt="no-src">'), '')
 assert.equal(htmlFallbackForPreview('  <img src="a.svg" alt="demo">'), '![demo](a.svg)')
 assert.equal(htmlFallbackForPreview('  <a href="R.md">EN</a> | 中'), '[EN](R.md) | 中')
+assert.equal(htmlFallbackForPreview("<img src='a.svg' alt='demo'>"), '![demo](a.svg)')
+assert.equal(htmlFallbackForPreview("<a href='R.md'>EN</a>"), '[EN](R.md)')
 assert.deepEqual(collectMdAssets('![a](docs/x.svg)\n![b](https://e.com/y.png)\n![c][id]\n\n[id]: assets/z.png\n\n[unused]: q.png'), ['docs/x.svg', 'https://e.com/y.png', 'assets/z.png'])
 assert.equal(
   rewriteMdAssets('![a](docs/x.svg "t") and ![c][id]\n\n[id]: assets/z.png', new Map([['docs/x.svg', 'DATA:X'], ['assets/z.png', 'DATA:Z']])),

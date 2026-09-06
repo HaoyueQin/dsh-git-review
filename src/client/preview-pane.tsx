@@ -54,6 +54,8 @@ export interface PreviewPaneProps {
   /** Source text for markdown/SVG ('' while loading). */
   text: string
   textLoading: boolean
+  /** True when served markdown text is a capped prefix (same notice as source). */
+  textTruncated?: boolean
   /** data: URL for raster images and PDFs (null while loading/failed). */
   dataUrl: string | null
   bytesFailed: boolean
@@ -67,7 +69,7 @@ export interface PreviewPaneProps {
  * The preview half of the file view (the source half stays FilePane).
  * @param props - the file, its kind, loaded payloads and the way back.
  */
-export function PreviewPane({ file, kind, text, textLoading, dataUrl, bytesFailed, bytesTruncated, onShowSource, t }: PreviewPaneProps) {
+export function PreviewPane({ file, kind, text, textLoading, textTruncated = false, dataUrl, bytesFailed, bytesTruncated, onShowSource, t }: PreviewPaneProps) {
   const labels = useMemo<MarkdownLabels>(() => ({
     code: { copyLabel: t('preview.copy'), copiedLabel: t('preview.copied') },
     footnotes: t('preview.footnotes'),
@@ -152,7 +154,7 @@ export function PreviewPane({ file, kind, text, textLoading, dataUrl, bytesFaile
         {kind === 'markdown' && (textLoading
           ? <div className={css.paneNotice}>{t('file.loading')}</div>
           : Markdown !== null
-            ? <div className={css.previewMd}><Markdown text={text} labels={labels} /></div>
+            ? <><div className={css.previewMd}><Markdown text={text} labels={labels} /></div>{textTruncated && <div className={css.noticeRow}>{t('file.truncated')}</div>}</>
             : <div className={css.paneNotice}>{t('preview.loadFailed')}</div>)}
         {kind === 'image' && (imageReady
           ? <img

@@ -59,6 +59,8 @@ function PickerItem({ selected, disabled, icon, name, meta, onPick, title }: {
   return (
     <button
       type="button"
+      role="option"
+      aria-selected={selected}
       className={css.pickerItem + (selected ? ' ' + css.pickerItemActive : '')}
       disabled={disabled === true}
       onClick={onPick}
@@ -245,8 +247,8 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
                     onPick={() => { pick(commit.hash) }}
                   />
                 ))}
-                {q !== '' && commitsMatch.length === 0 && commits !== null && (
-                  <div className={css.pickerEmpty}>{t('picker.empty')}</div>
+                {commitsMatch.length > 80 && (
+                  <div className={css.pickerEmpty}>{t('picker.truncated', { count: 80 })}</div>
                 )}
               </>
             )}

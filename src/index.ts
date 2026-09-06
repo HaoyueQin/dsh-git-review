@@ -2130,5 +2130,5 @@ export function apply(ctx: Context): void {
         respond(res, 200, { ok: false, error: String((error as Error).message ?? error) })
       }
     },
-  }), 'dsh-git-review: read-only git api')
+  }), 'dsh-git-review: fenced git api')
 }

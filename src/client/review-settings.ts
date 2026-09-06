@@ -83,14 +83,12 @@ export function migrationFields(raw: unknown): ReviewPrefs | null {
   return prefsEqual(normalized, DEFAULT_PREFS) ? null : normalized
 }
 
+/** Field list derived from the defaults: adding a preference can no
+ *  longer silently skip the equality check below. */
+const PREF_FIELDS = Object.keys(DEFAULT_PREFS) as (keyof ReviewPrefs)[]
+
 function prefsEqual(a: ReviewPrefs, b: ReviewPrefs): boolean {
-  return a.viewMode === b.viewMode
-    && a.searchScope === b.searchScope
-    && a.graphCollapsed === b.graphCollapsed
-    && a.searchCS === b.searchCS
-    && a.searchRegex === b.searchRegex
-    && a.wsIgnore === b.wsIgnore
-    && a.syntaxHighlight === b.syntaxHighlight
+  return PREF_FIELDS.every(field => a[field] === b[field])
 }
 
 function parseJson(raw: string): unknown {

@@ -136,7 +136,7 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
             <button type="button" className={css.scopeBtn} onClick={onShowPreview}>
               {t('preview.toggle')}
             </button>
-            <button type="button" className={css.scopeBtn + ' ' + css.scopeBtnActive}>
+            <button type="button" className={css.scopeBtn + ' ' + css.scopeBtnActive} disabled aria-current="true">
               {t('preview.source')}
             </button>
           </span>
@@ -152,9 +152,9 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
           <span>{t('blame.toggle')}</span>
         </button>
       </div>
-      {binary && (
-        <div className={css.noticeRow}>{(size > 0 ? t('diff.binarySize', { size }) : t('diff.binary')) + ' \u00b7 ' + t('preview.openHint')}</div>
-      )}
+      {binary ? (
+        <div className={css.noticeRow}>{(size > 0 ? t('diff.binarySize', { size }) : t('diff.binary')) + (previewAvailable === true ? ' \u00b7 ' + t('preview.openHint') : '')}</div>
+      ) : null}
       {!binary && truncated && <div className={css.noticeRow}>{t('file.truncated')}</div>}
       {blameOn && blameState.kind === 'loading' && <div className={css.noticeRow}>{t('blame.loading')}</div>}
       {blameOn && blameState.kind === 'failed' && <div className={css.noticeRow + ' ' + css.noticeError}>{blameState.message ?? ''}</div>}
@@ -172,7 +172,10 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
                 const previous = index > 0 ? blameState.lines![index - 1] ?? null : null
                 const repeated = previous !== null && previous.hash === row.hash
                 const short = row.hash.slice(0, 7)
-                const author = row.author.length > 10 ? row.author.slice(0, 9) + '\u2026' : row.author
+                // Array.from: a naive slice can split a surrogate pair into
+                // a lone-surrogate replacement character.
+                const authorChars = Array.from(row.author)
+                const author = authorChars.length > 10 ? authorChars.slice(0, 9).join('') + '\u2026' : row.author
                 return (
                   <span className={css.blameGutter} title={repeated ? undefined : row.author + ' \u00b7 ' + row.hash + ' \u00b7 ' + row.summary}>
                     {repeated ? '' : author + ' ' + short}

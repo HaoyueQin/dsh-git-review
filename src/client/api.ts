@@ -45,7 +45,16 @@ export async function hostCall<T>(action: string, body: unknown): Promise<T | nu
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (!res.ok) return null
+    // A structured server error (413 body-too-large, 404 unknown action)
+    // must surface as itself — only transport failures degrade to null
+    // (the tab's 'host unavailable' notice).
+    if (!res.ok) {
+      try {
+        return (await res.json()) as T
+      } catch {
+        return null
+      }
+    }
     return (await res.json()) as T
   } catch {
     return null

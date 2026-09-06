@@ -541,6 +541,7 @@ export type PreviewMime =
   | 'image/webp'
   | 'image/bmp'
   | 'image/avif'
+  | 'image/x-icon'
   | 'image/svg+xml'
   | 'application/pdf'
 
@@ -576,6 +577,10 @@ export function sniffPreviewMime(bytes: Uint8Array): PreviewMime | null {
   }
   if (bytes.length >= 12 && ascii(4, 'ftyp') && ascii(8, 'avif')) {
     return 'image/avif'
+  }
+  // ICO: reserved(0) + type(1) — every favicon starts with these 4 bytes.
+  if (bytes.length >= 4 && bytes[0] === 0x00 && bytes[1] === 0x00 && bytes[2] === 0x01 && bytes[3] === 0x00) {
+    return 'image/x-icon'
   }
   if (bytes.length >= 5 && ascii(0, '%PDF-')) {
     return 'application/pdf'

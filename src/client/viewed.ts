@@ -41,8 +41,6 @@ export interface ViewedStore {
   has(blob: string): boolean
   /** Toggle one hash; returns the state AFTER the toggle. */
   toggle(blob: string): boolean
-  /** How many hashes are remembered. */
-  count(): number
 }
 
 export function createViewedStore(
@@ -83,9 +81,6 @@ export function createViewedStore(
       }
       persist()
       return marked
-    },
-    count() {
-      return order.length
     },
   }
 }

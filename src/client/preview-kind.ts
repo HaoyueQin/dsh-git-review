@@ -6,8 +6,8 @@ export type PreviewKind = 'markdown' | 'image' | 'pdf' | 'html'
 
 export function previewKindForPath(path: string): PreviewKind | null {
   const lower = path.toLowerCase()
-  if (/\.(md|markdown|mdown)$/.test(lower)) return 'markdown'
-  if (/\.(png|jpe?g|gif|webp|bmp|avif|svg)$/.test(lower)) return 'image'
+  if (/\.(md|markdown|mdown|mkd|mdx|rmd)$/.test(lower)) return 'markdown'
+  if (/\.(png|jpe?g|gif|webp|bmp|avif|svg|ico)$/.test(lower)) return 'image'
   if (/\.pdf$/.test(lower)) return 'pdf'
   if (/\.(html?|xhtml)$/.test(lower)) return 'html'
   return null

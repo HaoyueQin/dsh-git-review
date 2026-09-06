@@ -109,15 +109,22 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
   const canChat = useInput !== undefined && inputActions !== undefined
 
   useEffect(() => {
-    if (mode === 'busy') return
-    const onDown = (event: MouseEvent): void => {
-      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) onClose()
-    }
+    // Escape always dismisses (even mid-flight — the op continues in the
+    // background and its completion handler is idempotent); outside-click
+    // stays disabled while busy so a stray click can't drop the error row.
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
     }
-    document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
+    if (mode === 'busy') {
+      return () => {
+        document.removeEventListener('keydown', onKey)
+      }
+    }
+    const onDown = (event: MouseEvent): void => {
+      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', onDown)
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)

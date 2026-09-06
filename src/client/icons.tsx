@@ -1,7 +1,8 @@
 /**
  * Inline SVG icons for the review chrome (stroke inherits currentColor so
- * every icon tracks the theme): refresh, expand/collapse context, chevron
- * for the directory disclosure, and the filter magnifier.
+ * every icon tracks the theme): refresh, expand/collapse context, fold and
+ * popup chevrons, search/branch/commit/comment/graph/tag/file/copy/trash/
+ * pencil/open/folder/check/split-lines/lines/swap/history/plus/minus/undo.
  */
 interface IconProps {
   size?: number
@@ -192,17 +193,6 @@ export function LinesIcon({ size = 13 }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
       <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
-    </svg>
-  )
-}
-
-export function OptionsIcon({ size = 13 }: IconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
-      <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" />
-      <circle cx="6" cy="4.5" r="1.4" fill="var(--dsw-alias-bg-layer-1)" />
-      <circle cx="10.5" cy="8" r="1.4" fill="var(--dsw-alias-bg-layer-1)" />
-      <circle cx="5" cy="11.5" r="1.4" fill="var(--dsw-alias-bg-layer-1)" />
     </svg>
   )
 }

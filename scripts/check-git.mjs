@@ -352,10 +352,13 @@ assert.ok(patch0 !== null && patch1 !== null)
   writeFileSync(join(repo, 'bodied.txt'), 'with body\n')
   sh(repo, 'add', '-A')
   sh(repo, 'commit', '-m', 'bodied subject', '-m', 'first body line\nsecond body line')
-  const bodied = await gitLog(repo, 1, 0)
+  const bodied = await gitLog(repo, 50, 0)
   assert.equal(bodied.ok, true)
-  assert.equal(bodied.commits[0].subject, 'bodied subject')
-  assert.equal(bodied.commits[0].body, 'first body line\nsecond body line')
+  // Same-second commits tie under --date-order (order unstable across
+  // machines), so find by subject instead of trusting index 0.
+  const bodiedCommit = bodied.commits.find(c => c.subject === 'bodied subject')
+  assert.ok(bodiedCommit !== undefined, 'bodied commit rides the feed')
+  assert.equal(bodiedCommit.body, 'first body line\nsecond body line')
   assert.equal(typeof page0.commits[0].body, 'string')
 }
 

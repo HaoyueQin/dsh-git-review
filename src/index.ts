@@ -84,6 +84,7 @@ import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashL
 import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, sniffPreviewMime, splitDiffSections } from './git-parse.ts'
 import { installSettings } from './settings-schema.ts'
 import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
+import type { PreviewMime } from './git-parse.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
 const HASH_ONLY_RE = /^[0-9a-f]{40}$/
@@ -696,13 +697,12 @@ function runGitBytes(root: string, args: readonly string[], byteCap: number = PR
   })
 }
 
-/** One `file-bytes` answer: fenced raw bytes for in-tab previews (images,
- *  PDF), base64 over the JSON wire (the route stays POST+JSON per the J8-4
- *  CSRF posture — no raw-byte GET to hotlink). The mime comes from
- *  sniffPreviewMime's magic bytes, never the extension; an unsniffable file
- *  is an honest error and the tab keeps its binary notice. Oversized files
- *  report truncated instead of entering memory whole. */
-export async function gitFileBytes(cwd: unknown, path: unknown, ref: unknown): Promise<GitFileBytesPayload | { ok: false; error: string }> {
+/** Shared preview-byte core (file-bytes + asset): fenced raw bytes plus
+ *  the magic-sniffed mime, never trusted from the extension. Throws on
+ *  fence/IO failures; an unsniffable type arrives as mime null for the
+ *  caller to answer honestly. Oversized files report truncated instead of
+ *  entering memory whole. */
+async function readPreviewBytes(cwd: unknown, path: unknown, ref: unknown): Promise<{ data: Buffer; mime: PreviewMime | null; size: number; truncated: boolean }> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -735,8 +735,68 @@ export async function gitFileBytes(cwd: unknown, path: unknown, ref: unknown): P
     truncated = size > PREVIEW_CAP
   }
   const mime = sniffPreviewMime(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+  return { data, mime, size, truncated }
+}
+
+/** One `file-bytes` answer: the core above, base64 over the JSON wire (the
+ *  route stays POST+JSON per the J8-4 CSRF posture). An unsniffable file
+ *  is an honest error and the tab keeps its binary notice. */
+export async function gitFileBytes(cwd: unknown, path: unknown, ref: unknown): Promise<GitFileBytesPayload | { ok: false; error: string }> {
+  const { data, mime, size, truncated } = await readPreviewBytes(cwd, path, ref)
   if (mime === null) return { ok: false, error: 'file is not previewable (unknown type)' }
   return { ok: true, base64: data.toString('base64'), mime, size, truncated }
+}
+
+/** GET image bytes for markdown `<img>` (the shell renderer only paints
+ *  absolute http(s) images, so no data: URL can ever render there).
+ *  Read-only and image-mimes-only (never HTML/JS: magic-sniffed, never the
+ *  extension; PDFs stay POST-only) over fenced repo paths with
+ *  server-re-resolved refs — and `Cross-Origin-Resource-Policy:
+ *  same-origin`, so cross-site embeds fail closed while the tab's own
+ *  same-origin `<img>` loads fine. Oversized files answer 413 (a partial
+ *  image would never decode). */
+async function serveAsset(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== 'GET') {
+    respond(res, 405, { ok: false, error: 'GET only' })
+    return
+  }
+  let params: URLSearchParams
+  try {
+    params = new URL(req.url ?? '', 'http://localhost').searchParams
+  } catch {
+    respond(res, 400, { ok: false, error: 'bad request' })
+    return
+  }
+  const cwd = params.get('cwd') ?? ''
+  const path = params.get('path') ?? ''
+  const ref = params.get('ref') ?? undefined
+  if (cwd === '' || path === '') {
+    respond(res, 400, { ok: false, error: 'cwd and path are required' })
+    return
+  }
+  let loaded: { data: Buffer; mime: PreviewMime | null; truncated: boolean }
+  try {
+    loaded = await readPreviewBytes(cwd, path, ref)
+  } catch (error) {
+    respond(res, 404, { ok: false, error: String((error as Error).message ?? error) })
+    return
+  }
+  if (loaded.mime === null || !loaded.mime.startsWith('image/')) {
+    respond(res, 404, { ok: false, error: 'file is not a previewable image' })
+    return
+  }
+  if (loaded.truncated) {
+    respond(res, 413, { ok: false, error: 'file too large to preview' })
+    return
+  }
+  res.writeHead(200, {
+    'content-type': loaded.mime,
+    'content-length': loaded.data.length,
+    'x-content-type-options': 'nosniff',
+    'cross-origin-resource-policy': 'same-origin',
+    'cache-control': 'private, max-age=60',
+  })
+  res.end(loaded.data)
 }
 
 /** Line cap for blame (a review tab is not a history aquarium). */
@@ -769,7 +829,7 @@ export async function gitFileHistory(cwd: unknown, path: unknown): Promise<GitFi
     raw = await runGit(repoRoot, [
       'log', '--follow', '--date-order',
       '--max-count=' + String(FILE_HISTORY_CAP),
-      '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e',
+      '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%b%x1e',
       '--', relPath,
     ])
   } catch (error) {
@@ -868,7 +928,7 @@ export async function gitLog(cwd: unknown, limit: unknown, skip: unknown): Promi
       'log', '--all', '--date-order',
       ...(skipCount > 0 ? ['--skip=' + String(skipCount)] : []),
       '--max-count=' + String(maxCount),
-      '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e',
+      '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%b%x1e',
     ])
     if (streamed.code !== 0) {
       // An unborn HEAD has no commits: an empty graph, not a failure.
@@ -1822,6 +1882,10 @@ export function apply(ctx: Context): void {
       try {
         if (route === '/ping' || route === API_PREFIX + '/ping') {
           respond(res, 200, { ok: true })
+          return
+        }
+        if (route === '/asset' || route === API_PREFIX + '/asset') {
+          await serveAsset(req, res)
           return
         }
         if (req.method !== 'POST') {

@@ -13,6 +13,7 @@ import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
 import { previewKindForPath } from '../src/client/preview-kind.ts'
+import { collectMdAssets, htmlFallbackForPreview, resolveMdAsset, rewriteMdAssets } from '../src/client/md-preview.ts'
 import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
 import { createDraftBox, draftsKey, parseDrafts } from '../src/client/comment-drafts.ts'
 
@@ -317,9 +318,10 @@ const logLines = parseLogLines([
   '',
   H1 + '\x1f' + H2 + ' ' + H3 + '\x1fAlice\x1f1700000000\x1fHEAD -> main, origin/main, tag: v1.0\x1fsubject one\x1e',
   H2 + '\x1f\x1fBob\x1f1700000001\x1f\x1froot commit\x1e',
+  H3 + '\x1f' + H1 + '\x1fCara\x1f1700000002\x1f\x1fsubject three\x1fbody line one\nbody line two\x1e',
   'zz' + '\x1fshort\x1e',
 ].join('\x1e'))
-assert.equal(logLines.length, 2)
+assert.equal(logLines.length, 3)
 assert.deepEqual(logLines[0], {
   hash: H1,
   parents: [H2, H3],
@@ -332,9 +334,13 @@ assert.deepEqual(logLines[0], {
     { name: 'v1.0', kind: 'tag' },
   ],
   subject: 'subject one',
+  body: '',
 })
 assert.deepEqual(logLines[1].parents, [])
 assert.equal(logLines[1].subject, 'root commit')
+assert.equal(logLines[1].body, '')
+assert.equal(logLines[2].subject, 'subject three')
+assert.equal(logLines[2].body, 'body line one\nbody line two')
 
 // 27. computeGraphLanes, straight history: one lane, in/out segments chain.
 const straight = computeGraphLanes([
@@ -731,5 +737,31 @@ assert.equal(langOf('app.vue'), 'c')
 assert.equal(langOf('query.sql'), 'sql')
 assert.deepEqual(tokenizeLine('select * from t -- hi', 'sql')[0], { start: 0, end: 6, kind: 'kw' })
 assert.equal(tokenizeLine('-- only a comment', 'sql')[0].kind, 'com')
+
+// 47. md-preview: safe-HTML fallback + relative-asset collect/rewrite/resolve.
+assert.equal(
+  htmlFallbackForPreview('<p align="center"><picture><source srcset="a-dark.svg"><img src="a.svg" alt="demo" width="720"></picture></p>'),
+  '\n\n![demo](a.svg)\n\n',
+)
+assert.equal(htmlFallbackForPreview('<a href="README.md">English</a> | 中文'), '[English](README.md) | 中文')
+assert.equal(htmlFallbackForPreview('# Title\n\nplain **md** stays'), '# Title\n\nplain **md** stays')
+assert.equal(htmlFallbackForPreview('<img alt="no-src">'), '')
+assert.equal(htmlFallbackForPreview('  <img src="a.svg" alt="demo">'), '![demo](a.svg)')
+assert.equal(htmlFallbackForPreview('  <a href="R.md">EN</a> | 中'), '[EN](R.md) | 中')
+assert.deepEqual(collectMdAssets('![a](docs/x.svg)\n![b](https://e.com/y.png)\n![c][id]\n\n[id]: assets/z.png\n\n[unused]: q.png'), ['docs/x.svg', 'https://e.com/y.png', 'assets/z.png'])
+assert.equal(
+  rewriteMdAssets('![a](docs/x.svg "t") and ![c][id]\n\n[id]: assets/z.png', new Map([['docs/x.svg', 'DATA:X'], ['assets/z.png', 'DATA:Z']])),
+  '![a](DATA:X "t") and ![c][id]\n\n[id]: DATA:Z',
+)
+assert.equal(rewriteMdAssets('![a](https://e.com/y.png)', new Map()), '![a](https://e.com/y.png)')
+assert.equal(resolveMdAsset('README.md', 'docs/demo.svg'), 'docs/demo.svg')
+assert.equal(resolveMdAsset('docs/sub/note.md', '../img.png'), 'docs/img.png')
+assert.equal(resolveMdAsset('docs/note.md', '/assets/a.png'), 'assets/a.png')
+assert.equal(resolveMdAsset('docs/note.md', 'a.png?v=2#x'), 'docs/a.png')
+assert.equal(resolveMdAsset('README.md', 'https://e.com/y.png'), null)
+assert.equal(resolveMdAsset('README.md', 'data:image/png;base64,xx'), null)
+assert.equal(resolveMdAsset('README.md', '#frag'), null)
+assert.equal(resolveMdAsset('docs/note.md', '../../escape.png'), null)
+assert.equal(resolveMdAsset('README.md', ''), null)
 
 console.log('check-parse: all assertions passed')

@@ -34,10 +34,23 @@ export function CollapseIcon({ size = 14 }: IconProps) {
   )
 }
 
+/** Fold chevron: › collapsed, ∨ expanded (tree/section convention).
+ *  @param props - size and whether the folded content is open. */
 export function ChevronIcon({ size = 12, rotated = false }: IconProps & { rotated?: boolean }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"
-      aria-hidden="true" style={{ transform: rotated ? 'rotate(-90deg)' : undefined, transition: 'transform 120ms ease' }}>
+      aria-hidden="true" style={{ transform: rotated ? 'rotate(90deg)' : undefined, transition: 'transform 120ms ease' }}>
+      <path d="m5.5 3.5 4.5 4.5-4.5 4.5" />
+    </svg>
+  )
+}
+
+/** Popup chevron: ∨ closed, ∧ open (dropdown-button convention).
+ *  @param props - size and whether the popup is open. */
+export function PopupIcon({ size = 12, open = false }: IconProps & { open?: boolean }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"
+      aria-hidden="true" style={{ transform: open ? 'rotate(-90deg)' : 'rotate(90deg)', transition: 'transform 120ms ease' }}>
       <path d="m5.5 3.5 4.5 4.5-4.5 4.5" />
     </svg>
   )

@@ -182,7 +182,7 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
     return (
       <div ref={listRef} className={css.commitList + ' ' + css.railList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
         {worktree !== null && worktree !== undefined && (
-          <div className={css.railRow + (worktreeSelected ? ' ' + css.commitRowActive : '')} style={{ gridTemplateColumns: 'var(--graph-w) minmax(0, 1fr) 56px' }}>
+          <div className={css.railRow + (worktreeSelected ? ' ' + css.commitRowActive : '')} style={{ gridTemplateColumns: 'var(--graph-w) minmax(0, 1fr) 84px' }}>
             <svg className={css.graphCell} width={graphWidth} height={ROW_H} aria-hidden="true">
               <circle cx={LANE_W / 2} cy={ROW_H / 2} r={3.5} fill="none" stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.5} strokeDasharray="2 2" />
               <line x1={LANE_W / 2} y1={ROW_H / 2 + 4} x2={LANE_W / 2} y2={ROW_H} stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.2} strokeDasharray="2 3" />
@@ -211,7 +211,7 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
           >
             <GraphCell row={lanes[index]} width={graphWidth} />
             <span className={css.railSubject}>{commit.subject}</span>
-            <span className={css.railHash}>{commit.hash.slice(0, 7)}</span>
+            <span className={css.railHash}>{fmtGraphDate(commit.timestamp)}</span>
           </button>
         ))}
         {tip !== null && (

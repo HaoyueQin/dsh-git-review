@@ -149,7 +149,7 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
         onClick={() => { onToggleDir(entry.path) }}
         title={entry.path === '' ? undefined : entry.path}
       >
-        <ChevronIcon rotated={isCollapsed} />
+        <ChevronIcon rotated={!isCollapsed} />
         <span className={css.dirName}>{entry.name}</span>
         <span className={css.dirCount}>{entry.fileCount}</span>
       </button>

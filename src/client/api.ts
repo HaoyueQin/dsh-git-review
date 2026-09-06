@@ -6,6 +6,16 @@
  */
 const BASE = '/dsh-git-review/api'
 
+/** Absolute same-origin URL serving one fenced image for markdown `<img>`
+ *  (the shell renderer only paints absolute http(s) images). The bytes
+ *  stay magic-sniffed image mimes behind CORP same-origin — no HTML or JS
+ *  can ever come back with this content type. */
+export function assetUrl(cwd: string, path: string, ref?: string | null): string {
+  const query = 'cwd=' + encodeURIComponent(cwd) + '&path=' + encodeURIComponent(path)
+    + (ref ? '&ref=' + encodeURIComponent(ref) : '')
+  return location.origin + BASE + '/asset?' + query
+}
+
 /** Abort a hung host request after this long (git is local; 10s is ample). */
 const REQUEST_TIMEOUT_MS = 10_000
 

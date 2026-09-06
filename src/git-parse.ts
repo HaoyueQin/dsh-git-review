@@ -309,16 +309,21 @@ export interface LogLine {
   timestamp: number
   refs: DecorationEntry[]
   subject: string
+  /** Commit-message body (`%b`: everything after the subject line), '' when
+   *  the message is subject-only. */
+  body: string
 }
 
 const HASH_RE = /^[0-9a-f]{40}$/
 
 /**
- * Parse `git log --all --format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e`
+ * Parse `git log --all --format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%b%x1e`
  * output: records end with \x1e, fields separate on \x1f. The subject is
- * the LAST field (joined again if it contained a \x1f), and malformed or
- * short records are skipped rather than mis-parsed. The leading newline
- * git inserts between records is trimmed off the hash field.
+ * field 6, the body (which may itself span lines, but never records) is
+ * everything after it, joined again; malformed or short records are
+ * skipped rather than mis-parsed. Pre-body formats (subject-last, no %b)
+ * still parse with body ''. The leading newline git inserts between
+ * records is trimmed off the hash field.
  */
 /** One blame row parsed from `git blame --porcelain`. */
 export interface BlameRow {
@@ -392,7 +397,8 @@ export function parseLogLines(raw: string): LogLine[] {
       authorName: fields[2]!,
       timestamp: Number.isFinite(timestamp) ? timestamp : 0,
       refs: parseDecorations(fields[4]!),
-      subject: fields.slice(5).join('\x1f').trim(),
+      subject: (fields[5] ?? '').trim(),
+      body: fields.slice(6).join('\x1f').trim(),
     })
   }
   return out

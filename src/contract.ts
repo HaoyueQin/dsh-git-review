@@ -207,6 +207,9 @@ export interface GitCommitSummary {
   /** Decorations on this commit (branch/tag pointers). */
   refs: { name: string; kind: 'head' | 'tag' | 'other' }[]
   subject: string
+  /** Commit-message body (everything after the subject line); '' when the
+   *  message is subject-only. Rendered under the subject in the detail. */
+  body: string
 }
 
 /** Successful `log` payload: the commit-graph feed, newest first. */

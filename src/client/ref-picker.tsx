@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GitCommitSummary, GitRefEntry } from '../contract.ts'
-import { BranchIcon, CheckIcon, ChevronIcon, CommitIcon, TagIcon } from './icons.tsx'
+import { BranchIcon, CheckIcon, CommitIcon, PopupIcon, TagIcon } from './icons.tsx'
 import { fmtGraphDate } from './graph-view.tsx'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS } from './locales.ts'
@@ -148,7 +148,7 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
       >
         {icon}
         <span className={css.pickerBtnText}>{display}</span>
-        <ChevronIcon rotated={open} />
+        <PopupIcon open={open} />
       </button>
       {open && (
         <div className={css.pickerPop} role="listbox">

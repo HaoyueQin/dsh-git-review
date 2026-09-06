@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="dsh plugin">
   <img src="https://img.shields.io/badge/dsh-%E2%89%A50.1.2-rc.1-4D6BFE?style=flat-square" alt="harness >=0.1.2-rc.1">
   <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
-  <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">
 </p>
 

@@ -17,14 +17,15 @@ import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload,
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { CommitMenu, type CommitMenuState } from './commit-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
-import { hostCall } from './api.ts'
-import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, RefreshIcon, SearchIcon, SwapIcon } from './icons.tsx'
+import { assetUrl, hostCall } from './api.ts'
+import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, PopupIcon, RefreshIcon, SearchIcon, SwapIcon } from './icons.tsx'
 import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { buildHunkPatch } from './diff-parse.ts'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { markdownRenderer, PreviewPane } from './preview-pane.tsx'
 import { previewKindForPath, type PreviewKind } from './preview-kind.ts'
+import { collectMdAssets, htmlFallbackForPreview, MD_ASSET_CAP, resolveMdAsset, rewriteMdAssets } from './md-preview.ts'
 import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
@@ -230,6 +231,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [viewTab, setViewTab] = useState<ViewTab>('changes')
   const [logState, setLogState] = useState<LogState>({ kind: 'idle' })
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null)
+  /** Expanded commit header, by hash (null = folded): switching commits
+   *  folds again, so the detail always opens on its compact summary row. */
+  const [infoOpenHash, setInfoOpenHash] = useState<string | null>(null)
   const [graphFile, setGraphFile] = useState<string | null>(null)
   const [graphFilter, setGraphFilter] = useState('')
   const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
@@ -579,6 +583,28 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     && (previewBytes.kind === 'failed'
       || (previewBytes.kind === 'ready' && (previewBytes.truncated
         || (previewKind === 'pdf' ? previewBytes.mime !== 'application/pdf' : !previewBytes.mime.startsWith('image/')))))
+  /** Markdown text for the renderer: raw HTML wrappers fall back first
+   *  (pure, synchronous), then the asset effect below swaps inlined data:
+   *  URLs for repo-relative images. A stale ready text never renders for a
+   *  new selection (the `path` guard). */
+  const mdFallback = useMemo(() => (
+    previewKind === 'markdown' && diff.kind === 'content' ? htmlFallbackForPreview(diff.content) : null
+  ), [previewKind, diff])
+  /** Markdown text for the renderer: safe-HTML fallback first, then
+   *  repo-relative images rewritten to absolute same-origin asset URLs
+   *  (the shell renderer only paints absolute http(s) images — relative
+   *  links are banned and data: URLs degrade to alt text, so neither can
+   *  render there). Pure and synchronous: no fetch, nothing to stale. */
+  const mdText = useMemo(() => {
+    if (previewKind !== 'markdown' || mdFallback === null || selected === null || cwd === undefined) return mdFallback ?? ''
+    const ref = refsMode && targetRef !== null ? targetRef : null
+    const table = new Map<string, string>()
+    for (const url of collectMdAssets(mdFallback).slice(0, MD_ASSET_CAP)) {
+      const rel = resolveMdAsset(selected, url)
+      if (rel !== null) table.set(url, assetUrl(cwd, rel, ref))
+    }
+    return rewriteMdAssets(mdFallback, table)
+  }, [previewKind, mdFallback, selected, cwd, refsMode, targetRef])
 
   // Diff/content lifecycle (worktree view): whenever the selected file, its
   // untracked-ness (a status refresh may reclassify it), the context depth,
@@ -618,6 +644,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     })
     return () => { alive = false }
   }, [cwd, selected, viewTab, previewSource, refsMode, targetRef])
+
 
   // The selected commit file's diff (graph view): parent0...commit — the
   // empty-tree baseline for a root commit — rendered by the shared DiffPane.
@@ -1285,7 +1312,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 {data.behind > 0 ? '\u2193' + String(data.behind) : ''}
               </span>
             )}
-            <ChevronIcon rotated={branchOpen} />
+            <PopupIcon open={branchOpen} />
           </button>
           {/* separator only when the compare cluster follows — in the graph
               view the branch chip is the whole left group, a dangling
@@ -1407,7 +1434,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                     onClick={() => { setSearchOptionsOpen(value => !value) }}
                   >
                     <span>{t(('search.scope.' + searchScope) as ReviewKey)}</span>
-                    <ChevronIcon size={10} rotated={searchOptionsOpen} />
+                    <PopupIcon size={10} open={searchOptionsOpen} />
                   </button>
                   {searchOptionsOpen && (
                     <div className={css.searchOptionsPop} role="menu">
@@ -2125,6 +2152,18 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 <div className={css.commitDetail} data-git-review-diff="">
                   <div className={css.commitInfo}>
                     <div className={css.commitInfoTop}>
+                      <button
+                        type="button"
+                        className={css.infoToggle}
+                        aria-expanded={infoOpenHash === commitInfo.hash}
+                        title={infoOpenHash === commitInfo.hash ? t('graph.detailCollapse') : t('graph.detailExpand')}
+                        aria-label={infoOpenHash === commitInfo.hash ? t('graph.detailCollapse') : t('graph.detailExpand')}
+                        onClick={() => { setInfoOpenHash(current => (current === commitInfo.hash ? null : commitInfo.hash)) }}
+                      >
+                        <span className={css.infoToggleIcon + (infoOpenHash === commitInfo.hash ? ' ' + css.infoToggleOpen : '')}>
+                          <ChevronIcon size={12} />
+                        </span>
+                      </button>
                       <span className={css.commitInfoLabel}>{t('graph.col.subject')}</span>
                       <div className={css.commitInfoSubjectArea}>
                         <span className={css.commitInfoSubject}>{commitInfo.subject}</span>
@@ -2137,7 +2176,17 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           </span>
                         ))}
                       </div>
+                      {commitTotals !== null && commitFiles !== null && (
+                        <span className={css.commitStats}>
+                          <span className={css.totalAdded}>{'+' + fmtCount(commitTotals.added)}</span>
+                          <span className={css.totalDeleted}>{'\u2212' + fmtCount(commitTotals.deleted)}</span>
+                          <span className={css.fileCount}>{'\u00b7 ' + t('graph.filesCount', { count: commitFiles.length })}</span>
+                        </span>
+                      )}
                     </div>
+                    {infoOpenHash === commitInfo.hash && commitInfo.body !== '' && (
+                      <div className={css.commitBody}>{commitInfo.body}</div>
+                    )}
                     <div className={css.commitActions}>
                       <button
                         type="button"
@@ -2158,34 +2207,25 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                         {t('history.cherryPick')}
                       </button>
                     </div>
-                    <div className={css.commitInfoGrid}>
-                      <span className={css.commitInfoLabel}>{t('graph.col.commit')}</span>
-                      <button
-                        type="button"
-                        className={css.commitHashBtn}
-                        title={copiedHash ? t('graph.copied') : t('graph.copyHash')}
-                        onClick={copyCommitHash}
-                      >
-                        {commitInfo.hash}
-                      </button>
-                      <span className={css.commitInfoLabel}>{t('graph.field.author')}</span>
-                      <span>{commitInfo.authorName}</span>
-                      <span className={css.commitInfoLabel}>{t('graph.col.date')}</span>
-                      <span>{fmtGraphDate(commitInfo.timestamp)}</span>
-                      <span className={css.commitInfoLabel}>{t('graph.parent')}</span>
-                      <span>{commitInfo.parents.length === 0 ? '\u2014' : commitInfo.parents.map(parent => parent.slice(0, 7)).join(', ')}</span>
-                      {commitTotals !== null && (
-                        <>
-                          <span className={css.commitInfoLabel}>{t('graph.field.changes')}</span>
-                          <span>
-                            <span className={css.totalAdded}>{'+' + fmtCount(commitTotals.added)}</span>
-                            {' '}
-                            <span className={css.totalDeleted}>{'\u2212' + fmtCount(commitTotals.deleted)}</span>
-                            {commitFiles !== null && ' \u00b7 ' + t('graph.filesCount', { count: commitFiles.length })}
-                          </span>
-                        </>
-                      )}
-                    </div>
+                    {infoOpenHash === commitInfo.hash && (
+                      <div className={css.commitInfoGrid}>
+                        <span className={css.commitInfoLabel}>{t('graph.col.commit')}</span>
+                        <button
+                          type="button"
+                          className={css.commitHashBtn}
+                          title={copiedHash ? t('graph.copied') : t('graph.copyHash')}
+                          onClick={copyCommitHash}
+                        >
+                          {commitInfo.hash}
+                        </button>
+                        <span className={css.commitInfoLabel}>{t('graph.field.author')}</span>
+                        <span>{commitInfo.authorName}</span>
+                        <span className={css.commitInfoLabel}>{t('graph.col.date')}</span>
+                        <span>{fmtGraphDate(commitInfo.timestamp)}</span>
+                        <span className={css.commitInfoLabel}>{t('graph.parent')}</span>
+                        <span>{commitInfo.parents.length === 0 ? '\u2014' : commitInfo.parents.map(parent => parent.slice(0, 7)).join(', ')}</span>
+                      </div>
+                    )}
                   </div>
                   <div className={css.commitSplit}>
                     <div className={css.commitTreePanel} data-git-review-tree="">
@@ -2265,7 +2305,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                     <PreviewPane
                       file={selectedFile}
                       kind={previewKind}
-                      text={diff.kind === 'content' ? diff.content : ''}
+                      text={previewKind === 'markdown' ? mdText : (diff.kind === 'content' ? diff.content : '')}
                       textLoading={diff.kind === 'loading'}
                       dataUrl={previewDataUrl}
                       bytesFailed={previewBytesFailed}

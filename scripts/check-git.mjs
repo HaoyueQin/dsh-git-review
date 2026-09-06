@@ -348,6 +348,15 @@ assert.ok(patch0 !== null && patch1 !== null)
   }
   // streaming cap surfaces as a boolean, never a crash
   assert.equal(typeof page0.truncated, 'boolean')
+  // commit-message bodies ride the log feed (subject-only messages: '')
+  writeFileSync(join(repo, 'bodied.txt'), 'with body\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'bodied subject', '-m', 'first body line\nsecond body line')
+  const bodied = await gitLog(repo, 1, 0)
+  assert.equal(bodied.ok, true)
+  assert.equal(bodied.commits[0].subject, 'bodied subject')
+  assert.equal(bodied.commits[0].body, 'first body line\nsecond body line')
+  assert.equal(typeof page0.commits[0].body, 'string')
 }
 
 // 12. search modes (J9-1): diff text, file content, case/regex toggles.

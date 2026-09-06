@@ -1,11 +1,13 @@
 /**
  * dsh-git-review — browser half.
  *
- * Registers one read-only Review tab in the conversation view slot (the same
+ * Registers one Review tab in the conversation view slot (the same
  * public slot the trajectory tab uses): workspace changes vs HEAD as a
- * filterable file tree plus per-file side-by-side diffs. Data comes from the
- * host half's fenced prefix route (see src/index.ts); when the host half is
- * absent the tab degrades to an explicit notice instead of erroring.
+ * filterable file tree plus per-file diffs, a commit-graph view, and the
+ * fenced git workbench (stage/commit/branches/tags/stash/conflicts). Data
+ * comes from the host half's fenced prefix route (see src/index.ts); when
+ * the host half is absent the tab degrades to an explicit notice instead
+ * of erroring.
  *
  * The plugin's preference card renders in the settings modal's plugins tab
  * (`settings.plugin.item`, keyed on the host-served `dsh-git-review` settings

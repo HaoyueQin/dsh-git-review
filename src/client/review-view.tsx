@@ -1,8 +1,9 @@
 /**
  * The Review tab: workspace changes vs HEAD as a filterable file tree plus
- * per-file side-by-side diffs. Read-only MVP: the only write-ish affordance
- * is Refresh, because an agent may be mutating the workspace while the tab
- * is open. The view opts into the conversation composer overlay
+ * per-file diffs, a commit-graph view, and the fenced git workbench. Writes
+ * stay gated while an agent is running, because it may be mutating the
+ * workspace while the tab is open. The view opts into the conversation
+ * composer overlay
  * (data-conversation-composer-overlay) like the trajectory view: the shell
  * fixes the view's height and floats the input card over its bottom, so the
  * review→agent feedback loop stays one keystroke away.

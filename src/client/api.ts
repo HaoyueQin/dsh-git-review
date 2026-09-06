@@ -1,5 +1,5 @@
 /**
- * Browser access to the host half's read-only git API. The host half is
+ * Browser access to the host half's fenced git API. The host half is
  * optional (a profile can compose this plugin's client without its server
  * route), so every call degrades to null and the tab shows an explicit
  * notice. Availability is probed once per page and cached module-wide.

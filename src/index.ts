@@ -1,9 +1,10 @@
 /**
  * dsh-git-review — host half.
  *
- * Read-only git introspection of the session workspace repository, served on
+ * Fenced git workbench for the session workspace repository, served on
  * this plugin's own prefix route (the same webServer pattern dsh-diff-stat
- * ships):
+ * ships). Reads are free; every write needs `confirm: true` plus the
+ * client's running-gate and two-step dialogs:
  *
  *   POST /dsh-git-review/api/status       { cwd, base?, target? }
  *   POST /dsh-git-review/api/file-diff    { cwd, path, untracked?, full?, scope?, base?, target? }
@@ -61,8 +62,9 @@
  * composition owner"), so the plugin-served route is the one sanctioned
  * channel left. Trust model follows dsh-diff-stat: same-origin and
  * unauthenticated like every plugin-served Web API, therefore no more
- * powerful than the page that calls it — here, read-only git commands whose
- * every path is fenced inside the session workspace's repository.
+ * powerful than the page that calls it — here, git commands whose every
+ * path is fenced inside the session workspace's repository (refs re-resolved
+ * server-side, write verbs confirm-gated).
  *
  * All git output is NUL/verbatim safe: `--no-optional-locks` (never contend
  * with a running agent's index.lock), `-c core.quotepath=false`, `-z` wire

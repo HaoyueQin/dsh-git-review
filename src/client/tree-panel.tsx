@@ -44,8 +44,9 @@ export interface TreePanelProps {
   onToggleViewed?: (blob: string) => void
   /** Files whose blob hash is not marked reviewed yet (the tree's header chip). */
   pendingCount?: number
-  /** Right-click one file row: called with the path + viewport coords. */
-  onFileMenu?: (path: string, x: number, y: number) => void
+  /** Right-click one file row: called with the path + viewport coords and
+   *  the row's file record (the menu derives the SCM actions from it). */
+  onFileMenu?: (path: string, x: number, y: number, file: ChangedFile) => void
   t: T
 }
 
@@ -66,7 +67,7 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, viewedHas, onTo
   matchCount: number | undefined
   viewedHas?: (blob: string) => boolean
   onToggleViewed?: (blob: string) => void
-  onFileMenu?: (path: string, x: number, y: number) => void
+  onFileMenu?: (path: string, x: number, y: number, file: ChangedFile) => void
   t: T
 }) {
   const badges = badgesFor(entry.file)
@@ -83,7 +84,7 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, viewedHas, onTo
       onClick={() => { onSelect(entry.path) }}
       onContextMenu={onFileMenu === undefined ? undefined : (event) => {
         event.preventDefault()
-        onFileMenu(entry.path, event.clientX, event.clientY)
+        onFileMenu(entry.path, event.clientX, event.clientY, entry.file)
       }}
       title={entry.file.origPath === undefined ? entry.path : entry.path + ' \u2190 ' + entry.file.origPath}
     >
@@ -130,7 +131,7 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
   matchCounts: ReadonlyMap<string, number> | undefined
   viewedHas?: (blob: string) => boolean
   onToggleViewed?: (blob: string) => void
-  onFileMenu?: (path: string, x: number, y: number) => void
+  onFileMenu?: (path: string, x: number, y: number, file: ChangedFile) => void
   t: T
 }) {
   if (entry.kind === 'file') {

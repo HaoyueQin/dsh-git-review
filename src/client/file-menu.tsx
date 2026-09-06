@@ -12,11 +12,11 @@
  * this popover (two-step confirmations), so the destructive path stays
  * behind an explicit user gesture.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { OpenApp } from '../contract.ts'
 import type { InputActions, InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-import { CheckIcon, CopyIcon, FileIcon, FolderIcon, OpenIcon, PencilIcon, TrashIcon } from './icons.tsx'
+import { CheckIcon, CopyIcon, FileIcon, FolderIcon, MinusIcon, OpenIcon, PencilIcon, PlusIcon, TrashIcon, UndoIcon } from './icons.tsx'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS } from './locales.ts'
 import css from './review.module.css'
@@ -28,6 +28,15 @@ export interface FileMenuState {
   path: string
   x: number
   y: number
+  /** The row's worktree git state (worktree tree only; absent for commit
+   *  files, whose rows carry no worktree ops). */
+  git?: {
+    /** The file has staged changes (index differs from HEAD). */
+    staged: boolean
+    /** The file has unstaged changes (worktree differs from index). */
+    unstaged: boolean
+    untracked: boolean
+  }
 }
 
 export interface FileMenuProps {
@@ -35,7 +44,7 @@ export interface FileMenuProps {
   apps: OpenApp[] | null
   /** Whether destructive worktree operations are allowed (agent running off). */
   writable: boolean
-  /** Whether the current list is a commit diff (no worktree ops available). */
+  /** Whether the current list is not the worktree tree (no worktree ops). */
   refsMode: boolean
   /** Conversation input channels (the add-to-chat item appends the path). */
   useInput: SnapshotSelectorHook<InputState> | undefined
@@ -46,6 +55,8 @@ export interface FileMenuProps {
   copyName: (path: string) => Promise<string | null>
   rename: (path: string, newPath: string) => Promise<string | null>
   remove: (path: string) => Promise<string | null>
+  /** SCM row actions (stage/unstage/discard); absent hides the group. */
+  gitAction?: (action: 'stage' | 'unstage' | 'discard', path: string) => Promise<string | null>
   t: T
 }
 
@@ -56,8 +67,8 @@ interface LineItem {
   onClick: () => void
 }
 
-export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, t }: FileMenuProps) {
-  const [mode, setMode] = useState<'menu' | 'apps' | 'rename' | 'delete' | 'busy'>('menu')
+export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, t }: FileMenuProps) {
+  const [mode, setMode] = useState<'menu' | 'apps' | 'rename' | 'delete' | 'discard' | 'busy'>('menu')
   const [renameValue, setRenameValue] = useState(state.path)
   const [note, setNote] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -88,6 +99,24 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
     }
   }, [mode, onClose])
 
+  // The tree lives on the view's RIGHT side, so a menu anchored at the raw
+  // cursor position overflows the viewport's right edge. After every mount
+  // and mode switch (the popover's size changes), pull the popover back
+  // inside with an 8px margin — a poor man's flip-constraint.
+  const [pos, setPos] = useState({ left: state.x, top: state.y })
+  useLayoutEffect(() => {
+    const el = rootRef.current
+    if (el === null) return
+    const rect = el.getBoundingClientRect()
+    const margin = 8
+    let { left, top } = pos
+    if (pos.left + rect.width > window.innerWidth - margin) left = window.innerWidth - rect.width - margin
+    if (pos.top + rect.height > window.innerHeight - margin) top = window.innerHeight - rect.height - margin
+    left = Math.max(margin, left)
+    top = Math.max(margin, top)
+    if (left !== pos.left || top !== pos.top) setPos({ left, top })
+  })
+
   const run = async (_label: string, fn: () => Promise<string | null>): Promise<void> => {
     setMode('busy')
     setNote(null)
@@ -114,7 +143,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
     const name = state.path.split('/').pop() ?? state.path
     const dir = state.path.slice(0, state.path.length - name.length)
     return (
-      <div className={css.fileMenuPop} ref={rootRef} style={{ left: state.x, top: state.y, width: 330 }}>
+      <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 330 }}>
         <div className={css.fileMenuTitle}>{t('menu.rename')}</div>
         <div className={css.fileMenuRenamePath}>{dir}</div>
         <input
@@ -148,7 +177,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
 
   if (mode === 'delete') {
     return (
-      <div className={css.fileMenuPop} ref={rootRef} style={{ left: state.x, top: state.y, width: 330 }}>
+      <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 330 }}>
         <div className={css.fileMenuTitle}>{t('menu.confirmDeleteTitle')}</div>
         <div className={css.fileMenuDeletePath}>{state.path}</div>
         <div className={css.fileMenuActions}>
@@ -168,9 +197,31 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
     )
   }
 
+  if (mode === 'discard') {
+    return (
+      <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 330 }}>
+        <div className={css.fileMenuTitle}>{t('menu.confirmDiscardTitle')}</div>
+        <div className={css.fileMenuDeletePath}>{state.path}</div>
+        <div className={css.fileMenuActions}>
+          <button
+            type="button"
+            className={css.commitBtn + ' ' + css.branchDanger}
+            onClick={() => { void run('discard', () => gitAction?.('discard', state.path) ?? Promise.resolve('unavailable')) }}
+          >
+            {t('menu.confirmDiscard')}
+          </button>
+          <button type="button" className={css.commitBtn} onClick={() => { setMode('menu'); setNote(null) }}>
+            {t('menu.cancel')}
+          </button>
+        </div>
+        {note !== null && <div className={css.commitNote + ' ' + css.errorText}>{note}</div>}
+      </div>
+    )
+  }
+
   if (mode === 'apps') {
     return (
-      <div className={css.fileMenuPop} ref={rootRef} style={{ left: state.x, top: state.y, width: 240 }}>
+      <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 240 }}>
         <div className={css.fileMenuTitle} title={state.path}>{state.path}</div>
         <div className={css.fileMenuApps}>
           {(apps ?? []).map(app => (
@@ -200,7 +251,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
     { key: 'open-with', icon: <FileIcon />, label: t('menu.openWith'), onClick: () => { setNote(null); setMode('apps') } },
   ]
   return (
-    <div className={css.fileMenuPop} ref={rootRef} style={{ left: state.x, top: state.y, width: 240 }}>
+    <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 240 }}>
       <div className={css.fileMenuTitle} title={state.path}>{state.path}</div>
       <>
         {items.map(item => (
@@ -235,6 +286,39 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
               <span className={css.fileMenuItemIcon}><CheckIcon /></span>
               <span className={css.pickerItemName}>{t('menu.addToChat')}</span>
             </button>
+          )}
+          {writable && !refsMode && state.git !== undefined && gitAction !== undefined && (
+            <>
+              <div className={css.fileMenuDivider} />
+              {(state.git.unstaged || state.git.untracked) && (
+                <button
+                  type="button"
+                  className={css.fileMenuItem}
+                  onClick={() => { void run('stage', () => gitAction('stage', state.path)) }}
+                >
+                  <span className={css.fileMenuItemIcon}><PlusIcon /></span>
+                  <span className={css.pickerItemName}>{t('menu.stage')}</span>
+                </button>
+              )}
+              {state.git.staged && (
+                <button
+                  type="button"
+                  className={css.fileMenuItem}
+                  onClick={() => { void run('unstage', () => gitAction('unstage', state.path)) }}
+                >
+                  <span className={css.fileMenuItemIcon}><MinusIcon /></span>
+                  <span className={css.pickerItemName}>{t('menu.unstage')}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className={css.fileMenuItem + ' ' + css.fileMenuDanger}
+                onClick={() => { setNote(null); setMode('discard') }}
+              >
+                <span className={css.fileMenuItemIcon}><UndoIcon /></span>
+                <span className={css.pickerItemName}>{t('menu.discard')}</span>
+              </button>
+            </>
           )}
           {writable && !refsMode && (
             <>

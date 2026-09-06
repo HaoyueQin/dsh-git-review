@@ -12,7 +12,7 @@ import type { RefObject } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
+import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
 import { hostCall } from './api.ts'
@@ -247,6 +247,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [deleteArmed, setDeleteArmed] = useState<string | null>(null)
+  // Stash (inside the branch popover): the list lazily loads when the popover
+  // opens; drop is a two-step arm like branch deletion.
+  const [stashList, setStashList] = useState<GitStashEntry[] | null>(null)
+  const [stashOpen, setStashOpen] = useState(false)
+  const [stashIncludeUntracked, setStashIncludeUntracked] = useState(true)
+  const [stashArmed, setStashArmed] = useState<number | null>(null)
+  // Commit-amend: checking the box pulls the tip's message as the prefill
+  // (never overwriting text the user already typed).
+  const [amend, setAmend] = useState(false)
   // File-tree context menu: the popover state + the open-with app list
   // (availability probed once per page by the host).
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null)
@@ -514,6 +523,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setReloadTick(tick => tick + 1)
   }, [])
 
+  // The review tab's core loop is "agent mutates → human reviews": when the
+  // session's running flag drops, the worktree just stopped changing, so a
+  // refresh shows the final state without a manual click. No competitor can
+  // do this — none of them can read the session state.
+  const runningPrevRef = useRef(false)
+  useEffect(() => {
+    if (runningPrevRef.current && !running) refresh()
+    runningPrevRef.current = running
+  }, [running, refresh])
+
   /** Select a tree file; the staged/unstaged scope resets per selection. */
   const selectFile = useCallback((path: string) => {
     setSelected(path)
@@ -722,7 +741,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     if (kind === 'push') {
       outcome = await pushCall()
     } else {
-      const commitResult = await hostCall<GitWritePayload>('commit', { cwd, message: commitMessage, mode: stageAll ? 'all' : 'staged', confirm: true })
+      const commitResult = await hostCall<GitWritePayload>('commit', { cwd, message: commitMessage, mode: stageAll ? 'all' : 'staged', amend, confirm: true })
       if (commitResult === null) {
         outcome = { ok: false, text: t('state.hostUnavailable') }
       } else if (!commitResult.ok) {
@@ -738,9 +757,80 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setArmed(null)
     if (outcome.ok) {
       if (kind !== 'push') setCommitMessage('')
+      setAmend(false)
       refresh()
     }
-  }, [cwd, commitMessage, stageAll, refresh, t])
+  }, [cwd, commitMessage, stageAll, amend, refresh, t])
+
+  /** One SCM row action from the file menu (stage/unstage/discard): the
+   *  error text to show, or null on success (the menu closes and the
+   *  worktree refreshes — the row's badges/staged halves may have changed). */
+  const runGitAction = useCallback(async (action: 'stage' | 'unstage' | 'discard', path: string): Promise<string | null> => {
+    if (cwd === undefined) return t('state.hostUnavailable')
+    const payload = await hostCall<GitWritePayload>(action, { cwd, paths: [path], confirm: true })
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
+    setSelected(null)
+    refresh()
+    return null
+  }, [cwd, refresh, t])
+
+  /** The stash list refresh (cheap; runs when the popover or section opens
+   *  and after every stash mutation). */
+  const loadStashes = useCallback(() => {
+    if (cwd === undefined) return
+    void hostCall<GitStashPayload>('stash', { cwd, action: 'list' }).then(payload => {
+      setStashList(payload !== null && payload.ok ? payload.stashes : [])
+    })
+  }, [cwd])
+
+  /** One stash mutation (push/apply/pop/drop); the answer surfaces in the
+   *  branch popover's shared note area, like the branch actions' output. */
+  const runStash = useCallback(async (action: 'push' | 'apply' | 'pop' | 'drop', index?: number) => {
+    if (cwd === undefined) return
+    setBranchBusy(true)
+    setBranchResult(null)
+    const payload = await hostCall<GitWritePayload>('stash', { cwd, action, index, includeUntracked: stashIncludeUntracked, confirm: true })
+    setBranchBusy(false)
+    if (payload === null) {
+      setBranchResult({ ok: false, text: t('state.hostUnavailable') })
+      return
+    }
+    setBranchResult({ ok: payload.ok, text: payload.ok ? (payload.output ?? '') : (payload.error ?? 'unknown error') })
+    if (payload.ok) {
+      setStashArmed(null)
+      loadStashes()
+      refresh()
+    }
+  }, [cwd, stashIncludeUntracked, loadStashes, refresh, t])
+
+  /** Fetch all remotes; the answer surfaces like the branch actions'. */
+  const executeFetch = useCallback(async () => {
+    if (cwd === undefined) return
+    setBranchBusy(true)
+    setBranchResult(null)
+    const payload = await hostCall<GitWritePayload>('fetch', { cwd, confirm: true })
+    setBranchBusy(false)
+    if (payload === null) {
+      setBranchResult({ ok: false, text: t('state.hostUnavailable') })
+      return
+    }
+    setBranchResult({ ok: payload.ok, text: payload.ok ? ((payload.output ?? '').trim() === '' ? t('branch.fetchDone') : payload.output!) : (payload.error ?? 'unknown error') })
+    if (payload.ok) refresh()
+  }, [cwd, refresh, t])
+
+  /** Flip the amend checkbox; checking it prefills the tip's message once
+   *  (host `last-commit`) unless the user already typed one. */
+  const toggleAmend = useCallback((next: boolean) => {
+    setAmend(next)
+    if (next && cwd !== undefined && commitMessage.trim() === '') {
+      void hostCall<GitLastCommitPayload>('last-commit', { cwd }).then(payload => {
+        if (payload !== null && payload.ok && payload.message !== '') {
+          setCommitMessage(previous => (previous.trim() === '' ? payload.message : previous))
+        }
+      })
+    }
+  }, [cwd, commitMessage])
 
   if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'notRepo' || status.kind === 'error') {
     return <CenteredState t={t} status={status} onRetry={refresh} />
@@ -763,10 +853,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             className={css.branchBtn}
             title={t('branch.manage')}
             ref={branchBtnRef}
-            onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setBranchResult(null) }}
+            onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setBranchResult(null); loadStashes() }}
           >
             <BranchIcon />
             <span>{data?.branch ?? 'HEAD'}</span>
+            {data?.ahead !== undefined && data.behind !== undefined && data.ahead + data.behind > 0 && (
+              <span className={css.abCount} title={t('aheadBehind.title', { ahead: data.ahead, behind: data.behind })}>
+                {data.ahead > 0 ? '\u2191' + String(data.ahead) : ''}
+                {data.behind > 0 ? '\u2193' + String(data.behind) : ''}
+              </span>
+            )}
             <ChevronIcon rotated={branchOpen} />
           </button>
           {viewTab === 'changes' && (
@@ -967,9 +1063,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             type="button"
             className={css.commitToggle}
             disabled={data === null || running}
-            title={running ? t('commit.running') : t('commit.title')}
+            title={running ? t('commit.running') : t('commit.title') + ' \u00b7 ' + t('commit.commitHint')}
             ref={commitBtnRef}
-            onClick={() => { setCommitOpen(value => !value); setArmed(null) }}
+            onClick={() => { setCommitOpen(value => !value); setArmed(null); setAmend(false) }}
           >
             <CommitIcon />
             <span>{t('commit.title')}</span>
@@ -999,7 +1095,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             className={css.commitInput}
             value={commitMessage}
             onChange={event => { setCommitMessage(event.target.value) }}
-            onKeyDown={event => { if (event.key === 'Escape') setCommitOpen(false) }}
+            onKeyDown={event => {
+              if (event.key === 'Escape') setCommitOpen(false)
+              // The Ctrl/Cmd+Enter submit: the message is typed, the intent
+              // is explicit — commit (never push) without the arm step.
+              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)
+                && commitMessage.trim() !== '' && !running && writeState.kind !== 'busy') {
+                void executeWrite('commit')
+              }
+            }}
             placeholder={t('commit.message')}
             rows={3}
             autoFocus
@@ -1007,6 +1111,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           <label className={css.commitCheck}>
             <input type="checkbox" checked={stageAll} onChange={event => { setStageAll(event.target.checked) }} />
             <span>{t('commit.stageAll')}</span>
+          </label>
+          <label className={css.commitCheck}>
+            <input type="checkbox" checked={amend} onChange={event => { toggleAmend(event.target.checked) }} />
+            <span>{t('commit.amend')}</span>
           </label>
           <div className={css.commitActions}>
             <button
@@ -1042,6 +1150,17 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       )}
       {branchOpen && data !== null && (
         <div className={css.branchPop} ref={branchPopRef}>
+          <div className={css.branchFetchRow}>
+            <button
+              type="button"
+              className={css.commitBtn}
+              disabled={branchBusy || running}
+              title={t('branch.fetch')}
+              onClick={() => { void executeFetch() }}
+            >
+              {t('branch.fetch')}
+            </button>
+          </div>
           <div className={css.branchCreateRow}>
             <input
               className={css.branchNameInput}
@@ -1169,6 +1288,88 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               </details>
             )}
           </div>
+          <div className={css.stashSection}>
+            <button
+              type="button"
+              className={css.stashToggle}
+              onClick={() => { setStashOpen(value => !value); if (!stashOpen) loadStashes() }}
+            >
+              <ChevronIcon size={10} rotated={stashOpen} />
+              <span>{t('stash.title')}</span>
+            </button>
+            <button
+              type="button"
+              className={css.commitBtn}
+              disabled={branchBusy || running}
+              title={t('stash.push')}
+              onClick={() => { void runStash('push') }}
+            >
+              {t('stash.push')}
+            </button>
+            <label className={css.commitCheck}>
+              <input type="checkbox" checked={stashIncludeUntracked} onChange={event => { setStashIncludeUntracked(event.target.checked) }} />
+              <span>{t('stash.includeUntracked')}</span>
+            </label>
+          </div>
+          {stashOpen && (
+            <div className={css.stashList}>
+              {(stashList ?? []).length === 0 ? (
+                <div className={css.draftEmpty}>{t('stash.empty')}</div>
+              ) : (
+                (stashList ?? []).map(entry => (
+                  <div key={entry.index} className={css.stashRow}>
+                    <div className={css.stashRowText}>
+                      <span className={css.draftRowPath}>{'stash@{' + String(entry.index) + '}'}</span>
+                      <span className={css.draftRowBody}>{entry.subject}</span>
+                    </div>
+                    {stashArmed === entry.index ? (
+                      <>
+                        <button
+                          type="button"
+                          className={css.branchIconBtn + ' ' + css.branchDanger}
+                          disabled={branchBusy || running}
+                          onClick={() => { void runStash('drop', entry.index) }}
+                        >
+                          {t('stash.confirmDrop')}
+                        </button>
+                        <button type="button" className={css.branchIconBtn} onClick={() => { setStashArmed(null) }}>
+                          {'\u2715'}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className={css.branchIconBtn}
+                          disabled={branchBusy || running}
+                          onClick={() => { void runStash('apply', entry.index) }}
+                        >
+                          {t('stash.apply')}
+                        </button>
+                        <button
+                          type="button"
+                          className={css.branchIconBtn}
+                          disabled={branchBusy || running}
+                          onClick={() => { void runStash('pop', entry.index) }}
+                        >
+                          {t('stash.pop')}
+                        </button>
+                        <button
+                          type="button"
+                          className={css.branchIconBtn + ' ' + css.branchDanger}
+                          disabled={branchBusy || running}
+                          title={t('stash.drop')}
+                          onClick={() => { setStashArmed(entry.index) }}
+                        >
+                          {'\u2715'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
           {branchBusy && <div className={css.commitNote}>{t('branch.busy')}</div>}
           {branchResult !== null && (
             <div className={css.commitNote + (branchResult.ok ? '' : ' ' + css.errorText)}>{branchResult.text}</div>
@@ -1180,8 +1381,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         <FileMenu
           state={fileMenu}
           apps={openApps}
+          // Graph-mode rows are historical files, not worktree files: no
+          // rename/delete/stage there (they would act on the worktree copy).
           writable={!running}
-          refsMode={refsMode}
+          refsMode={refsMode || viewTab === 'graph'}
           useInput={useInput}
           inputActions={inputActions}
           onClose={() => { setFileMenu(null) }}
@@ -1190,6 +1393,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           copyName={copyFileName}
           rename={renameFile}
           remove={removeFile}
+          gitAction={refsMode ? undefined : runGitAction}
           t={t}
         />
       )}
@@ -1413,7 +1617,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             viewedHas={refsMode ? undefined : viewedHas}
             onToggleViewed={refsMode ? undefined : toggleViewed}
             pendingCount={pendingCount}
-            onFileMenu={(path, x, y) => { setFileMenu({ path, x, y }) }}
+            onFileMenu={(path, x, y, file) => {
+              setFileMenu({
+                path, x, y,
+                git: {
+                  staged: !file.untracked && file.x !== ' ',
+                  unstaged: file.y !== ' ',
+                  untracked: file.untracked,
+                },
+              })
+            }}
             t={t}
           />
         )}

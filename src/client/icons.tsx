@@ -202,3 +202,28 @@ export function SwapIcon({ size = 13 }: IconProps) {
     </svg>
   )
 }
+
+export function PlusIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <path d="M8 3v10M3 8h10" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+export function MinusIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <path d="M3 8h10" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+export function UndoIcon({ size = 13 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden="true">
+      <path d="M3 4v4h4" strokeLinejoin="round" strokeLinecap="round" />
+      <path d="M3.2 7.5a5.2 5.2 0 1 1-1 4.2" strokeLinecap="round" />
+    </svg>
+  )
+}

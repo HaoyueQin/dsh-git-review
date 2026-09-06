@@ -4,7 +4,7 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, refRange, splitDiffSections } from '../src/git-parse.ts'
+import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, splitDiffSections } from '../src/git-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
@@ -525,5 +525,17 @@ assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [{ pa
 box.clear()
 assert.deepEqual(box.list(), [])
 assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [])
+
+// 39. Stash list parsing: stash@{n} selector extraction, / records,
+//     malformed records skipped (same shape the log feed uses).
+const stashRaw = 'stash@{0}1730000000WIP on main: abc1234 fix bugstash@{1}1730000100custom message'
+const stashes = parseStashLines(stashRaw)
+assert.deepEqual(stashes, [
+  { index: 0, timestamp: 1730000000, subject: 'WIP on main: abc1234 fix bug' },
+  { index: 1, timestamp: 1730000100, subject: 'custom message' },
+])
+assert.deepEqual(parseStashLines(''), [])
+assert.deepEqual(parseStashLines('no-selector123textstash@{x}123bad'), [])
+assert.deepEqual(parseStashLines('stash@{12}bad-timekeep'), [{ index: 12, timestamp: 0, subject: 'keep' }])
 
 console.log('check-parse: all assertions passed')

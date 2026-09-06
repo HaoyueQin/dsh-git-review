@@ -47,6 +47,10 @@ export interface GitStatusPayload {
   baseRef?: string | null
   files: ChangedFile[]
   totals: { added: number; deleted: number }
+  /** Local commits the upstream lacks (worktree mode only; absent = no upstream). */
+  ahead?: number
+  /** Upstream commits the local branch lacks (worktree mode only). */
+  behind?: number
 }
 
 /** One selectable ref for the diff-base dropdown. */
@@ -194,4 +198,30 @@ export interface OpenApp {
 export interface OpenAppsPayload {
   ok: true
   apps: OpenApp[]
+}
+
+/** One entry of the stash list (`git stash list`, oldest `stash@{n}` last). */
+export interface GitStashEntry {
+  /** Stash selector index n (the client renders `stash@{n}`). */
+  index: number
+  /** Author time, unix seconds. */
+  timestamp: number
+  /** The stash's subject line (git's default "WIP on …" or a custom message). */
+  subject: string
+}
+
+/** Successful `stash` payload (action 'list'). */
+export interface GitStashPayload {
+  ok: true
+  stashes: GitStashEntry[]
+}
+
+/** Successful `last-commit` payload: the current branch's tip, for the
+ *  commit popover's amend prefill. */
+export interface GitLastCommitPayload {
+  ok: true
+  hash: string
+  subject: string
+  /** Full commit message body (the textarea prefill). */
+  message: string
 }

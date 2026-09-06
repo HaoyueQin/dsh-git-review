@@ -342,6 +342,41 @@ export function parseLogLines(raw: string): LogLine[] {
   return out
 }
 
+/** One `git stash list` entry (the wire format `parseStashLines` reads). */
+export interface StashLine {
+  /** Stash selector index n (renders as `stash@{n}`; the host validated it). */
+  index: number
+  /** Author time, unix seconds (0 when unparseable). */
+  timestamp: number
+  /** The stash's message line (git's default "WIP on …" or a custom one). */
+  subject: string
+}
+
+/**
+ * Parse `git stash list --format=%gd%x1f%at%x1f%gs%x1e` output: same record
+ * shape as the log feed. `%gd` is `stash@{N}` — the integer between the
+ * braces is the selector the apply/pop/drop calls echo back. Malformed
+ * records (or a non-numeric selector) are skipped rather than mis-parsed.
+ */
+export function parseStashLines(raw: string): StashLine[] {
+  const out: StashLine[] = []
+  for (const record of raw.split('\x1e')) {
+    if (record.trim() === '') continue
+    const fields = record.split('\x1f')
+    if (fields.length < 3) continue
+    const selector = fields[0]!.trim()
+    const match = /^stash@\{(\d+)\}$/.exec(selector)
+    if (match === null) continue
+    const timestamp = Number(fields[1]!.trim())
+    out.push({
+      index: Number(match[1]),
+      timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+      subject: fields.slice(2).join('\x1f').trim(),
+    })
+  }
+  return out
+}
+
 /** One per-file section of a full `git diff` text. */
 export interface DiffSection {
   /** Path parsed from the +++ (or ---) header line; null when unclear. */

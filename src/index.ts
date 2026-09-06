@@ -11,8 +11,14 @@
  *   POST /dsh-git-review/api/list-files   { cwd }
  *   POST /dsh-git-review/api/search       { cwd, query, base?, target? }
  *   POST /dsh-git-review/api/refs         { cwd }
- *   POST /dsh-git-review/api/commit       { cwd, message, mode?, confirm: true }
+ *   POST /dsh-git-review/api/commit       { cwd, message, mode?, amend?, confirm: true }
  *   POST /dsh-git-review/api/push         { cwd, confirm: true }
+ *   POST /dsh-git-review/api/last-commit  { cwd }
+ *   POST /dsh-git-review/api/stage        { cwd, paths[], confirm: true }
+ *   POST /dsh-git-review/api/unstage      { cwd, paths[], confirm: true }
+ *   POST /dsh-git-review/api/discard      { cwd, paths[], confirm: true }   (irreversible)
+ *   POST /dsh-git-review/api/fetch        { cwd, confirm: true }
+ *   POST /dsh-git-review/api/stash        { cwd, action, index?, includeUntracked?, confirm: true }
  *   POST /dsh-git-review/api/branch-create  { cwd, name, startPoint?, confirm: true }
  *   POST /dsh-git-review/api/branch-switch  { cwd, name, confirm: true }
  *   POST /dsh-git-review/api/branch-delete  { cwd, name, force?, confirm: true }
@@ -56,10 +62,10 @@ import { lstat, open, realpath, rename, rm } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1 } from './git-parse.ts'
+import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
 import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
 import { installSettings } from './settings-schema.ts'
-import type { ChangedFile, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
+import type { ChangedFile, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
 const HASH_ONLY_RE = /^[0-9a-f]{40}$/
@@ -93,6 +99,23 @@ interface WebServerService {
   }): () => void
 }
 
+/**
+ * Env vars that would hijack git's repository/index resolution: a harness
+ * host process (or its parent shell) may carry GIT_DIR/GIT_WORK_TREE from an
+ * unrelated context, and `-C <root>` does NOT override an explicit GIT_DIR.
+ * Stripping them pins every invocation to the `-C` workspace (dock-git's
+ * env-sanitization precedent).
+ */
+const GIT_ENV_KEYS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR'] as const
+
+export function gitEnv(): NodeJS.ProcessEnv {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && !GIT_ENV_KEYS.includes(key as (typeof GIT_ENV_KEYS)[number])) env[key] = value
+  }
+  return env
+}
+
 /** Run one read-only git command in `root`; resolve stdout, reject with a
  *  message that carries git's stderr (its user-facing diagnostics). */
 function runGit(root: string, args: readonly string[]): Promise<string> {
@@ -102,6 +125,7 @@ function runGit(root: string, args: readonly string[]): Promise<string> {
       maxBuffer: GIT_MAX_BUFFER,
       windowsHide: true,
       encoding: 'utf8',
+      env: gitEnv(),
     }, (error, stdout, stderr) => {
       if (error !== null) {
         const detail = stderr.trim() || String(error.message ?? error)
@@ -268,7 +292,7 @@ function capDiff(diffText: string): { diff: string; truncated: boolean } {
  *  edits are the loudest review noise, see the competitor survey). */
 const WS_FLAG = ['--ignore-all-space'] as const
 
-async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitStatusPayload | { ok: false; isRepository: boolean; error: string }> {
+export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitStatusPayload | { ok: false; isRepository: boolean; error: string }> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) {
@@ -384,6 +408,22 @@ async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws: unkno
     deleted += file.deleted
   }
   const branch = branchRaw.trim()
+  // Ahead/behind vs the upstream (worktree mode only): `HEAD...@{upstream}`
+  // left = local-only commits, right = upstream-only. A branch without an
+  // upstream (or an unborn HEAD) simply has no counts — the pill hides.
+  let ahead: number | undefined
+  let behind: number | undefined
+  if (!unbornHead) {
+    try {
+      const counts = (await runGit(repoRoot, ['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'])).trim().split(/\s+/)
+      const parsedAhead = Number(counts[0])
+      const parsedBehind = Number(counts[1])
+      if (Number.isFinite(parsedAhead) && Number.isFinite(parsedBehind)) {
+        ahead = parsedAhead
+        behind = parsedBehind
+      }
+    } catch { /* no upstream configured */ }
+  }
   return {
     ok: true,
     root: repoRoot,
@@ -393,6 +433,8 @@ async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws: unkno
     baseRef: overrideCommit !== null ? baseRef : null,
     files,
     totals: { added, deleted },
+    ahead,
+    behind,
   }
 }
 
@@ -791,6 +833,7 @@ function runGitCapture(root: string, args: readonly string[], timeoutMs: number 
       maxBuffer: GIT_MAX_BUFFER,
       windowsHide: true,
       encoding: 'utf8',
+      env: gitEnv(),
     }, (error, stdout, stderr) => {
       const code = error === null
         ? 0
@@ -803,7 +846,7 @@ function runGitCapture(root: string, args: readonly string[], timeoutMs: number 
 /** One `commit` answer. Write operation: guarded by the explicit confirm flag
  *  (set by the client's two-step dialog), a non-empty bounded message, and
  *  `mode` ('all' = `git add -A` first; 'staged' = commit the index as-is). */
-async function gitCommit(cwd: unknown, message: unknown, mode: unknown, confirm: unknown): Promise<GitWritePayload> {
+export async function gitCommit(cwd: unknown, message: unknown, mode: unknown, confirm: unknown, amend: unknown): Promise<GitWritePayload> {
   if (confirm !== true) return { ok: false, error: 'commit requires confirm: true' }
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const trimmed = typeof message === 'string' ? message.trim() : ''
@@ -819,11 +862,135 @@ async function gitCommit(cwd: unknown, message: unknown, mode: unknown, confirm:
   // A lone '-' message would parse as an option; '-'-leading messages are
   // impossible to pass safely, so normalize one leading dash away.
   const safeMessage = trimmed.startsWith('-') ? ' ' + trimmed : trimmed
-  const result = await runGitCapture(repoRoot, ['commit', '-m', safeMessage.slice(0, 2000)])
+  const result = await runGitCapture(repoRoot, ['commit', ...(amend === true ? ['--amend'] : []), '-m', safeMessage.slice(0, 2000)])
   if (result.code !== 0) {
     return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git commit failed (exit ' + result.code + ')' }
   }
   return { ok: true, output: result.stdout.trim() }
+}
+
+/** One `last-commit` answer: the branch tip's full message, for the commit
+ *  popover's amend prefill (no commit yet is an error the client turns into
+ *  a disabled amend checkbox). */
+export async function gitLastCommit(cwd: unknown): Promise<GitLastCommitPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const raw = (await runGit(repoRoot, ['log', '-1', '--format=%H%x1f%s%x1f%B']).catch(() => '')).trim()
+  if (raw === '') throw new Error('no commit found')
+  const fields = raw.split('\x1f')
+  const hash = fields[0]!.trim()
+  if (!HASH_ONLY_RE.test(hash)) throw new Error('no commit found')
+  return { ok: true, hash, subject: fields[1] ?? '', message: fields.slice(2).join('\x1f').trim() }
+}
+
+/** One `fetch` answer: `git fetch --all`, a network operation like push. */
+export async function gitFetch(cwd: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'fetch requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const result = await runGitCapture(repoRoot, ['fetch', '--all'], PUSH_TIMEOUT_MS)
+  if (result.code !== 0) {
+    return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git fetch failed (exit ' + result.code + ')' }
+  }
+  return { ok: true, output: result.stdout.trim() }
+}
+
+/** Normalize one per-file write request's `paths` array into fenced
+ *  repo-relative git pathspecs (a review action touches at most a few files;
+ *  even a tree-select-all stays far under this cap). */
+function fencePaths(repoRoot: string, raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 200) {
+    throw new Error('paths (1-200 entries) required')
+  }
+  return raw.map(item => {
+    if (typeof item !== 'string' || item === '') throw new Error('paths must be non-empty strings')
+    return relative(repoRoot, fenceRepoPath(repoRoot, item)).replaceAll('\\', '/')
+  })
+}
+
+/** Shared preflight of the per-file write endpoints: confirm flag, cwd, repo. */
+async function fileOpGuard(cwd: unknown, confirm: unknown): Promise<string> {
+  if (confirm !== true) throw new Error('file operations require confirm: true')
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  return repoRoot
+}
+
+/** One `stage` answer: `git add -- <paths>` (untracked files included). */
+export async function gitStage(cwd: unknown, paths: unknown, confirm: unknown): Promise<GitWritePayload> {
+  const repoRoot = await fileOpGuard(cwd, confirm)
+  const specs = fencePaths(repoRoot, paths)
+  return writeAnswer(await runGitCapture(repoRoot, ['add', '--', ...specs]), 'add')
+}
+
+/** One `unstage` answer: `git restore --staged -- <paths>` (index rows go
+ *  back to unstaged; worktree content untouched). An unborn HEAD has no
+ *  restore source — git's words surface verbatim. */
+export async function gitUnstage(cwd: unknown, paths: unknown, confirm: unknown): Promise<GitWritePayload> {
+  const repoRoot = await fileOpGuard(cwd, confirm)
+  const specs = fencePaths(repoRoot, paths)
+  return writeAnswer(await runGitCapture(repoRoot, ['restore', '--staged', '--', ...specs]), 'restore --staged')
+}
+
+/** One `discard` answer: destroy a file's uncommitted changes, restoring it
+ *  to HEAD (tracked) or deleting it outright (untracked, `git clean -f`).
+ *  IRREVERSIBLE — the client's two-step confirmation gates it, and the
+ *  agent-running gate disables it in the first place. Tracked/untracked is
+ *  decided by `git ls-files` at call time, never by the request. */
+export async function gitDiscard(cwd: unknown, paths: unknown, confirm: unknown): Promise<GitWritePayload> {
+  const repoRoot = await fileOpGuard(cwd, confirm)
+  const specs = fencePaths(repoRoot, paths)
+  const trackedRaw = await runGit(repoRoot, ['ls-files', '-z', '--', ...specs])
+  const tracked = new Set(trackedRaw.split('\0').filter(chunk => chunk !== ''))
+  const trackedSpecs = specs.filter(spec => tracked.has(spec))
+  const untrackedSpecs = specs.filter(spec => !tracked.has(spec))
+  if (trackedSpecs.length > 0) {
+    // Restore index AND worktree to HEAD: "discard" means back to HEAD
+    // (VS Code's Discard semantics — a staged-only change discards the same).
+    const restored = await runGitCapture(repoRoot, ['restore', '--source=HEAD', '--staged', '--worktree', '--', ...trackedSpecs])
+    if (restored.code !== 0) {
+      return { ok: false, error: restored.stderr.trim() || restored.stdout.trim() || 'git restore failed (exit ' + restored.code + ')' }
+    }
+  }
+  if (untrackedSpecs.length > 0) {
+    // No -x: ignored files are never touched by a discard.
+    const cleaned = await runGitCapture(repoRoot, ['clean', '-f', '--', ...untrackedSpecs])
+    if (cleaned.code !== 0) {
+      return { ok: false, error: cleaned.stderr.trim() || cleaned.stdout.trim() || 'git clean failed (exit ' + cleaned.code + ')' }
+    }
+  }
+  return { ok: true, output: '' }
+}
+
+/** Stash selector cap: real `stash@{n}` indices stay far below this; the
+ *  bound keeps a bogus request from address-spoofing other selectors. */
+const STASH_INDEX_CAP = 999
+
+/** One `stash` answer. push: `git stash push [-u]` (optionally including
+ *  untracked files; the worktree is left clean); list: `git stash list`
+ *  parsed; apply/pop/drop: one validated `stash@{n}` selector — apply keeps
+ *  the entry on conflict (git's behavior), pop drops it only on success. */
+export async function gitStash(cwd: unknown, action: unknown, index: unknown, includeUntracked: unknown, confirm: unknown): Promise<GitWritePayload | { ok: true; stashes: GitStashEntry[] }> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  if (action === 'list') {
+    const raw = await runGit(repoRoot, ['stash', 'list', '--format=%gd%x1f%at%x1f%gs%x1e']).catch(() => '')
+    return { ok: true, stashes: parseStashLines(raw) }
+  }
+  if (confirm !== true) return { ok: false, error: 'stash actions require confirm: true' }
+  if (action === 'push') {
+    return writeAnswer(await runGitCapture(repoRoot, ['stash', 'push', ...(includeUntracked === true ? ['-u'] : [])]), 'stash push')
+  }
+  if (action === 'apply' || action === 'pop' || action === 'drop') {
+    const n = typeof index === 'number' && Number.isInteger(index) && index >= 0 && index <= STASH_INDEX_CAP ? index : null
+    if (n === null) return { ok: false, error: 'stash index required (0-' + STASH_INDEX_CAP + ')' }
+    return writeAnswer(await runGitCapture(repoRoot, ['stash', action, 'stash@{' + n + '}']), 'stash ' + action)
+  }
+  return { ok: false, error: 'unknown stash action' }
 }
 
 /** One `push` answer: `git push` of the current branch, guarded by the
@@ -1114,11 +1281,35 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'commit') {
-          respond(res, 200, await gitCommit(body['cwd'], body['message'], body['mode'], body['confirm']))
+          respond(res, 200, await gitCommit(body['cwd'], body['message'], body['mode'], body['confirm'], body['amend']))
           return
         }
         if (action === 'push') {
           respond(res, 200, await gitPush(body['cwd'], body['confirm']))
+          return
+        }
+        if (action === 'stage') {
+          respond(res, 200, await gitStage(body['cwd'], body['paths'], body['confirm']))
+          return
+        }
+        if (action === 'unstage') {
+          respond(res, 200, await gitUnstage(body['cwd'], body['paths'], body['confirm']))
+          return
+        }
+        if (action === 'discard') {
+          respond(res, 200, await gitDiscard(body['cwd'], body['paths'], body['confirm']))
+          return
+        }
+        if (action === 'fetch') {
+          respond(res, 200, await gitFetch(body['cwd'], body['confirm']))
+          return
+        }
+        if (action === 'stash') {
+          respond(res, 200, await gitStash(body['cwd'], body['action'], body['index'], body['includeUntracked'], body['confirm']))
+          return
+        }
+        if (action === 'last-commit') {
+          respond(res, 200, await gitLastCommit(body['cwd']))
           return
         }
         if (action === 'branch-create') {

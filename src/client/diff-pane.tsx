@@ -9,6 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec, type WordHighlighter, type WordSpans } from './diff-parse.ts'
+import { makeLineHighlighter, sliceTokens, type TokenSpan } from './highlight.ts'
 import { CommentIcon, ExpandIcon, CollapseIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
@@ -54,6 +55,8 @@ export interface DiffPaneProps {
   /** Whether whitespace-only edits are hidden (host `--ignore-all-space`). */
   wsIgnore: boolean
   onToggleWs: () => void
+  /** Whether diff lines get lightweight syntax coloring (the preference). */
+  syntaxHighlight: boolean
   /** Active content search spec (query '' = none); highlights + navigation. */
   search: SearchSpec
   /** True while a base-branch override is active (scope chips are hidden). */
@@ -77,29 +80,46 @@ function searchParts(text: string, engine: SearchEngine): ReactNode {
 
 /** One cell's text: word-level changed spans (when the row is a replacement
  *  pair the highlighter computed) wrapped in a tinted span, each span still
- *  searchable. `spans` null renders the plain (search-highlighted) text. */
-function renderCellText(cell: DiffCell | null, engine: SearchEngine, spans: WordSpans | null, changedClass: string): ReactNode {
+ *  searchable. `spans` null renders the plain (search-highlighted) text.
+ *  `tokens` (the line's syntax spans) color the plain stretches; inside a
+ *  changed-word span the strong tint wins, so syntax is skipped there. */
+function tokenClass(kind: TokenSpan['kind']): string {
+  return kind === 'kw' ? css.tokKw : kind === 'str' ? css.tokStr : kind === 'num' ? css.tokNum : css.tokCom
+}
+
+function renderTokens(text: string, engine: SearchEngine, tokens: TokenSpan[] | null): ReactNode {
+  if (tokens === null || tokens.length === 0) return searchParts(text, engine)
+  return tokens.map((token, index) => {
+    const inner = searchParts(text.slice(token.start, token.end), engine)
+    return token.kind === 'kw' || token.kind === 'str' || token.kind === 'num' || token.kind === 'com'
+      ? <span key={index} className={tokenClass(token.kind)}>{inner}</span>
+      : inner
+  })
+}
+
+function renderCellText(cell: DiffCell | null, engine: SearchEngine, spans: WordSpans | null, changedClass: string, tokens: TokenSpan[] | null): ReactNode {
   if (cell === null) return ''
   const text = cell.text
-  if (spans === null || spans.length === 0) return searchParts(text, engine)
+  if (spans === null || spans.length === 0) return renderTokens(text, engine, tokens)
   const nodes: ReactNode[] = []
   let cursor = 0
   for (const [start, end] of spans) {
-    if (start > cursor) nodes.push(searchParts(text.slice(cursor, start), engine))
+    if (start > cursor) nodes.push(renderTokens(text.slice(cursor, start), engine, sliceTokens(tokens, cursor, start)))
     if (end > start) {
       nodes.push(<span key={start} className={changedClass}>{searchParts(text.slice(start, end), engine)}</span>)
     }
     cursor = Math.max(cursor, end)
   }
-  if (cursor < text.length) nodes.push(searchParts(text.slice(cursor), engine))
+  if (cursor < text.length) nodes.push(renderTokens(text.slice(cursor), engine, sliceTokens(tokens, cursor, text.length)))
   return nodes
 }
 
 /** One unified (single-column) line: gutter number + sign + text. */
-function UnifiedRow({ line, engine, words, ordinal, active, commentTitle, onComment }: {
+function UnifiedRow({ line, engine, words, highlighter, ordinal, active, commentTitle, onComment }: {
   line: { kind: 'ctx' | 'del' | 'add'; no: number; text: string; noNewline?: boolean; pair: PairRow }
   engine: SearchEngine
   words: WordHighlighter
+  highlighter: { line(text: string): TokenSpan[] | null } | null
   ordinal: number | undefined
   active: boolean
   commentTitle: string
@@ -120,7 +140,7 @@ function UnifiedRow({ line, engine, words, ordinal, active, commentTitle, onComm
         {line.kind === 'del' ? '−' : line.kind === 'add' ? '+' : ''} {line.no}
       </span>
       <span className={css.cellText + (line.kind === 'del' ? ' ' + css.cellTextDel : line.kind === 'add' ? ' ' + css.cellTextAdd : '')}>
-        {renderCellText({ no: line.no, text: line.text, noNewline: line.noNewline }, engine, spans, changedClass)}
+        {renderCellText({ no: line.no, text: line.text, noNewline: line.noNewline }, engine, spans, changedClass, highlighter?.line(line.text) ?? null)}
         {line.noNewline === true && <em className={css.noNewline}>{'↩'}</em>}
       </span>
       {onComment !== undefined && (line.kind === 'ctx' || line.kind === 'add')
@@ -144,7 +164,7 @@ function UnifiedRow({ line, engine, words, ordinal, active, commentTitle, onComm
  *  the row must not wrap them in any intermediate element. Rows containing a
  *  search match carry data-diff-match (the navigation target), in document
  *  order equal to their match ordinal. */
-function Row({ row, engine, words, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; engine: SearchEngine; words: WordHighlighter; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
+function Row({ row, engine, words, highlighter, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; engine: SearchEngine; words: WordHighlighter; highlighter: { line(text: string): TokenSpan[] | null } | null; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
   const kindClass = row.kind === 'ctx' ? css.rowCtx
     : row.kind === 'del' ? css.rowDel
       : row.kind === 'add' ? css.rowAdd
@@ -158,12 +178,12 @@ function Row({ row, engine, words, matchOrdinal, active, commentTitle, onComment
     >
       <span className={css.cellNo + (row.left === null ? ' ' + css.cellHatched : '')}>{row.left?.no ?? ''}</span>
       <span className={css.cellText + (row.left === null ? ' ' + css.cellHatched : '')}>
-        {renderCellText(row.left, engine, regions?.old ?? null, css.wordDel)}
+        {renderCellText(row.left, engine, regions?.old ?? null, css.wordDel, row.left === null ? null : highlighter?.line(row.left.text) ?? null)}
         {row.left?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
       <span className={css.cellNo + (row.right === null ? ' ' + css.cellHatched : '')}>{row.right?.no ?? ''}</span>
       <span className={css.cellText + (row.right === null ? ' ' + css.cellHatched : '')}>
-        {renderCellText(row.right, engine, regions?.new ?? null, css.wordAdd)}
+        {renderCellText(row.right, engine, regions?.new ?? null, css.wordAdd, row.right === null ? null : highlighter?.line(row.right.text) ?? null)}
         {row.right?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
       {onComment !== undefined && (
@@ -248,7 +268,7 @@ function CommentEditor({ path, line, useInput, inputActions, onDraftAdd, onClose
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, search, baseActive, useInput, inputActions, onDraftAdd, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, syntaxHighlight, search, baseActive, useInput, inputActions, onDraftAdd, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -263,6 +283,9 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   // Word-level highlight: one budgeted pass per parse (re-renders never
   // recompute a row — the highlighter memoizes by row identity).
   const words = useMemo(() => makeWordHighlighter(), [parsed])
+  // Line syntax highlighter: one budgeted instance per file (a very large
+  // diff degrades to plain text mid-render, never stalls).
+  const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight])
   const unified = view === 'unified'
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [activeMatch, setActiveMatch] = useState(0)
@@ -352,6 +375,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           t,
           engine,
           words,
+          highlighter,
           unified,
           activeMatch,
           file,
@@ -380,6 +404,7 @@ function renderHunks(
     t: T
     engine: SearchEngine
     words: WordHighlighter
+    highlighter: { line(text: string): TokenSpan[] | null } | null
     unified: boolean
     activeMatch: number
     file: ChangedFile
@@ -426,6 +451,7 @@ function renderHunks(
                   line={line}
                   engine={ui.engine}
                   words={ui.words}
+                  highlighter={ui.highlighter}
                   ordinal={ordinal}
                   active={ordinal === ui.activeMatch}
                   commentTitle={ui.t('comment.add')}
@@ -457,6 +483,7 @@ function renderHunks(
                   row={row}
                   engine={ui.engine}
                   words={ui.words}
+                  highlighter={ui.highlighter}
                 matchOrdinal={ordinal}
                 active={ordinal === ui.activeMatch}
                 commentTitle={ui.t('comment.add')}

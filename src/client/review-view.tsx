@@ -23,7 +23,7 @@ import { FilePane, type FileViewMode } from './file-pane.tsx'
 import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
-import { mergeAllFiles } from './file-tree.ts'
+import { filterFiles, mergeAllFiles } from './file-tree.ts'
 import { createViewedStore } from './viewed.ts'
 import { createDraftBox, type CommentDraft } from './comment-drafts.ts'
 import { TreePanel } from './tree-panel.tsx'
@@ -144,6 +144,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // Whitespace-only edits hide behind the ignore-whitespace toggle (a
   // preference, so the choice follows the user across sessions).
   const [wsIgnore, setWsIgnore] = useState(initialPrefs.wsIgnore)
+  const [syntaxHighlight, setSyntaxHighlight] = useState(initialPrefs.syntaxHighlight)
   // One search popover holds BOTH the scope choice and the matching toggles
   // (scope used to be a chip dropdown, matching a separate gear button — two
   // popovers for one box read as clutter and the gear was undiscoverable).
@@ -187,6 +188,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const draftPopRef = useRef<HTMLDivElement | null>(null)
   const draftBtnRef = useRef<HTMLButtonElement | null>(null)
   const searchOptionsRef = useRef<HTMLSpanElement | null>(null)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   // Comment draft box: pending comments keyed per workspace, surfaced in a
   // toolbar popover with a bulk send into the composer draft.
   const draftBox = useMemo(() => (cwd === undefined ? null : createDraftBox(cwd)), [cwd])
@@ -239,6 +242,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSearchCS(prefs.searchCS)
     setSearchRegex(prefs.searchRegex)
     setWsIgnore(prefs.wsIgnore)
+    setSyntaxHighlight(prefs.syntaxHighlight)
   }), [settings])
   const [branchName, setBranchName] = useState('')
   const [branchStart, setBranchStart] = useState('')
@@ -661,6 +665,44 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     })
   }, [])
 
+  // Keyboard review flow: j/k walks the visible file list (the graph view
+  // walks commits), "/" jumps to the search box. The handler lives on the
+  // view's own root (focused on activation) instead of document — a focused
+  // scope cannot fight the shell's global shortcuts, and typing in any
+  // input/textarea still yields. Keys also yield to open popovers.
+  const onRootKeyDown = useCallback((event: React.KeyboardEvent): void => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return
+    const target = event.target as HTMLElement | null
+    if (target !== null && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+    if (commitOpen || branchOpen || draftOpen || fileMenu !== null) return
+    if (event.key === '/') {
+      event.preventDefault()
+      searchInputRef.current?.focus()
+      return
+    }
+    if (event.key !== 'j' && event.key !== 'k') return
+    event.preventDefault()
+    const forward = event.key === 'j'
+    if (viewTab === 'graph') {
+      const hashes = visibleGraph.map(row => row.commit.hash)
+      if (hashes.length === 0) return
+      const at = selectedCommit === null ? -1 : hashes.indexOf(selectedCommit)
+      const next = at === -1 ? (forward ? 0 : hashes.length - 1) : forward ? Math.min(hashes.length - 1, at + 1) : Math.max(0, at - 1)
+      if (hashes[next] !== selectedCommit) selectCommit(hashes[next]!)
+      return
+    }
+    const files = filterFiles(allRows ?? ready?.files ?? [], searchScope === 'path' ? search : '')
+    if (files.length === 0) return
+    const at = files.findIndex(file => file.path === selected)
+    const next = at === -1 ? (forward ? 0 : files.length - 1) : forward ? Math.min(files.length - 1, at + 1) : Math.max(0, at - 1)
+    selectFile(files[next]!.path)
+  }, [viewTab, selected, selectedCommit, visibleGraph, allRows, ready, search, searchScope, selectFile, selectCommit, commitOpen, branchOpen, draftOpen, fileMenu])
+  // Focusing the root when the view activates (or the data lands) makes the
+  // keyboard flow live without a click; preventScroll keeps the view steady.
+  useEffect(() => {
+    rootRef.current?.focus({ preventScroll: true })
+  }, [viewTab, cwd, status.kind])
+
   /** Run one branch management action and surface git's answer verbatim;
    *  a success refreshes status + refs (the branch may have changed). */
   const executeBranch = useCallback(async (action: 'create' | 'switch' | 'delete' | 'rename', body: Record<string, unknown>) => {
@@ -838,7 +880,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
 
   const data = ready
   return (
-    <div className={css.root} data-conversation-composer-overlay="">
+    <div ref={rootRef} tabIndex={-1} onKeyDown={onRootKeyDown} className={css.root} data-conversation-composer-overlay="">
       {/* Two semantic rows instead of one long flex line (a side-by-side
           session view leaves ~600-900px, where ten controls either squeezed
           or wrapped arbitrarily): row 1 answers "what am I looking at"
@@ -1021,6 +1063,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             <label className={css.searchBox}>
               <SearchIcon />
               <input
+                ref={searchInputRef}
                 className={css.searchInput}
                 value={searchDraft}
                 onChange={event => { setSearchDraft(event.target.value) }}
@@ -1530,6 +1573,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           showViewSwitch
                           allowFileView={false}
                           wsIgnore={wsIgnore}
+                          syntaxHighlight={syntaxHighlight}
                           onToggleWs={toggleWsIgnore}
                           search={searchSpec}
                           baseActive
@@ -1569,6 +1613,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                     canShowDiff={selectedFile.unchanged !== true}
                     view={effectiveView}
                     onViewChange={changeViewMode}
+                    syntaxHighlight={syntaxHighlight}
                     search={searchSpec}
                     t={t}
                   />
@@ -1589,6 +1634,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           onViewChange={changeViewMode}
                           showViewSwitch={!refsMode}
                           wsIgnore={wsIgnore}
+                          syntaxHighlight={syntaxHighlight}
                           onToggleWs={toggleWsIgnore}
                           search={searchSpec}
                           baseActive={baseRef !== null || refsMode}

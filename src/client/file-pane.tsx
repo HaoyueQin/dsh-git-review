@@ -6,6 +6,7 @@
  */
 import { useMemo, type ReactNode } from 'react'
 import { makeSearchEngine, MAX_RENDER_ROWS, type SearchSpec } from './diff-parse.ts'
+import { makeLineHighlighter, type TokenSpan } from './highlight.ts'
 import { FileIcon, LineLeftIcon, LinesIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import type { ChangedFile } from '../contract.ts'
@@ -19,12 +20,23 @@ type T = PropsLocale<typeof NS>['t']
  *  whole file. */
 export type FileViewMode = 'split' | 'unified' | 'file'
 
-/** One line with content-search matches wrapped in <mark>. */
-function highlightedLine(text: string, engine: ReturnType<typeof makeSearchEngine>): ReactNode {
+/** One line with content-search matches wrapped in <mark>, syntax tokens
+ *  colored underneath (the token spans slice the same line). */
+function highlightedLine(text: string, engine: ReturnType<typeof makeSearchEngine>, tokens: TokenSpan[] | null): ReactNode {
   const parts = engine.parts(text)
-  if (parts.length === 1) return parts[0]
+  const render = (chunk: string): ReactNode => {
+    if (tokens === null || tokens.length === 0) return chunk
+    return tokens.map((token, index) => {
+      const inner = chunk.slice(token.start, token.end)
+      const cls = token.kind === 'kw' ? css.tokKw : token.kind === 'str' ? css.tokStr : token.kind === 'num' ? css.tokNum : css.tokCom
+      return <span key={index} className={cls}>{inner}</span>
+    })
+  }
+  if (parts.length === 1) return render(parts[0])
   return parts.map((part, index) =>
-    index % 2 === 1 ? <mark key={index} className={css.matchMark}>{part}</mark> : part,
+    typeof part === 'string' && index % 2 === 1
+      ? <mark key={index} className={css.matchMark}>{part}</mark>
+      : typeof part === 'string' ? render(part) : part,
   )
 }
 
@@ -77,6 +89,8 @@ export interface FilePaneProps {
   canShowDiff: boolean
   view: FileViewMode
   onViewChange: (next: FileViewMode) => void
+  /** Whether lines get lightweight syntax coloring (the preference). */
+  syntaxHighlight: boolean
   t: T
 }
 
@@ -84,8 +98,9 @@ export interface FilePaneProps {
  * The pane showing one file's full content.
  * @param props - the file, its content state and the view switch.
  */
-export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, t }: FilePaneProps) {
+export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, t }: FilePaneProps) {
   const engine = useMemo(() => makeSearchEngine(search), [search])
+  const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight])
   const lines = useMemo(() => {
     if (content === '') return []
     const rows = content.split('\n')
@@ -114,7 +129,7 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
         {!loading && !binary && visible.map((line, index) => (
           <div key={index} className={css.fileRowGrid}>
             <span className={css.fileNo}>{index + 1}</span>
-            <span className={css.cellText}>{highlightedLine(line, engine)}</span>
+            <span className={css.cellText}>{highlightedLine(line, engine, highlighter?.line(line) ?? null)}</span>
           </div>
         ))}
         {capped && <div className={css.noticeRow}>{t('diff.renderCapped', { count: MAX_RENDER_ROWS })}</div>}

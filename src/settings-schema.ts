@@ -39,6 +39,8 @@ export interface ReviewSettingsSection {
   searchRegex: boolean
   /** Whether diffs hide whitespace-only edits (git --ignore-all-space). */
   wsIgnore: boolean
+  /** Whether diff/file lines get lightweight syntax coloring. */
+  syntaxHighlight: boolean
 }
 
 export const ReviewSettingsSchema: z<ReviewSettingsSection> = z.object({
@@ -50,6 +52,7 @@ export const ReviewSettingsSchema: z<ReviewSettingsSection> = z.object({
   searchCS: z.boolean().default(false),
   searchRegex: z.boolean().default(false),
   wsIgnore: z.boolean().default(false),
+  syntaxHighlight: z.boolean().default(true),
 })
 
 /** Serve the namespace while a settings domain is composed; inert otherwise.

@@ -163,6 +163,17 @@ export function SettingsCard({ t, reviewSettings, set }: SettingsCardProps) {
             ]}
             onChange={key => { update({ wsIgnore: key === 'ignore' }) }}
           />
+          <PrefRow
+            label={t('settings.syntax')}
+            hint={t('settings.syntaxHint')}
+            value={prefs.syntaxHighlight ? 'on' : 'off'}
+            disabled={disabled}
+            options={[
+              { key: 'on', label: t('settings.syntaxOn') },
+              { key: 'off', label: t('settings.syntaxOff') },
+            ]}
+            onChange={key => { update({ syntaxHighlight: key === 'on' }) }}
+          />
           {state.status === 'ready' && <p className={css.pluginCardNote}>{t('settings.instantNote')}</p>}
         </div>
       )}

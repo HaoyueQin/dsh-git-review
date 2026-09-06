@@ -1705,6 +1705,25 @@ body[data-dsh-bg-glass] .root {
   color: color-mix(in srgb, var(--dsw-alias-state-success-primary) 68%, var(--dsw-alias-label-primary));
 }
 
+/* Lightweight syntax coloring (highlight.ts): every color rides a theme
+   alias, so dark/light and the add/del row tints stay consistent. */
+.tokKw {
+  color: var(--dsw-alias-brand-primary, var(--dsw-alias-state-business-primary));
+}
+
+.tokStr {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.tokNum {
+  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-business-primary));
+}
+
+.tokCom {
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}
+
 .diffBottomReserve {
   height: 140px;
 }

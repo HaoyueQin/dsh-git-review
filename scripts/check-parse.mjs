@@ -7,6 +7,7 @@ import assert from 'node:assert/strict'
 import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, splitDiffSections } from '../src/git-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
+import { langOf, makeLineHighlighter, sliceTokens, tokenizeLine } from '../src/client/highlight.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
@@ -438,22 +439,22 @@ assert.equal(countUnifiedMatches(pairDiff, pairEngine), 2)
 assert.deepEqual(normalizePrefs(null), DEFAULT_PREFS)
 assert.deepEqual(normalizePrefs('not json'), DEFAULT_PREFS)
 assert.deepEqual(normalizePrefs({ viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, wsIgnore: true, junk: 1 }),
-  { viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, wsIgnore: true })
+  { viewMode: 'unified', searchScope: 'path', graphCollapsed: true, searchCS: true, searchRegex: true, wsIgnore: true, syntaxHighlight: true })
 assert.deepEqual(normalizePrefs({ viewMode: 'bogus', searchScope: 'nope' }), DEFAULT_PREFS)
 
 // 35. Settings-scope store helpers: section reads normalize, a default
 //     section reads as default, and the legacy-store migration carries only
 //     a user-written store (defaults or junk stay put; shapes clean up).
 assert.deepEqual(prefsFromSection({ viewMode: 'unified', junk: 1 }),
-  { viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false })
-assert.equal(sectionIsDefault({ viewMode: 'split', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false }), true)
-assert.equal(sectionIsDefault({ viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false }), false)
+  { viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false, syntaxHighlight: true })
+assert.equal(sectionIsDefault({ viewMode: 'split', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false, syntaxHighlight: true }), true)
+assert.equal(sectionIsDefault({ viewMode: 'unified', searchScope: 'diff', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false, syntaxHighlight: true }), false)
 assert.equal(migrationFields(null), null)
 assert.equal(migrationFields('not json'), null)
 assert.equal(migrationFields(JSON.stringify(DEFAULT_PREFS)), null)
 const legacy = JSON.stringify({ viewMode: 'unified', searchScope: 'content' })
 assert.deepEqual(migrationFields(legacy),
-  { viewMode: 'unified', searchScope: 'content', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false })
+  { viewMode: 'unified', searchScope: 'content', graphCollapsed: false, searchCS: false, searchRegex: false, wsIgnore: false, syntaxHighlight: true })
 
 // 36. Word-level highlight: a replacement pair's changed spans come out of a
 //     character-level LCS; non-pairs, rewrites (low similarity) and exhausted
@@ -537,5 +538,26 @@ assert.deepEqual(stashes, [
 assert.deepEqual(parseStashLines(''), [])
 assert.deepEqual(parseStashLines('no-selector123textstash@{x}123bad'), [])
 assert.deepEqual(parseStashLines('stash@{12}bad-timekeep'), [{ index: 12, timestamp: 0, subject: 'keep' }])
+
+// 40. Syntax highlighting: language mapping, single-line tokenization
+//     (strings with escapes, line comments, numbers, keywords), the budget
+//     degrading to null, and span slicing for word-level overlays.
+assert.equal(langOf('src/app.tsx'), 'c')
+assert.equal(langOf('README.md'), null)
+const toks = tokenizeLine('const url = "http://x" // set', 'c')
+assert.deepEqual(toks.map(t => [t.kind, t.start, t.end]), [
+  ['kw', 0, 5], ['str', 12, 22], ['com', 23, 29],
+])
+const esc = tokenizeLine('a = "say \\"hi\\" now"', 'c')
+assert.ok(esc.some(t => t.kind === 'str' && t.start === 4))
+const pyTok = tokenizeLine('# only a comment', 'py')
+assert.deepEqual(pyTok, [{ start: 0, end: 16, kind: 'com' }])
+const hl = makeLineHighlighter('a.py', 6)
+assert.notEqual(hl.line('x = 1'), null)
+assert.deepEqual(hl.line(''), [])
+assert.equal(hl.line('y = 2'), null, 'budget exhausted -> plain')
+const sliced = sliceTokens([{ start: 0, end: 10, kind: 'kw' }], 2, 5)
+assert.deepEqual(sliced, [{ start: 0, end: 3, kind: 'kw' }])
+assert.equal(sliceTokens(null, 0, 5), null)
 
 console.log('check-parse: all assertions passed')

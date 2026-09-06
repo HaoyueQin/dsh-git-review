@@ -19,6 +19,8 @@ export type ReviewPrefs = {
   searchRegex: boolean
   /** Whether diffs hide whitespace-only edits (git --ignore-all-space). */
   wsIgnore: boolean
+  /** Whether diff/file lines get lightweight syntax coloring. */
+  syntaxHighlight: boolean
 }
 
 export const PREFS_KEY = 'dsh-git-review.prefs'
@@ -30,6 +32,7 @@ export const DEFAULT_PREFS: ReviewPrefs = {
   searchCS: false,
   searchRegex: false,
   wsIgnore: false,
+  syntaxHighlight: true,
 }
 
 /** Merge a raw stored value over the defaults, keeping only known keys with
@@ -47,6 +50,7 @@ export function normalizePrefs(raw: unknown): ReviewPrefs {
     searchCS: record.searchCS === true,
     searchRegex: record.searchRegex === true,
     wsIgnore: record.wsIgnore === true,
+    syntaxHighlight: record.syntaxHighlight !== false,
   }
 }
 

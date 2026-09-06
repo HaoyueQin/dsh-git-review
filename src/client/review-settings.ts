@@ -90,6 +90,7 @@ function prefsEqual(a: ReviewPrefs, b: ReviewPrefs): boolean {
     && a.searchCS === b.searchCS
     && a.searchRegex === b.searchRegex
     && a.wsIgnore === b.wsIgnore
+    && a.syntaxHighlight === b.syntaxHighlight
 }
 
 function parseJson(raw: string): unknown {

@@ -2,3 +2,4 @@ node_modules/
 *.tgz
 .mnemon/
 docs/handover.md
+.tmp-check-git/

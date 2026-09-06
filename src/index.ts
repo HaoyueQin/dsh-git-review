@@ -546,8 +546,14 @@ export async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknow
     return { ok: true, binary: false, diff: capped.diff, truncated: capped.truncated }
   }
   if (untracked === true) {
-    const pseudo = await untrackedPseudoDiff(repoRoot, relPath)
-    if (pseudo !== null) return pseudo
+    // The untracked flag arrives from the client; re-verify server-side so
+    // a tracked file never gets a fabricated all-added pseudo diff.
+    const isTracked = await runGit(repoRoot, ['ls-files', '--error-unmatch', '--', relPath])
+      .then(() => true).catch(() => false)
+    if (!isTracked) {
+      const pseudo = await untrackedPseudoDiff(repoRoot, relPath)
+      if (pseudo !== null) return pseudo
+    }
   }
   // diffBase already resolves HEAD → hash, falling back to the empty tree id
   // on an unborn HEAD, so `base` alone is the right range argument.
@@ -628,14 +634,18 @@ export async function gitFileContent(cwd: unknown, path: unknown, ref: unknown):
     const normalized = normalizeBaseRef(ref)
     if (normalized === null) throw new Error('invalid ref')
     const resolved = await resolveRangeRef(repoRoot, normalized)
+    if (resolved === null || resolved === EMPTY_TREE_ID) throw new Error('cannot resolve ref')
     const spec = resolved + ':' + relPath
     const size = Number((await runGit(repoRoot, ['cat-file', '-s', spec])).trim())
-    const text = await runGit(repoRoot, ['cat-file', '-p', spec])
-    const bytes = Buffer.from(text, 'utf8')
-    const truncated = bytes.length > READ_CAP
-    const capped = truncated ? bytes.subarray(0, READ_CAP) : bytes
-    if (capped.includes(0)) return { ok: true, binary: true, content: '', truncated, size }
-    return { ok: true, binary: false, content: capped.toString('utf8'), truncated, size }
+    if (!Number.isFinite(size)) throw new Error('cannot read file at ref')
+    // Binary-safe bytes (no utf8 round-trip: non-UTF8 content would change
+    // length and poison the NUL probe), mirroring readPreviewBytes.
+    const streamed = await runGitBytes(repoRoot, ['cat-file', '-p', spec], READ_CAP)
+    if (streamed.code !== 0) throw new Error('cannot read file at ref: ' + (streamed.stderr.trim() || 'git cat-file failed'))
+    const truncated = size > READ_CAP || streamed.truncated
+    const bytes = streamed.data
+    if (bytes.includes(0)) return { ok: true, binary: true, content: '', truncated, size }
+    return { ok: true, binary: false, content: bytes.toString('utf8'), truncated, size }
   }
 
   let size: number
@@ -793,6 +803,9 @@ async function serveAsset(req: IncomingMessage, res: ServerResponse): Promise<vo
     'content-type': loaded.mime,
     'content-length': loaded.data.length,
     'x-content-type-options': 'nosniff',
+    // Sandbox the bytes on direct navigation (an SVG viewed as a document
+    // cannot script the origin); <img> rendering is unaffected.
+    'content-security-policy': 'sandbox',
     'cross-origin-resource-policy': 'same-origin',
     'cache-control': 'private, max-age=60',
   })
@@ -1018,6 +1031,9 @@ export async function gitSearch(cwd: unknown, query: unknown, base: unknown, tar
       const absPath = resolve(repoRoot, relPath)
       if (!inside(repoRoot, absPath)) continue
       try {
+        // Regular files only: a FIFO here would block open() forever.
+        const stat = await lstat(absPath)
+        if (!stat.isFile()) continue
         const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
         if (bytes.includes(0)) continue
         const count = countMatches(bytes.toString('utf8'), needle, options)
@@ -1202,10 +1218,9 @@ export async function gitCommit(cwd: unknown, message: unknown, mode: unknown, c
       return { ok: false, error: staged.stderr.trim() || staged.stdout.trim() || 'git add failed' }
     }
   }
-  // A lone '-' message would parse as an option; '-'-leading messages are
-  // impossible to pass safely, so normalize one leading dash away.
-  const safeMessage = trimmed.startsWith('-') ? ' ' + trimmed : trimmed
-  const result = await runGitCapture(repoRoot, ['commit', ...(amend === true ? ['--amend'] : []), '-m', safeMessage.slice(0, 2000)])
+  // '-m' consumes the next argv as its value, so a leading '-' can never
+  // parse as an option — the message ships verbatim (capped, never padded).
+  const result = await runGitCapture(repoRoot, ['commit', ...(amend === true ? ['--amend'] : []), '-m', trimmed.slice(0, 2000)])
   if (result.code !== 0) {
     return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git commit failed (exit ' + result.code + ')' }
   }
@@ -1463,6 +1478,7 @@ export async function gitReset(cwd: unknown, commit: unknown, mode: unknown, con
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const hash = historyTarget(commit)
+  if (mode !== 'soft' && mode !== 'mixed' && mode !== 'hard') return { ok: false, error: 'reset mode must be soft, mixed or hard' }
   const flag = mode === 'soft' ? '--soft' : mode === 'hard' ? '--hard' : '--mixed'
   return writeAnswer(await runGitCapture(repoRoot, ['reset', flag, hash]), 'reset --' + (flag.slice(2)))
 }
@@ -1520,6 +1536,7 @@ export async function gitConflictResolve(cwd: unknown, path: unknown, side: unkn
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
+  if (side !== 'ours' && side !== 'theirs') return { ok: false, error: 'conflict side must be ours or theirs' }
   const flag = side === 'theirs' ? '--theirs' : '--ours'
   const taken = await runGitCapture(repoRoot, ['checkout', flag, '--', relPath])
   if (taken.code !== 0) {
@@ -1542,6 +1559,7 @@ export async function gitConflictFinish(cwd: unknown, action: unknown, kind: unk
   if (still !== op) {
     return { ok: false, error: 'no ' + op + ' in progress (marker ' + marker + ' absent)' }
   }
+  if (action !== 'continue' && action !== 'abort') return { ok: false, error: 'conflict action must be continue or abort' }
   const verb = action === 'abort' ? '--abort' : '--continue'
   return writeAnswer(await runGitCapture(repoRoot, [op, verb], PUSH_TIMEOUT_MS), op + ' ' + verb)
 }
@@ -1744,9 +1762,15 @@ export async function gitFileOp(cwd: unknown, path: unknown, action: unknown, ne
 
 /** Open one workspace file outside the plugin (read-only launch: the app
  *  gets the path as its argument; no shell is involved, so percent-characters
- *  and spaces need no escaping). The app id is a fixed whitelist. */
-async function gitOpenWith(cwd: unknown, path: unknown, app: unknown): Promise<GitWritePayload> {
+ *  and spaces need no escaping). The app id is a fixed whitelist — anything
+ *  else fails closed, and every launch needs the explicit confirm flag like
+ *  the other write-adjacent endpoints. */
+async function gitOpenWith(cwd: unknown, path: unknown, app: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  if (confirm !== true) return { ok: false, error: 'open-with requires confirm: true' }
+  if (app !== undefined && app !== 'default' && app !== 'explorer' && app !== 'notepad' && app !== 'code' && app !== 'code-insiders') {
+    return { ok: false, error: 'unknown app' }
+  }
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
@@ -1765,10 +1789,13 @@ async function gitOpenWith(cwd: unknown, path: unknown, app: unknown): Promise<G
     // GUI openers outlive the request (notepad stays open for minutes), and
     // explorer.exe commonly exits non-zero even on success. Spawn detached and
     // resolve as soon as the process exists — exit codes are never consulted.
+    // Never via a shell: cmd.exe would re-parse metacharacters (&, |, %)
+    // in file names, so the default opener is explorer.exe itself (it
+    // launches the associated verb directly, like the explicit choices).
     const argv = tool !== undefined
       ? [tool, tool === 'explorer.exe' ? '/select,' + absPath : absPath]
       : process.platform === 'win32'
-        ? ['cmd.exe', '/c', 'start', '', absPath]
+        ? ['explorer.exe', absPath]
         : ['xdg-open', absPath]
     const child = spawn(argv[0], argv.slice(1), { windowsHide: true, detached: true, stdio: 'ignore' })
     child.once('error', (error: Error) => rejectPromise(error))
@@ -1791,7 +1818,7 @@ async function gitOpenApps(): Promise<OpenAppsPayload> {
   const available = async (name: string): Promise<boolean> => {
     try {
       await new Promise<void>((resolvePromise, rejectPromise) => {
-        execFile(process.platform === 'win32' ? 'where' : 'which', [name], { windowsHide: true }, error => {
+        execFile(process.platform === 'win32' ? 'where' : 'which', [name], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 }, error => {
           if (error !== null) rejectPromise(error)
           else resolvePromise()
         })
@@ -1810,8 +1837,11 @@ async function gitOpenApps(): Promise<OpenAppsPayload> {
   return { ok: true, apps }
 }
 
+/** Max hunk-op body: the patch alone may approach its 512 KiB wire limit. */
+const HUNK_BODY_CAP = 600 * 1024
+
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
-function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown>> {
+function readJsonBody(req: IncomingMessage, res: ServerResponse, bodyCap: number = BODY_CAP): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
     // CSRF hardening (J8-4): a JSON content-type cannot be sent cross-origin
     // by a plain form submit or a navigated <img>, which closes the classic
@@ -1832,13 +1862,15 @@ function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record
     let size = 0
     req.on('data', (chunk: Buffer) => {
       size += chunk.length
-      if (size > BODY_CAP) {
+      if (size > bodyCap) {
         rejectPromise(new Error('request body too large'))
         // Answer before destroying: a bare destroy surfaces as a network
         // failure to the client, indistinguishable from the host being gone.
         res.writeHead(413, { 'content-type': 'application/json; charset=utf-8' })
         res.end(JSON.stringify({ ok: false, error: 'request body too large' }))
-        req.destroy()
+        // Drain like the 415 path: destroying the socket surfaces as a
+        // network failure on the browser side, not as a 413.
+        req.resume()
         return
       }
       chunks.push(chunk)
@@ -1893,7 +1925,7 @@ export function apply(ctx: Context): void {
           return
         }
         const action = route.startsWith(API_PREFIX + '/') ? route.slice(API_PREFIX.length + 1) : (route.startsWith('/') ? route.slice(1) : route)
-        const body = await readJsonBody(req, res)
+        const body = await readJsonBody(req, res, action === 'hunk-op' ? HUNK_BODY_CAP : BODY_CAP)
         if (action === 'status') {
           respond(res, 200, await gitStatus(body['cwd'], body['base'], body['target'], body['ws']))
           return
@@ -2039,7 +2071,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'open-with') {
-          respond(res, 200, await gitOpenWith(body['cwd'], body['path'], body['app']))
+          respond(res, 200, await gitOpenWith(body['cwd'], body['path'], body['app'], body['confirm']))
           return
         }
         if (action === 'apps') {

@@ -30,6 +30,10 @@ function fixture(bare = false) {
   if (!bare) {
     sh(root, 'config', 'user.name', 'tester')
     sh(root, 'config', 'user.email', 'tester@example.com')
+    // Pin line endings: the host must behave identically regardless of the
+    // machine's global autocrlf (restore/apply paths depend on it).
+    sh(root, 'config', 'core.autocrlf', 'false')
+    sh(root, 'config', 'core.eol', 'lf')
   }
   return root
 }
@@ -494,6 +498,49 @@ assert.ok(patch0 !== null && patch1 !== null)
   assert.equal(atRef.mime, 'image/png')
 }
 
-for (const root of roots) rmSync(root, { recursive: true, force: true })
-rmSync(ROOT, { recursive: true, force: true })
+// 17. Fail-closed guards: invalid reset mode / conflict side / unknown app
+//     refuse instead of defaulting to a destructive operation.
+{
+  const tip = sh(repo, 'rev-parse', 'HEAD').trim()
+  const badMode = await gitReset(repo, tip, 'super', true)
+  assert.equal(badMode.ok, false)
+  const badSide = await gitConflictResolve(repo, 'a.txt', 'sideways', true)
+  assert.equal(badSide.ok, false)
+  const badFinish = await gitConflictFinish(repo, 'maybe', 'merge', true)
+  assert.equal(badFinish.ok, false)
+}
+// 18. file-diff untracked flag is server-verified: a tracked modification
+//     fetched with untracked=true must be a real diff, never an all-added
+//     pseudo diff (no '/dev/null' baseline).
+writeFileSync(join(repo, 'a.txt'), 'one\nverify\n')
+{
+  const diff = await gitFileDiff(repo, 'a.txt', true, false, undefined, 'all', null, null, false)
+  assert.equal(diff.ok, true)
+  assert.ok(!diff.diff.includes('/dev/null'), 'tracked file never gets a pseudo diff')
+}
+// 19. file-content with an unresolvable ref throws (no 'null:path' spec).
+{
+  let failed = false
+  try {
+    await gitFileContent(repo, 'a.txt', 'definitely-not-a-ref!!!')
+  } catch { failed = true }
+  assert.equal(failed, true)
+}
+// 20. GIT_DIR pollution must not hijack a real entry point (unit-tested
+//     gitEnv above only proves the scrubber; this proves the call path).
+process.env.GIT_DIR = 'Z:/definitely-not-a-repo/.git'
+try {
+  const polluted = await gitStatus(repo, null, null, false)
+  assert.equal(polluted.ok, true)
+} finally {
+  delete process.env.GIT_DIR
+}
+
+try {
+  for (const root of roots) rmSync(root, { recursive: true, force: true })
+  rmSync(ROOT, { recursive: true, force: true })
+} catch {
+  // Fixtures are disposable; a failed run keeps them for forensics (and
+  // .gitignore keeps them out of the tree).
+}
 console.log('check-git: all assertions passed (' + roots.length + ' repos exercised)')

@@ -1124,7 +1124,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
    *  closes and the tree refreshes). */
   const openFileApp = useCallback(async (path: string, app: OpenApp['id']): Promise<string | null> => {
     if (cwd === undefined) return t('state.hostUnavailable')
-    const payload = await hostCall<GitWritePayload>('open-with', { cwd, path, app })
+    const payload = await hostCall<GitWritePayload>('open-with', { cwd, path, app, confirm: true })
     if (payload === null) return t('state.hostUnavailable')
     if (!payload.ok) return payload.error ?? 'unknown error'
     return null

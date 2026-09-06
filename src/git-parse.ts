@@ -172,6 +172,8 @@ export function normalizeBaseRef(value: unknown): string | null {
   if (ref === '' || ref.length > 256) return null
   if (ref.startsWith('-') || ref.includes('..') || ref.includes('@{')) return null
   if (/[\s~^:?*\[\\{}]/.test(ref)) return null
+  // NUL/control bytes never belong in a ref name (argv smuggling paranoia).
+  if (/[\0-\x1f\x7f]/.test(ref)) return null
   return ref
 }
 

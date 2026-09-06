@@ -637,4 +637,56 @@ const blameTrunc = parseBlamePorcelain('cccccccccccccccccccccccccccccccccccccccc
 assert.equal(blameTrunc.length, 1)
 assert.equal(blameTrunc[0].author, '')
 
+// 43. Word highlight semantic cleanup (google/diff-match-patch
+//     Diff_cleanupSemantic): a trivial equality — no longer than the edits on
+//     BOTH sides of it — dissolves into the surrounding change instead of
+//     shredding the row into single-letter spans (the "letter salad"
+//     regression: unrelated lines matched char-by-char into 17/14 spans).
+const saladWords = makeWordHighlighter()
+const dissolved = saladWords.pair({
+  kind: 'pair',
+  left: { no: 1, text: 'axbXc' },
+  right: { no: 1, text: 'aybYc' },
+})
+assert.ok(dissolved !== null)
+assert.deepEqual(dissolved.old, [[1, 4]], '1-char island between 1-char edits dissolves')
+assert.deepEqual(dissolved.new, [[1, 4]])
+// A longer island survives single-char edits on both sides.
+const island = saladWords.pair({
+  kind: 'pair',
+  left: { no: 2, text: 'pXabYq' },
+  right: { no: 2, text: 'pZabWq' },
+})
+assert.deepEqual(island.old, [[1, 2], [4, 5]])
+assert.deepEqual(island.new, [[1, 2], [4, 5]])
+// Leading/trailing equalities are never dissolved (interior rule only).
+const edges = saladWords.pair({
+  kind: 'pair',
+  left: { no: 3, text: 'fooXbar' },
+  right: { no: 3, text: 'fooYbar' },
+})
+assert.deepEqual(edges.old, [[3, 4]])
+assert.deepEqual(edges.new, [[3, 4]])
+// The screenshot pair: two unrelated lines must render as a few big spans,
+// and no interior equality may survive that the rule would dissolve.
+const rewrite = saladWords.pair({
+  kind: 'pair',
+  left: { no: 4, text: 'const attempt = (range: string): Promise<string> => runGit(repoRoot,' },
+  right: { no: 4, text: '// J9-2: a single file is diff is bounded by DIFF_CAP after the fact' },
+})
+assert.ok(rewrite !== null)
+assert.ok(rewrite.old.length <= 5, 'rewrite renders as big spans, not salad (was 17): ' + rewrite.old.length)
+assert.ok(rewrite.new.length <= 5, 'rewrite renders as big spans, not salad (was 14): ' + rewrite.new.length)
+for (const [text, spans] of [
+  ['const attempt = (range: string): Promise<string> => runGit(repoRoot,', rewrite.old],
+  ['// J9-2: a single file is diff is bounded by DIFF_CAP after the fact', rewrite.new],
+]) {
+  for (let s = 1; s < spans.length; s++) {
+    const gap = spans[s][0] - spans[s - 1][1]
+    const left = spans[s - 1][1] - spans[s - 1][0]
+    const right = spans[s][1] - spans[s][0]
+    assert.ok(gap > left || gap > right, `trivial equality survives in ${JSON.stringify(text)}`)
+  }
+}
+
 console.log('check-parse: all assertions passed')

@@ -438,6 +438,42 @@ export const WORD_HIGHLIGHT_BUDGET = 2_000_000
  *  intra-line spans would render nearly everything as changed anyway. */
 const WORD_HIGHLIGHT_MIN_RATIO = 0.3
 
+/** Dissolve trivial interior equalities in a changed-marks array, in place.
+ *
+ *  Borrowed from google/diff-match-patch `Diff_cleanupSemantic`: an equality
+ *  is eliminated when it is "smaller or equal to the edits on both sides of
+ *  it" — there, `max(insertions, deletions)` before AND after; here, the
+ *  adjacent changed-run lengths on this side. A dissolved gap merges its
+ *  neighbours, so the scan repeats until no gap qualifies (the original
+ *  rewinds its pointer the same way). O(n) per pass, a pass dissolves at
+ *  least one gap, gaps are finite — always terminates. */
+function dissolveTrivialEqualities(marks: Uint8Array): void {
+  for (;;) {
+    let dissolved = false
+    let k = 0
+    while (k < marks.length) {
+      if (marks[k] === 1) { k += 1; continue }
+      let end = k
+      while (end < marks.length && marks[end] === 0) end += 1
+      // The runs touching the string edges anchor the change and stay.
+      if (k > 0 && end < marks.length) {
+        let left = k - 1
+        while (left >= 0 && marks[left] === 1) left -= 1
+        const leftLen = k - 1 - left
+        let right = end
+        while (right < marks.length && marks[right] === 1) right += 1
+        const rightLen = right - end
+        if (end - k <= leftLen && end - k <= rightLen) {
+          marks.fill(1, k, end)
+          dissolved = true
+        }
+      }
+      k = end
+    }
+    if (!dissolved) return
+  }
+}
+
 /** Character-level LCS changed spans for one replacement pair, or null when
  *  the pair is too long, too dissimilar, or budget is exhausted — null means
  *  "render the plain row" and is always safe. */
@@ -486,6 +522,15 @@ function lcsWordRegions(a: string, b: string): WordRegions | null {
     newMarks[j - 1] = 1
     j -= 1
   }
+  // Semantic cleanup (google/diff-match-patch Diff_cleanupSemantic): an
+  // interior equality no longer than the edits on BOTH sides of it is a
+  // coincidental single-letter match, not shared content — dissolve it into
+  // the surrounding change so unrelated lines render as a few big spans
+  // instead of alphabet salad. Leading/trailing equalities are kept (they
+  // anchor the change, the common-prefix/suffix the eye scans for). Runs to
+  // a fixpoint like the original's rewind: one dissolve can expose the next.
+  dissolveTrivialEqualities(oldMarks)
+  dissolveTrivialEqualities(newMarks)
   const spansOf = (marks: Uint8Array): WordSpans => {
     const spans: [number, number][] = []
     let start = -1

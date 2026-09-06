@@ -25,6 +25,20 @@
   box-sizing: border-box;
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-layer-1);
+
+  /* Theme-token compat aliases (ponytail: batch-rename call sites later).
+   * Verified against ui-theme design-platform.css (0.1.2-rc.1): this
+   * harness ships border-l1..l4 + interactive-bg-hover/active — it has
+   * NEVER had border-secondary/border-primary/fill-hover/fill-active.
+   * Every one of those references below silently resolved to
+   * currentColor or transparent (invalid var()), which is why strokes
+   * read as text-colored or missing, hover fills never painted, and the
+   * toolbar/tree/diff boundaries were invisible on glass. Mapping them
+   * once here keeps light/dark theming (l2/l3 flip with the theme). */
+  --dsw-alias-border-secondary: var(--dsw-alias-border-l2);
+  --dsw-alias-border-primary: var(--dsw-alias-border-l3);
+  --dsw-alias-fill-hover: var(--dsw-alias-interactive-bg-hover);
+  --dsw-alias-fill-active: var(--dsw-alias-interactive-bg-active);
 }
 
 .centered {
@@ -64,7 +78,23 @@ body[data-dsh-bg-glass] .root {
   flex-direction: column;
   gap: 6px;
   padding: 7px 12px 8px;
-  border-bottom: 1px solid var(--dsw-alias-border-secondary);
+  /* The chrome/content boundary must survive the glass: a l2 hairline plus
+   * a 1px shadow reads as a surface edge on frosted wallpaper where a bare
+   * secondary border used to disappear (the border token itself was
+   * unresolved until the compat aliases above — double reason it failed). */
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--dsw-alias-label-primary) 5%, transparent);
+}
+
+/* In-row group separator: 1 vertical hairline between logically distinct
+ * clusters (branch | compare | view). Same visual family as the panel
+ * borders below, so the row reads as labeled sections, not one flat line. */
+.tbDivider {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 15px;
+  background: var(--dsw-alias-border-l4);
 }
 
 .toolbarRow {
@@ -349,22 +379,28 @@ body[data-dsh-bg-glass] .root {
   flex: 1;
 }
 
+/* One bounded search control: the scope segment lives INSIDE the box as a
+ * leading section (hairline separator), so "what to search" and "what was
+ * typed" read as one widget with a visible edge — the old side-by-side
+ * pill + borderless box had no boundary anywhere (on glass literally
+ * none). Rectangular 8px radius, not a pill: pills mean buttons/chips in
+ * this toolbar, rectangles mean text input (filterRow convention). */
 .searchBox {
   display: inline-flex;
   flex: 1;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 3px 9px;
-  border: 1px solid var(--dsw-alias-border-secondary);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--dsw-alias-fill-hover) 55%, transparent);
+  padding: 4px 9px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dsw-alias-fill-hover) 75%, transparent);
   color: var(--dsw-alias-label-tertiary);
 }
 
 .searchBox:focus-within {
-  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-border-secondary));
-  background: transparent;
+  border-color: color-mix(in srgb, var(--dsw-alias-state-business-primary) 55%, var(--dsw-alias-border-l2));
+  background: var(--dsw-alias-bg-layer-1);
 }
 
 .searchInput {
@@ -389,8 +425,10 @@ body[data-dsh-bg-glass] .root {
   font-variant-numeric: tabular-nums;
 }
 
-/* The toolbar search: scope chip + box + matching gear. The chip leads so
-   the classified search (diff/content/name) is visible at a glance. */
+/* The toolbar search: ONE bounded control — in-box scope segment + input +
+   flags. The segment leads so the classified search (diff/content/name)
+   stays visible at a glance, and the box border gives the whole thing an
+   edge the old naked input never had. */
 .searchWrap {
   position: relative;
   display: inline-flex;
@@ -410,13 +448,18 @@ body[data-dsh-bg-glass] .root {
   flex: none;
 }
 
+/* In-box leading segment: no own border/background (the box IS the
+ * boundary), separated from the input area by one hairline. */
 .searchScopeBtn {
   display: inline-flex;
+  align-self: stretch;
   align-items: center;
   gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--dsw-alias-border-secondary);
-  border-radius: 999px;
+  padding: 0 8px 0 2px;
+  margin-right: 2px;
+  border: none;
+  border-right: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 0;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
@@ -425,7 +468,7 @@ body[data-dsh-bg-glass] .root {
 }
 
 .searchScopeBtn:hover {
-  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
 .searchOptionsPop {
@@ -543,6 +586,8 @@ body[data-dsh-bg-glass] .root {
    global actions that used to spend ~150px of text on a cramped row. Their
    identity lives in the tooltip/aria-label; the draft badge carries the
    only state worth seeing at a glance. */
+/* Low-frequency global actions recede: no static border (that edge is
+ * reserved for interactive-input shapes), hover/focus surfaces one. */
 .iconBtn {
   position: relative;
   flex: none;
@@ -552,7 +597,7 @@ body[data-dsh-bg-glass] .root {
   width: 26px;
   height: 26px;
   padding: 0;
-  border: 1px solid var(--dsw-alias-border-secondary);
+  border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
@@ -989,13 +1034,17 @@ body[data-dsh-bg-glass] .root {
   white-space: nowrap;
 }
 
-/* Staged/unstaged scope switch (diff header, tracked files only). */
+/* Segmented switch (diff-header scope, toolbar compare mode, view tab):
+ * a tinted tray makes the two segments read as one selector control, and
+ * the active segment picks up the interactive-active fill — a real
+ * "switch" shape instead of two loose pills. */
 .scopeSwitch {
   display: inline-flex;
   flex: none;
   align-items: center;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 6px;
+  background: color-mix(in srgb, var(--dsw-alias-fill-hover) 60%, transparent);
   overflow: hidden;
 }
 

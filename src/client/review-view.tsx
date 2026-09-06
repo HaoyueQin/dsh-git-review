@@ -1042,6 +1042,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             )}
             <ChevronIcon rotated={branchOpen} />
           </button>
+          {/* separator only when the compare cluster follows — in the graph
+              view the branch chip is the whole left group, a dangling
+              divider there reads as a stray mark */}
+          {viewTab === 'changes' && <span className={css.tbDivider} aria-hidden="true" />}
           {viewTab === 'changes' && (
             <span className={css.compareCluster} title={t('compare.pickHint')}>
               <span className={css.scopeSwitch} role="group" aria-label={t('compare.mode')}>
@@ -1117,6 +1121,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 </span>
               )}
               {data !== null && (
+                <span className={css.tbDivider} aria-hidden="true" />
+              )}
+              {data !== null && (
                 <span className={css.totals}>
                   <span className={css.totalAdded}>{'+' + fmtCount(data.totals.added)}</span>
                   <span className={css.totalDeleted}>{'\u2212' + fmtCount(data.totals.deleted)}</span>
@@ -1142,60 +1149,60 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         </div>
         <div className={css.toolbarRow}>
           <span className={css.searchWrap}>
-            {viewTab === 'changes' && (
-              // Scope chip leads the box so the classified search stays
-              // discoverable; its popover also carries the matching toggles
-              // (case/regex) — the old separate gear button was one more
-              // piece of toolbar clutter nobody associated with the box.
-              <span className={css.searchScope} ref={searchOptionsRef}>
-                <button
-                  type="button"
-                  className={css.searchScopeBtn}
-                  title={t('search.scope')}
-                  aria-haspopup="menu"
-                  aria-expanded={searchOptionsOpen}
-                  onClick={() => { setSearchOptionsOpen(value => !value) }}
-                >
-                  <span>{t(('search.scope.' + searchScope) as ReviewKey)}</span>
-                  <ChevronIcon size={10} rotated={searchOptionsOpen} />
-                </button>
-                {searchOptionsOpen && (
-                  <div className={css.searchOptionsPop} role="menu">
-                    <div className={css.searchOptionsGroup}>{t('search.scope')}</div>
-                    {(['diff', 'content', 'path'] as const).map(candidate => (
-                      <button
-                        key={candidate}
-                        type="button"
-                        className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
-                        onClick={() => { changeSearchScope(candidate) }}
-                      >
-                        <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
-                        {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
-                      </button>
-                    ))}
-                    <div className={css.fileMenuDivider} />
-                    <div className={css.searchOptionsGroup}>{t('search.matching')}</div>
-                    <button
-                      type="button"
-                      className={css.pickerItem + (searchCS ? ' ' + css.pickerItemActive : '')}
-                      onClick={() => { toggleSearchCS() }}
-                    >
-                      <span className={css.pickerItemName}>{t('search.caseSensitive')}</span>
-                      {searchCS && <span className={css.pickerItemCheck}><CheckIcon /></span>}
-                    </button>
-                    <button
-                      type="button"
-                      className={css.pickerItem + (searchRegex ? ' ' + css.pickerItemActive : '')}
-                      onClick={() => { toggleSearchRegex() }}
-                    >
-                      <span className={css.pickerItemName}>{t('search.regex')}</span>
-                      {searchRegex && <span className={css.pickerItemCheck}><CheckIcon /></span>}
-                    </button>
-                  </div>
-                )}
-              </span>
-            )}
             <label className={css.searchBox}>
+              {viewTab === 'changes' && (
+                // Scope segment INSIDE the box: "what to search" is the leading
+                // section of one bounded search control (segment | hairline |
+                // input), instead of two adjacent naked controls. The popover
+                // still anchors to the segment — only the DOM parent changed.
+                <span className={css.searchScope} ref={searchOptionsRef}>
+                  <button
+                    type="button"
+                    className={css.searchScopeBtn}
+                    title={t('search.scope')}
+                    aria-haspopup="menu"
+                    aria-expanded={searchOptionsOpen}
+                    onClick={() => { setSearchOptionsOpen(value => !value) }}
+                  >
+                    <span>{t(('search.scope.' + searchScope) as ReviewKey)}</span>
+                    <ChevronIcon size={10} rotated={searchOptionsOpen} />
+                  </button>
+                  {searchOptionsOpen && (
+                    <div className={css.searchOptionsPop} role="menu">
+                      <div className={css.searchOptionsGroup}>{t('search.scope')}</div>
+                      {(['diff', 'content', 'path'] as const).map(candidate => (
+                        <button
+                          key={candidate}
+                          type="button"
+                          className={css.pickerItem + (searchScope === candidate ? ' ' + css.pickerItemActive : '')}
+                          onClick={() => { changeSearchScope(candidate) }}
+                        >
+                          <span className={css.pickerItemName}>{t(('search.scope.' + candidate) as ReviewKey)}</span>
+                          {searchScope === candidate && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                        </button>
+                      ))}
+                      <div className={css.fileMenuDivider} />
+                      <div className={css.searchOptionsGroup}>{t('search.matching')}</div>
+                      <button
+                        type="button"
+                        className={css.pickerItem + (searchCS ? ' ' + css.pickerItemActive : '')}
+                        onClick={() => { toggleSearchCS() }}
+                      >
+                        <span className={css.pickerItemName}>{t('search.caseSensitive')}</span>
+                        {searchCS && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                      </button>
+                      <button
+                        type="button"
+                        className={css.pickerItem + (searchRegex ? ' ' + css.pickerItemActive : '')}
+                        onClick={() => { toggleSearchRegex() }}
+                      >
+                        <span className={css.pickerItemName}>{t('search.regex')}</span>
+                        {searchRegex && <span className={css.pickerItemCheck}><CheckIcon /></span>}
+                      </button>
+                    </div>
+                  )}
+                </span>
+              )}
               <SearchIcon />
               <input
                 ref={searchInputRef}

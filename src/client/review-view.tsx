@@ -295,6 +295,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [blameReturn, setBlameReturn] = useState<{ path: string; line: number } | null>(null)
   /** Sticky focus line kept after the one-click return (drives FilePane highlight). */
   const [blameFocus, setBlameFocus] = useState<{ path: string; line: number } | null>(null)
+  /** Graph-to-plugin return: the commit detail a file was opened from. */
+  const [pluginOpenReturn, setPluginOpenReturn] = useState<{ commit: string; graphFile: string | null } | null>(null)
   // Commit/push popover state: two-step armed buttons, verbatim git output.
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
@@ -957,6 +959,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setGraphListCollapsed(false)
     setBlameReturn(null)
     setBlameFocus(null)
+    setPluginOpenReturn(null)
   }, [])
 
   /** Select a graph commit; the list folds to the topology rail so the
@@ -1010,6 +1013,32 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSelected(blameReturn.path)
     setBlameOn(true)
   }, [blameReturn])
+
+  /** Open a graph-commit file in the changes view (all-files file view),
+   *  remembering the commit detail for the one-click return. */
+  const openCommitFileInPlugin = useCallback((path: string) => {
+    if (selectedCommit === null) return
+    const origin = { commit: selectedCommit, graphFile }
+    setFileMenu(null)
+    changeViewTab('changes')
+    // changeViewTab clears transient tab state; restore the return after it.
+    setPluginOpenReturn(origin)
+    if (refsMode) changeCompareMode('worktree')
+    changeTreeMode('all')
+    setFileView(true)
+    selectFile(path)
+  }, [selectedCommit, graphFile, refsMode, changeViewTab, changeCompareMode, changeTreeMode, selectFile])
+
+  /** Return from a plugin-opened file to the graph commit it came from. */
+  const backToGraphCommit = useCallback(() => {
+    if (pluginOpenReturn === null) return
+    const origin = pluginOpenReturn
+    setPluginOpenReturn(null)
+    setViewTab('graph')
+    setSelectedCommit(origin.commit)
+    setGraphFile(origin.graphFile)
+    setGraphListCollapsed(true)
+  }, [pluginOpenReturn])
 
 
   /** Show the worktree's uncommitted changes in the graph detail pane. */
@@ -1538,6 +1567,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               </button>
             ))}
           </span>
+          {pluginOpenReturn !== null && viewTab === 'changes' && (
+            <button
+              type="button"
+              className={css.toolBtn}
+              title={t('graph.backToGraph') + ': ' + pluginOpenReturn.commit.slice(0, 7)}
+              onClick={backToGraphCommit}
+            >
+              {'← ' + t('graph.backToGraph')}
+            </button>
+          )}
           <span className={css.searchWrap}>
             <label className={css.searchBox}>
               {viewTab === 'changes' && (
@@ -2122,6 +2161,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           remove={removeFile}
           gitAction={!refsMode && viewTab === 'changes' ? runGitAction : undefined}
           conflictResolve={runConflictResolve}
+          openInPlugin={openCommitFileInPlugin}
           t={t}
         />
       )}
@@ -2404,7 +2444,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                               onModeChange={() => { /* pinned in graph view */ }}
                               showModeRow={false}
                               listFailed={false}
-                              onFileMenu={(path, x, y) => { setFileMenu({ path, x, y }) }}
+                              onFileMenu={(path, x, y) => { setFileMenu({ path, x, y, from: 'commit' }) }}
                               t={t}
                             />
                           )}

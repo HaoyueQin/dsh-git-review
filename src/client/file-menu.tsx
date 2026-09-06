@@ -28,6 +28,9 @@ export interface FileMenuState {
   path: string
   x: number
   y: number
+  /** Which tree opened the menu: commit-detail rows can jump into the
+   *  plugin's own file view (absent = worktree rows, already there). */
+  from?: 'commit'
   /** The row's worktree git state (worktree tree only; absent for commit
    *  files, whose rows carry no worktree ops). */
   git?: {
@@ -61,6 +64,7 @@ export interface FileMenuProps {
   gitAction?: (action: 'stage' | 'unstage' | 'discard', path: string) => Promise<string | null>
   /** Conflict resolution (ours/theirs); absent hides the conflict group. */
   conflictResolve?: (side: 'ours' | 'theirs', path: string) => Promise<string | null>
+  openInPlugin?: (path: string) => void
   t: T
 }
 
@@ -101,7 +105,7 @@ function ChatItem({ path, useInput, inputActions, onRun, t }: {
   )
 }
 
-export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, conflictResolve, t }: FileMenuProps) {
+export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, conflictResolve, openInPlugin, t }: FileMenuProps) {
   const [mode, setMode] = useState<'menu' | 'apps' | 'rename' | 'delete' | 'discard' | 'busy'>('menu')
   const [renameValue, setRenameValue] = useState(state.path)
   const [note, setNote] = useState<string | null>(null)
@@ -280,7 +284,9 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
     )
   }
 
+  const pluginOpener = state.from === 'commit' ? openInPlugin : undefined
   const items: LineItem[] = [
+    ...(pluginOpener === undefined ? [] : [{ key: 'open-in-plugin', icon: <FileIcon />, label: t('menu.openInPlugin'), onClick: () => { pluginOpener(state.path); onClose() } }]),
     { key: 'open', icon: <OpenIcon />, label: t('menu.openDefault'), onClick: () => { void run('open', () => openApp(state.path, 'default')) } },
     { key: 'reveal', icon: <FolderIcon />, label: t('menu.reveal'), onClick: () => { void run('open', () => openApp(state.path, 'explorer')) } },
     { key: 'open-with', icon: <FileIcon />, label: t('menu.openWith'), onClick: () => { setNote(null); setMode('apps') } },

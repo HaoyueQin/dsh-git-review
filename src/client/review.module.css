@@ -2029,8 +2029,22 @@ body[data-dsh-bg-glass] .root {
    rail keeps enough width for titles while the detail pane still gets the
    rest. Hover shows a rich commit card (see .railTip). */
 .graphListNarrow {
-  width: 260px;
-  min-width: 260px;
+  width: 76px;
+  min-width: 76px;
+}
+
+/* Graph-list drag handle: the divider right of the commit list. */
+.graphResizeHandle {
+  flex: none;
+  width: 6px;
+  margin-left: -3px;
+  margin-right: -3px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.graphResizeHandle:hover {
+  background: var(--dsw-alias-fill-hover);
 }
 
 .graphToggleRow {
@@ -2073,32 +2087,6 @@ body[data-dsh-bg-glass] .root {
 
 .railRow:hover {
   background: var(--dsw-alias-fill-hover);
-}
-
-.railSubject {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  /* The worktree rail row nests a <button> here: strip the native button
-     chrome (gray face + border reads as an input box) so it matches the
-     reset .railRow commit buttons and the expanded worktree row. */
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.railHash {
-  color: var(--dsw-alias-label-tertiary);
-  font-family: var(--ds-font-family-code, ui-monospace, monospace);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
 }
 
 /* The hover card: fixed so the rail list's overflow can't clip it; left/top

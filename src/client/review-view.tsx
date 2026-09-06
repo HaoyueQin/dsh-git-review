@@ -242,6 +242,47 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [graphFilter, setGraphFilter] = useState('')
   const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [graphListCollapsed, setGraphListCollapsed] = useState(initialPrefs.graphCollapsed)
+  /** Graph-list dragged width in px (null = the CSS default; persists like the tree width). */
+  const [graphListWidth, setGraphListWidth] = useState<number | null>(() => {
+    try {
+      const stored = Number(localStorage.getItem('dsh-git-review.graphWidth'))
+      return Number.isFinite(stored) && stored >= 180 && stored <= 900 ? stored : null
+    } catch {
+      return null
+    }
+  })
+  const graphListRef = useRef<HTMLElement | null>(null)
+  const graphResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  /** Visible-column density from the dragged width (null = full info). */
+  const graphDensity = graphListWidth === null ? 4 : graphListWidth < 280 ? 1 : graphListWidth < 390 ? 2 : graphListWidth < 540 ? 3 : 4
+  /** Drag the divider right of the graph list: dragging RIGHT widens it. */
+  const startGraphResize = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    const section = graphListRef.current
+    const startWidth = graphListWidth ?? section?.getBoundingClientRect().width ?? 480
+    graphResizeRef.current = { startX: event.clientX, startWidth }
+    const clamp = (value: number): number => Math.min(900, Math.max(180, value))
+    const onMove = (move: MouseEvent): void => {
+      const state = graphResizeRef.current
+      if (state === null) return
+      setGraphListWidth(clamp(state.startWidth + (move.clientX - state.startX)))
+    }
+    const onUp = (up: MouseEvent): void => {
+      const state = graphResizeRef.current
+      graphResizeRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (state === null) return
+      try { localStorage.setItem('dsh-git-review.graphWidth', String(Math.round(clamp(state.startWidth + (up.clientX - state.startX)))) ) } catch { /* private mode — width just doesn't persist */ }
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [graphListWidth])
+  /** Double-click the divider restores the default list width. */
+  const resetGraphWidth = useCallback(() => {
+    setGraphListWidth(null)
+    try { localStorage.removeItem('dsh-git-review.graphWidth') } catch { /* private mode — nothing persisted */ }
+  }, [])
   // The worktree virtual row's detail state (the graph view can show the
   // uncommitted changes as if they were a "commit").
   const [graphWorktree, setGraphWorktree] = useState(false)
@@ -2112,7 +2153,12 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       <div className={css.body}>
         {viewTab === 'graph' ? (
           <>
-            <section className={css.graphList + (graphListCollapsed ? ' ' + css.graphListNarrow : '')} data-git-review-graph="">
+            <section
+              ref={graphListRef as React.Ref<HTMLElement>}
+              className={css.graphList + (graphListCollapsed ? ' ' + css.graphListNarrow : '')}
+              style={!graphListCollapsed && graphListWidth !== null ? { width: graphListWidth, minWidth: graphListWidth } : undefined}
+              data-git-review-graph=""
+            >
               <div className={css.graphToggleRow}>
                 <button
                   type="button"
@@ -2144,6 +2190,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                         selected={selectedCommit}
                         onSelect={selectCommit}
                         collapsed={graphListCollapsed}
+                        density={graphDensity as 0 | 1 | 2 | 3 | 4}
                         worktree={refsMode === false && ready !== null && ready.files.length > 0 ? { files: ready.files.length } : null}
                         worktreeSelected={graphWorktree}
                         onSelectWorktree={selectGraphWorktree}
@@ -2154,6 +2201,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 </>
               )}
             </section>
+            {!graphListCollapsed && (
+              <div
+                className={css.graphResizeHandle}
+                role="separator"
+                aria-orientation="vertical"
+                title={t('graph.resizeHint')}
+                onMouseDown={startGraphResize}
+                onDoubleClick={resetGraphWidth}
+              />
+            )}
             <main className={css.mainPane}>
               {graphWorktree ? (
                 <div className={css.commitDetail} data-git-review-diff="">

@@ -132,6 +132,36 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   /** Per-file history popover state (the diff header's history button). */
   const [historyState, setHistoryState] = useState<{ kind: 'closed' } | { kind: 'loading' } | { kind: 'open'; x: number; y: number; commits: GitCommitSummary[]; truncated: boolean }>({ kind: 'closed' })
   const historyPopRef = useRef<HTMLDivElement | null>(null)
+  /** Tree panel dragged width (J8-3): null = the CSS clamp default; the
+   *  last dragged value persists across sessions. */
+  const [treeWidth, setTreeWidth] = useState<number | null>(() => {
+    const stored = Number(localStorage.getItem('dsh-git-review.treeWidth'))
+    return Number.isFinite(stored) && stored >= 200 && stored <= 460 ? stored : null
+  })
+  const treeResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  /** Drag the divider between the diff pane and the tree: the tree sits on
+   *  the right, so dragging LEFT widens it; clamped, persisted on release. */
+  const startTreeResize = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    treeResizeRef.current = { startX: event.clientX, startWidth: treeWidth ?? 260 }
+    const onMove = (move: MouseEvent): void => {
+      const state = treeResizeRef.current
+      if (state === null) return
+      setTreeWidth(Math.min(460, Math.max(200, state.startWidth + (state.startX - move.clientX))))
+    }
+    const onUp = (move: MouseEvent): void => {
+      const state = treeResizeRef.current
+      treeResizeRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (state === null) return
+      void move
+      const final = Math.min(460, Math.max(200, state.startWidth + (state.startX - move.clientX)))
+      localStorage.setItem('dsh-git-review.treeWidth', String(final))
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [treeWidth])
   // All-files tree mode: the whole repository file list (lazily fetched).
   const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
   const [allFiles, setAllFiles] = useState<string[] | null>(null)
@@ -2070,11 +2100,19 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 )}
         </main>
         {data !== null && (
-          <TreePanel
-            files={allRows ?? data.files}
-            selected={selected}
-            onSelect={selectFile}
-            filter={searchScope === 'path' ? search : ''}
+          <>
+            <span
+              className={css.treeDivider}
+              title={t('tree.resizeHint')}
+              onMouseDown={startTreeResize}
+              onDoubleClick={() => { setTreeWidth(null); localStorage.removeItem('dsh-git-review.treeWidth') }}
+            />
+            <TreePanel
+              width={treeWidth ?? undefined}
+              files={allRows ?? data.files}
+              selected={selected}
+              onSelect={selectFile}
+              filter={searchScope === 'path' ? search : ''}
             onFilterChange={() => { /* the toolbar search drives the tree filter in path mode */ }}
             collapsed={collapsed}
             onToggleDir={toggleDir}
@@ -2099,10 +2137,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               })
             }}
             t={t}
-          />
-        )}
-          </>
-        )}
+            />
+            </>
+          )}
+            </>
+          )}
       </div>
     </div>
   )

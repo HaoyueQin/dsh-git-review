@@ -1740,6 +1740,23 @@ body[data-dsh-bg-glass] .root {
   user-select: none;
 }
 
+/* Drag handle between the diff pane and the tree (J8-3): a thin strip that
+ * widens on hover, col-resize cursor; double-click resets (JSX side). */
+.treeDivider {
+  flex: none;
+  align-self: stretch;
+  width: 4px;
+  margin: 0 -1px;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--dsw-alias-border-secondary);
+}
+
+.treeDivider:hover {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 30%, transparent);
+  border-left-color: transparent;
+}
+
 /* The per-file history card: fixed-position (scroll containers clip
  * absolute popovers), grouped like the pickers. */
 .historyPop {

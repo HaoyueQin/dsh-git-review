@@ -1499,6 +1499,21 @@ async function gitOpenApps(): Promise<OpenAppsPayload> {
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
 function readJsonBody(req: IncomingMessage, res: ServerResponse): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
+    // CSRF hardening (J8-4): a JSON content-type cannot be sent cross-origin
+    // by a plain form submit or a navigated <img>, which closes the classic
+    // no-cors write vectors. The API is same-origin fenced already; this is
+    // belt over the braces.
+    const contentType = String(req.headers['content-type'] ?? '')
+    if (!contentType.toLowerCase().includes('application/json')) {
+      rejectPromise(new Error('content-type must be application/json'))
+      res.writeHead(415, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ ok: false, error: 'content-type must be application/json' }))
+      // Drain the rest of the upload so the 415 flushes instead of the
+      // socket dying mid-response (req.destroy() here reads as a network
+      // failure on the browser side, not as a 415).
+      req.resume()
+      return
+    }
     const chunks: Buffer[] = []
     let size = 0
     req.on('data', (chunk: Buffer) => {

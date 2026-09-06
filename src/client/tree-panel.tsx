@@ -47,6 +47,8 @@ export interface TreePanelProps {
   /** Right-click one file row: called with the path + viewport coords and
    *  the row's file record (the menu derives the SCM actions from it). */
   onFileMenu?: (path: string, x: number, y: number, file: ChangedFile) => void
+  /** Dragged width override in px (absent = the CSS clamp default). */
+  width?: number
   t: T
 }
 
@@ -175,12 +177,12 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
  * The panel body: filter box above, tree (or flat filtered list) below.
  * @param props - files, selection, filter/collapse state and callbacks, locale.
  */
-export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, showModeRow = true, showFilter = true, listFailed, matchCounts, viewedHas, onToggleViewed, pendingCount, onFileMenu, t }: TreePanelProps) {
+export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, width, showModeRow = true, showFilter = true, listFailed, matchCounts, viewedHas, onToggleViewed, pendingCount, onFileMenu, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
   const tree = useMemo(() => buildFileTree(visible), [visible])
   const flat = filter.trim() !== ''
   return (
-    <div className={css.treePanel} data-git-review-tree="">
+    <div className={css.treePanel} data-git-review-tree="" style={width !== undefined ? { width } : undefined}>
       {pendingCount !== undefined && pendingCount > 0 && (
         <div className={css.treePending}>{t('tree.pending', { count: pendingCount })}</div>
       )}

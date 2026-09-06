@@ -86,4 +86,10 @@ pnpm build          # lib/index.js（node 端）+ lib/client.js（浏览器端 b
 - **规模护栏**：2 万行渲染帽、单文件 2 MiB 差异帽、图谱 500 提交分页加载、最大 git 输出 8 MiB 流式字节帽（超限杀进程）。
 - 界面语言：简体中文与英文，随 harness 语言切换；深浅主题走语义 token。
 
+## Activity
+
+<p align="center">
+  <a href="https://gitstock.org/HaoyueQin/dsh-git-review"><img src="https://gitstock.org/HaoyueQin/dsh-git-review/stock.svg" alt="HaoyueQin/dsh-git-review GitStock K-Line Chart"></a>
+</p>
+
 MIT © HaoyueQin

@@ -88,4 +88,10 @@ pnpm build          # lib/index.js (node) + lib/client.js (browser factory bundl
 - **Scale guards**: 20k-row render cap, 2 MiB per-file diff cap, 500-commit graph pages with load-more, and an 8 MiB streaming byte cap (the child is killed past it) on the largest git answers.
 - Interface languages: Simplified Chinese and English, following the harness locale; dark and light themes via semantic tokens.
 
+## Activity
+
+<p align="center">
+  <a href="https://gitstock.org/HaoyueQin/dsh-git-review"><img src="https://gitstock.org/HaoyueQin/dsh-git-review/stock.svg" alt="HaoyueQin/dsh-git-review GitStock K-Line Chart"></a>
+</p>
+
 MIT © HaoyueQin

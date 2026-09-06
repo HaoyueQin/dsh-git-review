@@ -9,7 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec, type WordHighlighter, type WordSpans } from './diff-parse.ts'
-import { makeLineHighlighter, sliceTokens, type TokenSpan } from './highlight.ts'
+import { makeLineHighlighter, sliceTokens, splitLineByTokens, type TokenSpan } from './highlight.ts'
 import { CommentIcon, ExpandIcon, CollapseIcon, HistoryIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
@@ -105,11 +105,11 @@ function tokenClass(kind: TokenSpan['kind']): string {
 
 function renderTokens(text: string, engine: SearchEngine, tokens: TokenSpan[] | null): ReactNode {
   if (tokens === null || tokens.length === 0) return searchParts(text, engine)
-  return tokens.map((token, index) => {
-    const inner = searchParts(text.slice(token.start, token.end), engine)
-    return token.kind === 'kw' || token.kind === 'str' || token.kind === 'num' || token.kind === 'com'
-      ? <span key={index} className={tokenClass(token.kind)}>{inner}</span>
-      : inner
+  // Gap-preserving: tokens cover only kw/str/num/com, so every segment
+  // (plain gaps included) must render, or identifiers/whitespace vanish.
+  return splitLineByTokens(text, tokens).map((seg, index) => {
+    const inner = searchParts(text.slice(seg.start, seg.end), engine)
+    return seg.kind === null ? <span key={index}>{inner}</span> : <span key={index} className={tokenClass(seg.kind)}>{inner}</span>
   })
 }
 
@@ -155,7 +155,7 @@ function UnifiedRow({ line, engine, words, highlighter, ordinal, active, comment
       <span className={css.cellNoU + (line.kind !== 'ctx' ? ' ' + css.cellNoUSign : '')}>
         {line.kind === 'del' ? '−' : line.kind === 'add' ? '+' : ''} {line.no}
       </span>
-      <span className={css.cellText + (line.kind === 'del' ? ' ' + css.cellTextDel : line.kind === 'add' ? ' ' + css.cellTextAdd : '')}>
+      <span className={css.cellText}>
         {renderCellText({ no: line.no, text: line.text, noNewline: line.noNewline }, engine, spans, changedClass, highlighter?.line(line.text) ?? null)}
         {line.noNewline === true && <em className={css.noNewline}>{'↩'}</em>}
       </span>
@@ -181,7 +181,7 @@ function UnifiedRow({ line, engine, words, highlighter, ordinal, active, comment
  *  search match carry data-diff-match (the navigation target), in document
  *  order equal to their match ordinal. */
 function Row({ row, engine, words, highlighter, matchOrdinal, active, commentTitle, onComment }: { row: PairRow; engine: SearchEngine; words: WordHighlighter; highlighter: { line(text: string): TokenSpan[] | null } | null; matchOrdinal: number | undefined; active: boolean; commentTitle: string; onComment: ((line: number) => void) | undefined }) {
-  const kindClass = row.kind === 'ctx' ? css.rowCtx
+  const kindClass = row.kind === 'ctx' ? css.row
     : row.kind === 'del' ? css.rowDel
       : row.kind === 'add' ? css.rowAdd
         : css.rowPair

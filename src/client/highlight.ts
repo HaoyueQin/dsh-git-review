@@ -155,3 +155,32 @@ export function sliceTokens(tokens: TokenSpan[] | null, from: number, to: number
   }
   return out
 }
+
+/** One gap-preserving segment of a highlighted line: kind null = plain text. */
+export interface LineSegment {
+  start: number
+  end: number
+  kind: TokenKind | null
+}
+
+/** Split a line into gap-preserving segments (token spans + the plain text
+ *  between them), clamped to the line. The segments tile [0, text.length)
+ *  exactly, so rendering every segment reproduces the line byte-for-byte —
+ *  renderers must never map tokens alone, or the gaps (identifiers,
+ *  whitespace, punctuation) silently vanish. */
+export function splitLineByTokens(text: string, tokens: TokenSpan[] | null): LineSegment[] {
+  if (tokens === null || tokens.length === 0) {
+    return text === '' ? [] : [{ start: 0, end: text.length, kind: null }]
+  }
+  const segs: LineSegment[] = []
+  let cursor = 0
+  for (const token of tokens) {
+    const start = Math.max(0, Math.min(token.start, text.length))
+    const end = Math.max(start, Math.min(token.end, text.length))
+    if (start > cursor) segs.push({ start: cursor, end: start, kind: null })
+    if (end > start) segs.push({ start, end, kind: token.kind })
+    cursor = Math.max(cursor, end)
+  }
+  if (cursor < text.length) segs.push({ start: cursor, end: text.length, kind: null })
+  return segs
+}

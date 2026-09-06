@@ -8,7 +8,7 @@ import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStat
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
-import { langOf, makeLineHighlighter, sliceTokens, tokenizeLine } from '../src/client/highlight.ts'
+import { langOf, makeLineHighlighter, sliceTokens, splitLineByTokens, tokenizeLine } from '../src/client/highlight.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
@@ -567,6 +567,18 @@ assert.equal(hl.line('y = 2'), null, 'budget exhausted -> plain')
 const sliced = sliceTokens([{ start: 0, end: 10, kind: 'kw' }], 2, 5)
 assert.deepEqual(sliced, [{ start: 0, end: 3, kind: 'kw' }])
 assert.equal(sliceTokens(null, 0, 5), null)
+// 40b. Gap-preserving segments: tokens plus the plain text between them tile
+//      the line exactly, so highlight rendering never drops identifiers or
+//      whitespace (regression: renderers that mapped tokens alone lost text).
+const gapLine = 'const x = 1'
+const gapSegs = splitLineByTokens(gapLine, tokenizeLine(gapLine, 'c'))
+assert.equal(gapSegs.map(s => gapLine.slice(s.start, s.end)).join(''), gapLine)
+assert.ok(gapSegs.some(s => s.kind === null && gapLine.slice(s.start, s.end).includes('x =')))
+assert.deepEqual(splitLineByTokens('', tokenizeLine('', 'c')), [])
+assert.deepEqual(splitLineByTokens('abc', []), [{ start: 0, end: 3, kind: null }])
+assert.deepEqual(splitLineByTokens('abc', null), [{ start: 0, end: 3, kind: null }])
+const clampSegs = splitLineByTokens('ab', [{ start: -5, end: 99, kind: 'kw' }])
+assert.equal(clampSegs.map(s => 'ab'.slice(s.start, s.end)).join(''), 'ab')
 
 // 41. buildHunkPatch: cut one hunk with the file header from a raw unified
 //     diff as a standalone `git apply` patch (per-hunk stage/unstage/revert).

@@ -24,7 +24,6 @@
 </g>
 <text x="48" y="216" font-size="12" fill="#6e7781">file tree · side-by-side diff · lane graph · blame · stash · tags</text>
 <g>
-<animateTransform attributeName="transform" type="translate" values="0 0; 0 -4; 0 0" keyTimes="0; 0.5; 1" dur="6s" repeatCount="indefinite"/>
 <rect x="756" y="34" width="396" height="192" rx="12" fill="#ffffff" stroke="#d0d7de" stroke-width="1.5"/>
 <circle cx="780" cy="58" r="5" fill="#ff5f57"/>
 <circle cx="796" cy="58" r="5" fill="#febc2e"/>
@@ -40,14 +39,13 @@
 <rect x="772" y="132" width="364" height="20" rx="4" fill="#f6f8fa"/>
 <text x="780" y="146" fill="#57606a">  return { ok: true, base }</text>
 </g>
-<path d="M776 202 C 820 202, 820 184, 864 184 S 908 202, 952 184" fill="none" stroke="#8250df" stroke-width="2.5"/>
-<path d="M776 184 C 820 184, 820 202, 864 202 S 908 184, 952 202" fill="none" stroke="#0969da" stroke-width="2.5" opacity="0.55"/>
-<circle cx="776" cy="202" r="4" fill="#8250df"/>
-<circle cx="864" cy="184" r="4.5" fill="#ffffff" stroke="#8250df" stroke-width="2.5"/>
-<circle cx="952" cy="184" r="4" fill="#8250df">
-<animate attributeName="r" values="4; 6; 4" keyTimes="0; 0.5; 1" dur="6s" repeatCount="indefinite"/>
-</circle>
-<circle cx="776" cy="184" r="4" fill="#0969da"/>
+<line x1="790" y1="158" x2="790" y2="206" stroke="#0969da" stroke-width="2.5"/>
+<path d="M790 170 C 790 178 824 170 824 178" fill="none" stroke="#8250df" stroke-width="2.5"/>
+<line x1="824" y1="178" x2="824" y2="192" stroke="#8250df" stroke-width="2.5"/>
+<path d="M824 192 C 824 200 790 192 790 200" fill="none" stroke="#8250df" stroke-width="2.5"/>
+<circle cx="790" cy="162" r="4" fill="#0969da"/>
+<circle cx="824" cy="185" r="4" fill="#8250df"/>
+<circle cx="790" cy="200" r="4.5" fill="#ffffff" stroke="#0969da" stroke-width="2.5"/>
 <text x="1004" y="198" font-size="11" fill="#6e7781">graph</text>
 </g>
 </svg>

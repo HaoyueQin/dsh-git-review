@@ -1936,6 +1936,43 @@ body[data-dsh-bg-glass] .root {
   height: var(--dsh-review-bottom-clearance, 140px);
 }
 
+/* ── in-tab preview (markdown / image / pdf) ─────────────────────────── */
+
+.previewScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px var(--dsh-review-bottom-clearance, 140px);
+  scroll-padding-bottom: var(--dsh-review-bottom-clearance, 140px);
+}
+
+/* Readable measure for rendered markdown; the shell's renderer ships its
+   own type styles, this only bounds the line length. */
+.previewMd {
+  max-width: 860px;
+}
+
+.previewImg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+/* sandbox="" on the element (see preview-pane.tsx): repo PDFs render with
+   scripts and same-origin access dead, so active content cannot reach the
+   tab even from a hostile file. */
+.previewPdf {
+  width: 100%;
+  height: 100%;
+  min-height: 480px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
 /* ── shared notices / empty states ───────────────────────────────────── */
 
 .paneNotice {

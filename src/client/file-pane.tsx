@@ -96,6 +96,9 @@ export interface FilePaneProps {
   onToggleBlame: () => void
   /** Blame rows (when loaded); same order/length as the file's lines. */
   blameState: { kind: 'idle' | 'loading' | 'ready' | 'failed'; lines: GitBlameLine[] | null; message: string | null }
+  /** In-tab preview available for this path (the header offers it). */
+  previewAvailable?: boolean
+  onShowPreview?: () => void
   t: T
 }
 
@@ -103,7 +106,7 @@ export interface FilePaneProps {
  * The pane showing one file's full content.
  * @param props - the file, its content state and the view switch.
  */
-export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, blameOn, onToggleBlame, blameState, t }: FilePaneProps) {
+export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, blameOn, onToggleBlame, blameState, previewAvailable, onShowPreview, t }: FilePaneProps) {
   const engine = useMemo(() => makeSearchEngine(search), [search])
   const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight])
   const lines = useMemo(() => {
@@ -121,6 +124,16 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
         <span className={css.diffPath}>{file.path}</span>
         <span className={css.diffHeaderSpacer} />
         {canShowDiff && <ViewSwitch active={view} onViewChange={onViewChange} t={t} />}
+        {previewAvailable === true && onShowPreview !== undefined && (
+          <span className={css.scopeSwitch} role="group" aria-label={t('preview.toggle')}>
+            <button type="button" className={css.scopeBtn} onClick={onShowPreview}>
+              {t('preview.toggle')}
+            </button>
+            <button type="button" className={css.scopeBtn + ' ' + css.scopeBtnActive}>
+              {t('preview.source')}
+            </button>
+          </span>
+        )}
         {/* Blame toggle: the gutter answers "who last touched this line". */}
         <button
           type="button"
@@ -133,7 +146,7 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
         </button>
       </div>
       {binary && (
-        <div className={css.noticeRow}>{size > 0 ? t('diff.binarySize', { size }) : t('diff.binary')}</div>
+        <div className={css.noticeRow}>{(size > 0 ? t('diff.binarySize', { size }) : t('diff.binary')) + ' \u00b7 ' + t('preview.openHint')}</div>
       )}
       {!binary && truncated && <div className={css.noticeRow}>{t('file.truncated')}</div>}
       {blameOn && blameState.kind === 'loading' && <div className={css.noticeRow}>{t('blame.loading')}</div>}

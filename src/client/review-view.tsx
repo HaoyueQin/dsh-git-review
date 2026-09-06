@@ -13,7 +13,7 @@ import type { RefObject } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
+import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload, GitCommitSummary, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { CommitMenu, type CommitMenuState } from './commit-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
@@ -23,6 +23,8 @@ import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
 import { buildHunkPatch } from './diff-parse.ts'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
+import { markdownRenderer, PreviewPane } from './preview-pane.tsx'
+import { previewKindForPath, type PreviewKind } from './preview-kind.ts'
 import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
@@ -88,6 +90,20 @@ async function loadFileDiff(cwd: string, path: string, origPath: string | undefi
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
+}
+
+/** Preview bytes (image/PDF) for the in-tab preview; mirrors loadFileContent. */
+type PreviewBytesState =
+  | { kind: 'idle' }
+  | { kind: 'loading' }
+  | { kind: 'ready'; mime: string; base64: string; size: number; truncated: boolean }
+  | { kind: 'failed'; message: string }
+
+async function loadPreviewBytes(cwd: string, path: string, ref?: string | null): Promise<Exclude<PreviewBytesState, { kind: 'idle' | 'loading' }>> {
+  const payload = await hostCall<GitFileBytesPayload & { error?: string }>('file-bytes', ref ? { cwd, path, ref } : { cwd, path })
+  if (payload === null) return { kind: 'failed', message: 'host unavailable' }
+  if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
+  return { kind: 'ready', mime: payload.mime, base64: payload.base64, size: payload.size, truncated: payload.truncated }
 }
 
 /** Fetch one file's full content; keeps non-ok payloads as explicit failures.
@@ -175,6 +191,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [viewMode, setViewMode] = useState<'split' | 'unified'>(initialPrefs.viewMode)
   // The whole-file view toggle (transient; unchanged rows force it anyway).
   const [fileView, setFileView] = useState(false)
+  /** In-tab preview: source-first toggle (per selection) + fetched bytes for
+   *  raster images and PDFs (markdown/SVG reuse the loaded text). */
+  const [previewSource, setPreviewSource] = useState(false)
+  const [previewBytes, setPreviewBytes] = useState<PreviewBytesState>({ kind: 'idle' })
   // Content search: the draft debounces into the committed query; matches map
   // drives the tree's per-file count chips and the diff pane's highlighting.
   // The scope decides what is searched — file names (client-side tree
@@ -535,6 +555,30 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   /** Unchanged rows have no diff — the file view is their only view. The
    *  whole-file toggle is transient and applies only where a diff exists. */
   const effectiveView: FileViewMode = fileView || selectedFile?.unchanged === true ? 'file' : viewMode
+  /** In-tab preview gating (extension first, server mime wins at render):
+   *  markdown needs the shared renderer + loaded text, SVG needs loaded
+   *  text containing a tag (a lying extension falls back to source), raster
+   *  images and PDFs stream bytes on demand. */
+  const previewKind: PreviewKind | null = selectedFile !== null ? previewKindForPath(selectedFile.path) : null
+  const previewSvg = selectedFile !== null && selectedFile.path.toLowerCase().endsWith('.svg')
+  const previewMdOk = previewKind !== 'markdown' || markdownRenderer() !== null
+  const previewSvgOk = !previewSvg || (diff.kind === 'content' && diff.content.includes('<svg'))
+  const previewAvailable = previewKind !== null && previewMdOk && previewSvgOk
+  const showPreview = previewAvailable && !previewSource && (
+    previewKind === 'markdown' || previewSvg ? diff.kind === 'content' : true
+  )
+  /** data: URL for the preview — encoded text for SVG, bytes otherwise. */
+  const previewDataUrl: string | null = !showPreview || previewKind === null ? null
+    : previewSvg && diff.kind === 'content'
+      ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(diff.content)
+      : previewBytes.kind === 'ready' && !previewBytes.truncated
+        && (previewKind === 'pdf' ? previewBytes.mime === 'application/pdf' : previewBytes.mime.startsWith('image/'))
+        ? 'data:' + previewBytes.mime + ';base64,' + previewBytes.base64
+        : null
+  const previewBytesFailed = showPreview && previewKind !== null && previewKind !== 'markdown' && !previewSvg
+    && (previewBytes.kind === 'failed'
+      || (previewBytes.kind === 'ready' && (previewBytes.truncated
+        || (previewKind === 'pdf' ? previewBytes.mime !== 'application/pdf' : !previewBytes.mime.startsWith('image/')))))
 
   // Diff/content lifecycle (worktree view): whenever the selected file, its
   // untracked-ness (a status refresh may reclassify it), the context depth,
@@ -558,6 +602,22 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     })
     return () => { alive = false }
   }, [cwd, selected, selectedFile, selectedFile?.untracked, selectedFile?.origPath, diffFull, diffScope, effectiveView, baseRef, targetRef, compareMode, viewTab, wsIgnore])
+
+  // Preview bytes lifecycle: raster images and PDFs need raw bytes (SVG and
+  // markdown reuse the loaded text). SVG never reaches this effect — its
+  // data: URL is encoded from the text content at render time.
+  useEffect(() => {
+    if (viewTab !== 'changes' || previewSource || cwd === undefined || selected === null) return
+    const kind = previewKindForPath(selected)
+    if (kind !== 'image' && kind !== 'pdf') return
+    if (kind === 'image' && selected.toLowerCase().endsWith('.svg')) return
+    let alive = true
+    setPreviewBytes({ kind: 'loading' })
+    void loadPreviewBytes(cwd, selected, refsMode && targetRef !== null ? targetRef : null).then(next => {
+      if (alive) setPreviewBytes(next)
+    })
+    return () => { alive = false }
+  }, [cwd, selected, viewTab, previewSource, refsMode, targetRef])
 
   // The selected commit file's diff (graph view): parent0...commit — the
   // empty-tree baseline for a root commit — rendered by the shared DiffPane.
@@ -636,6 +696,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setDiffScope('all')
     setHunkNotice(null)
     setBlameOn(false)
+    setPreviewSource(false)
+    setPreviewBytes({ kind: 'idle' })
     setHistoryState({ kind: 'closed' })
   }, [])
 
@@ -2200,24 +2262,41 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             : diff.kind === 'failed'
               ? <div className={css.paneNotice + ' ' + css.errorText}>{diff.message}</div>
               : effectiveView === 'file'
-                ? (
-                  <FilePane
-                    file={selectedFile}
-                    content={diff.kind === 'content' ? diff.content : ''}
-                    truncated={diff.kind === 'content' && diff.truncated}
-                    binary={diff.kind === 'binary'}
-                    size={diff.kind === 'binary' || diff.kind === 'content' ? diff.size : 0}
-                    loading={diff.kind === 'loading'}
-                    canShowDiff={selectedFile.unchanged !== true}
-                    view={effectiveView}
-                    onViewChange={changeViewMode}
-                    syntaxHighlight={syntaxHighlight}
-                    search={searchSpec}
-                    blameOn={blameOn}
-                    onToggleBlame={() => { setBlameOn(value => !value) }}
-                    blameState={blameState}
-                    t={t}
-                  />
+                ? (showPreview && previewKind !== null
+                  ? (
+                    <PreviewPane
+                      file={selectedFile}
+                      kind={previewKind}
+                      text={diff.kind === 'content' ? diff.content : ''}
+                      textLoading={diff.kind === 'loading'}
+                      dataUrl={previewDataUrl}
+                      bytesFailed={previewBytesFailed}
+                      bytesTruncated={previewBytes.kind === 'ready' && previewBytes.truncated}
+                      onShowSource={() => { setPreviewSource(true) }}
+                      t={t}
+                    />
+                  )
+                  : (
+                    <FilePane
+                      file={selectedFile}
+                      content={diff.kind === 'content' ? diff.content : ''}
+                      truncated={diff.kind === 'content' && diff.truncated}
+                      binary={diff.kind === 'binary'}
+                      size={diff.kind === 'binary' || diff.kind === 'content' ? diff.size : 0}
+                      loading={diff.kind === 'loading'}
+                      canShowDiff={selectedFile.unchanged !== true}
+                      view={effectiveView}
+                      onViewChange={changeViewMode}
+                      syntaxHighlight={syntaxHighlight}
+                      search={searchSpec}
+                      blameOn={blameOn}
+                      onToggleBlame={() => { setBlameOn(value => !value) }}
+                      blameState={blameState}
+                      previewAvailable={previewAvailable}
+                      onShowPreview={() => { setPreviewSource(false) }}
+                      t={t}
+                    />
+                  )
                 )
                 : (
                   <DiffPane

@@ -127,6 +127,21 @@ export interface GitFileContentBinary {
 
 export type GitFileContentPayload = GitFileContentText | GitFileContentBinary
 
+/** Successful `file-bytes` payload: raw preview bytes (image/PDF) as base64.
+ *  The mime is magic-sniffed server-side, never trusted from the extension;
+ *  an unsniffable file answers ok:false and the tab keeps its binary notice. */
+export interface GitFileBytesPayload {
+  ok: true
+  /** Raw bytes, base64 (the route stays POST+JSON per the CSRF posture). */
+  base64: string
+  /** Magic-sniffed content type (see PreviewMime in git-parse.ts). */
+  mime: string
+  /** File size in bytes (may exceed the served prefix when truncated). */
+  size: number
+  /** True when only a capped prefix was served (no full preview). */
+  truncated: boolean
+}
+
 /** One blame row: the commit that last touched that final line. */
 export interface GitBlameLine {
   /** 40-hex commit that introduced the line. */

@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
-import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitHunkOp, gitLastCommit, gitLog, gitMerge, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
+import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileBytes, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitHunkOp, gitLastCommit, gitLog, gitMerge, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -449,6 +449,37 @@ assert.ok(patch0 !== null && patch1 !== null)
   const pushed = await gitTagPush(repo, 'j9-push-tag', true)
   assert.equal(pushed.ok, true)
   await gitTagDelete(repo, 'j9-push-tag', true)
+}
+
+// 16. file-bytes: magic-sniffed preview bytes round-trip; unknown types
+//     refuse honestly; escapes and missing files throw before git runs.
+{
+  const { writeFileSync: writeBin } = await import('node:fs')
+  const pngHead = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D])
+  writeBin(join(repo, 'dot.png'), pngHead)
+  writeBin(join(repo, 'doc.txt'), 'plain text\n')
+  writeBin(join(repo, 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+  const png = await gitFileBytes(repo, 'dot.png', undefined)
+  assert.equal(png.ok, true)
+  assert.equal(png.mime, 'image/png')
+  assert.deepEqual(Buffer.from(png.base64, 'base64'), pngHead)
+  assert.equal(png.truncated, false)
+  const svg = await gitFileBytes(repo, 'pic.svg', undefined)
+  assert.equal(svg.ok, true)
+  assert.equal(svg.mime, 'image/svg+xml')
+  const text = await gitFileBytes(repo, 'doc.txt', undefined)
+  assert.equal(text.ok, false, 'unsniffable file refuses honestly')
+  const missing = await gitFileBytes(repo, 'nope.png', undefined).catch(e => ({ ok: false, error: String(e?.message ?? e) }))
+  assert.equal(missing.ok, false)
+  const escape = await gitFileBytes(repo, '../escape.png', undefined).catch(e => ({ ok: false, error: String(e?.message ?? e) }))
+  assert.equal(escape.ok, false, 'path escape refuses')
+  // history bytes: committed png readable at its commit
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'preview fixtures')
+  const tip = sh(repo, 'rev-parse', 'HEAD').trim()
+  const atRef = await gitFileBytes(repo, 'dot.png', tip)
+  assert.equal(atRef.ok, true)
+  assert.equal(atRef.mime, 'image/png')
 }
 
 for (const root of roots) rmSync(root, { recursive: true, force: true })

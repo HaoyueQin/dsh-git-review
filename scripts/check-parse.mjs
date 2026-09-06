@@ -4,7 +4,7 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseBlamePorcelain, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, splitDiffSections } from '../src/git-parse.ts'
+import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseBlamePorcelain, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, sniffPreviewMime, splitDiffSections } from '../src/git-parse.ts'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
@@ -12,6 +12,7 @@ import { langOf, makeLineHighlighter, sliceTokens, tokenizeLine } from '../src/c
 import { badgeFor, badgesFor, buildFileTree, filterFiles, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
+import { previewKindForPath } from '../src/client/preview-kind.ts'
 import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
 import { createDraftBox, draftsKey, parseDrafts } from '../src/client/comment-drafts.ts'
 
@@ -688,5 +689,37 @@ for (const [text, spans] of [
     assert.ok(gap > left || gap > right, `trivial equality survives in ${JSON.stringify(text)}`)
   }
 }
+
+// 44. sniffPreviewMime: magic-byte preview detection (the file-bytes
+//     endpoint trusts magic, never the extension). Strict prefix lengths —
+//     a truncated signature is null, not a guess.
+const pngMagic = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00])
+assert.equal(sniffPreviewMime(pngMagic), 'image/png')
+assert.equal(sniffPreviewMime(new Uint8Array([0x89, 0x50, 0x4E])), null, 'truncated png signature')
+assert.equal(sniffPreviewMime(new Uint8Array([0xFF, 0xD8, 0xFF, 0xE0, 0x00])), 'image/jpeg')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('GIF89a\x01\x00')), 'image/gif')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('GIF87a\x01\x00')), 'image/gif')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('RIFF\x24\x00\x00\x00WEBPVP8 ')), 'image/webp')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('BM\x36\x00\x00\x00')), 'image/bmp')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('\x00\x00\x00\x20ftypavif\x00')), 'image/avif')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('%PDF-1.7\n%âã')), 'application/pdf')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg">')), 'image/svg+xml')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('  \n<?xml version="1.0"?><svg width="8">')), 'image/svg+xml')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('<svg\x00>')), null, 'NUL is never svg')
+assert.equal(sniffPreviewMime(new TextEncoder().encode('hello, world')), null)
+assert.equal(sniffPreviewMime(new Uint8Array(0)), null)
+assert.equal(sniffPreviewMime(new Uint8Array([0x00, 0x01, 0x02])), null)
+
+// 45. previewKindForPath: extension gate for the in-tab preview (the server
+//     mime wins on conflict; unknown extensions stay on the source view).
+assert.equal(previewKindForPath('README.md'), 'markdown')
+assert.equal(previewKindForPath('docs/Guide.MARKDOWN'), 'markdown')
+assert.equal(previewKindForPath('assets/logo.png'), 'image')
+assert.equal(previewKindForPath('shot.JPG'), 'image')
+assert.equal(previewKindForPath('fig.svg'), 'image')
+assert.equal(previewKindForPath('paper.pdf'), 'pdf')
+assert.equal(previewKindForPath('src/index.ts'), null)
+assert.equal(previewKindForPath('archive.zip'), null)
+assert.equal(previewKindForPath('Makefile'), null)
 
 console.log('check-parse: all assertions passed')

@@ -9,6 +9,7 @@
  *   POST /dsh-git-review/api/status       { cwd, base?, target? }
  *   POST /dsh-git-review/api/file-diff    { cwd, path, untracked?, full?, scope?, base?, target? }
  *   POST /dsh-git-review/api/file-content { cwd, path, ref? }
+ *   POST /dsh-git-review/api/file-bytes    { cwd, path, ref? }   (base64 preview bytes, magic-sniffed mime)
  *   POST /dsh-git-review/api/blame        { cwd, path }
  *   POST /dsh-git-review/api/file-history { cwd, path }
  *   POST /dsh-git-review/api/list-files   { cwd }
@@ -80,9 +81,9 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
-import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, splitDiffSections } from './git-parse.ts'
+import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, sniffPreviewMime, splitDiffSections } from './git-parse.ts'
 import { installSettings } from './settings-schema.ts'
-import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
+import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
 const HASH_ONLY_RE = /^[0-9a-f]{40}$/
@@ -109,6 +110,9 @@ const DIFF_CAP = 2 * 1024 * 1024
 const STREAM_CAP = 8 * 1024 * 1024
 /** Untracked pseudo-diff read cap (parity with dsh-diff-stat's READ_CAP). */
 const READ_CAP = 512 * 1024
+/** In-tab preview byte cap (image/pdf bytes served as base64): oversized
+ *  files report truncated instead of entering memory whole. */
+const PREVIEW_CAP = 8 * 1024 * 1024
 /** Worktree files hashed per status call for the reviewed markers. */
 const BLOB_HASH_CAP = 200
 
@@ -645,6 +649,94 @@ export async function gitFileContent(cwd: unknown, path: unknown, ref: unknown):
   const truncated = size > READ_CAP
   if (bytes.includes(0)) return { ok: true, binary: true, content: '', truncated, size }
   return { ok: true, binary: false, content: bytes.toString('utf8'), truncated, size }
+}
+
+/**
+ * Spawn-collect raw bytes with a hard cap (J9-2's text twin for binary
+ * payloads): runGitStreamed decodes utf8, which corrupts images — this one
+ * keeps Buffers and kills the child past byteCap. Stderr is capped to a few
+ * chunks (only the failure words ever surface). */
+function runGitBytes(root: string, args: readonly string[], byteCap: number = PREVIEW_CAP, timeoutMs: number = GIT_TIMEOUT_MS): Promise<{ code: number; data: Buffer; stderr: string; truncated: boolean }> {
+  return new Promise((resolvePromise) => {
+    const child = spawn('git', ['-C', root, '--no-optional-locks', '-c', 'core.quotepath=false', ...args], {
+      windowsHide: true,
+      env: gitEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const out: Buffer[] = []
+    const err: Buffer[] = []
+    let size = 0
+    let truncated = false
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) { truncated = true; try { child.kill() } catch { /* already gone */ } }
+    }, timeoutMs)
+    child.stdout?.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > byteCap && !truncated) {
+        truncated = true
+        try { child.kill() } catch { /* already gone */ }
+        return
+      }
+      if (!truncated) out.push(chunk)
+    })
+    child.stderr?.on('data', (chunk: Buffer) => { if (err.length < 8) err.push(chunk) })
+    child.once('error', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise({ code: 1, data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
+    })
+    child.once('close', (code: number | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise({ code: code ?? 1, data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
+    })
+  })
+}
+
+/** One `file-bytes` answer: fenced raw bytes for in-tab previews (images,
+ *  PDF), base64 over the JSON wire (the route stays POST+JSON per the J8-4
+ *  CSRF posture — no raw-byte GET to hotlink). The mime comes from
+ *  sniffPreviewMime's magic bytes, never the extension; an unsniffable file
+ *  is an honest error and the tab keeps its binary notice. Oversized files
+ *  report truncated instead of entering memory whole. */
+export async function gitFileBytes(cwd: unknown, path: unknown, ref: unknown): Promise<GitFileBytesPayload | { ok: false; error: string }> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
+  const relPath = relative(repoRoot, absPath).replaceAll('\\', '/')
+  let data: Buffer
+  let size: number
+  let truncated: boolean
+  if (typeof ref === 'string' && ref !== '') {
+    const normalized = normalizeBaseRef(ref)
+    if (normalized === null) throw new Error('invalid ref')
+    const resolved = await resolveRangeRef(repoRoot, normalized)
+    if (resolved === null || resolved === EMPTY_TREE_ID) throw new Error('cannot resolve ref')
+    const spec = resolved + ':' + relPath
+    size = Number((await runGit(repoRoot, ['cat-file', '-s', spec])).trim())
+    if (!Number.isFinite(size)) throw new Error('cannot read file at ref')
+    const streamed = await runGitBytes(repoRoot, ['cat-file', '-p', spec])
+    if (streamed.code !== 0) throw new Error('cannot read file at ref: ' + (streamed.stderr.trim() || 'git cat-file failed'))
+    data = streamed.data
+    truncated = size > PREVIEW_CAP || streamed.truncated
+  } else {
+    try {
+      const stat = await lstat(absPath)
+      if (!stat.isFile()) throw new Error('not a regular file')
+      size = stat.size
+    } catch (error) {
+      throw new Error('cannot read file: ' + String((error as Error).message ?? error))
+    }
+    data = (await readPrefix(absPath, PREVIEW_CAP)).bytes
+    truncated = size > PREVIEW_CAP
+  }
+  const mime = sniffPreviewMime(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+  if (mime === null) return { ok: false, error: 'file is not previewable (unknown type)' }
+  return { ok: true, base64: data.toString('base64'), mime, size, truncated }
 }
 
 /** Line cap for blame (a review tab is not a history aquarium). */
@@ -1864,6 +1956,10 @@ export function apply(ctx: Context): void {
         }
         if (action === 'file-content') {
           respond(res, 200, await gitFileContent(body['cwd'], body['path'], body['ref']))
+          return
+        }
+        if (action === 'file-bytes') {
+          respond(res, 200, await gitFileBytes(body['cwd'], body['path'], body['ref']))
           return
         }
         if (action === 'list-files') {

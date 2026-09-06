@@ -516,3 +516,72 @@ export function mergeStatus(
     }
   })
 }
+
+/** Previewable content types the file-bytes endpoint serves: raster images
+ *  browsers decode natively, SVG (as text), and PDF (sandboxed iframe).
+ *  Office formats are deliberately absent — mammoth (~2.2MB unpacked) and
+ *  xlsx (~7.5MB) buy megabytes for poor fidelity; those open externally. */
+export type PreviewMime =
+  | 'image/png'
+  | 'image/jpeg'
+  | 'image/gif'
+  | 'image/webp'
+  | 'image/bmp'
+  | 'image/avif'
+  | 'image/svg+xml'
+  | 'application/pdf'
+
+/** Sniff a file's preview mime from its leading bytes — magic, never the
+ *  extension (an attacker-controlled `.png` that is really HTML must not
+ *  become a content-type). Strict prefix lengths: a truncated signature is
+ *  null, not a guess. SVG is text: no NUL anywhere in the probe and,
+ *  after whitespace plus one optional XML prolog, a literal `<svg`. */
+export function sniffPreviewMime(bytes: Uint8Array): PreviewMime | null {
+  const ascii = (at: number, text: string): boolean => {
+    if (at + text.length > bytes.length) return false
+    for (let k = 0; k < text.length; k++) {
+      if (bytes[at + k] !== text.charCodeAt(k)) return false
+    }
+    return true
+  }
+  if (bytes.length >= 8
+    && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47
+    && bytes[4] === 0x0D && bytes[5] === 0x0A && bytes[6] === 0x1A && bytes[7] === 0x0A) {
+    return 'image/png'
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+    return 'image/jpeg'
+  }
+  if (bytes.length >= 6 && ascii(0, 'GIF87a') || bytes.length >= 6 && ascii(0, 'GIF89a')) {
+    return 'image/gif'
+  }
+  if (bytes.length >= 12 && ascii(0, 'RIFF') && ascii(8, 'WEBP')) {
+    return 'image/webp'
+  }
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4D) {
+    return 'image/bmp'
+  }
+  if (bytes.length >= 12 && ascii(4, 'ftyp') && ascii(8, 'avif')) {
+    return 'image/avif'
+  }
+  if (bytes.length >= 5 && ascii(0, '%PDF-')) {
+    return 'application/pdf'
+  }
+  // SVG is text: any NUL in the whole input disqualifies (binary magics
+  // already returned above, so only text reaches here).
+  for (let n = 0; n < bytes.length; n++) {
+    if (bytes[n] === 0) return null
+  }
+  // Byte-scan the probe (stays binary-safe — no string decoding).
+  let at = 0
+  while (at < bytes.length && (bytes[at] === 0x20 || bytes[at] === 0x09 || bytes[at] === 0x0A || bytes[at] === 0x0D)) at += 1
+  if (ascii(at, '<?xml')) {
+    while (at < bytes.length && bytes[at] !== 0x3E) at += 1
+    at += 1
+    while (at < bytes.length && (bytes[at] === 0x20 || bytes[at] === 0x09 || bytes[at] === 0x0A || bytes[at] === 0x0D)) at += 1
+  }
+  if (ascii(at, '<svg')) {
+    return 'image/svg+xml'
+  }
+  return null
+}

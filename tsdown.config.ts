@@ -33,6 +33,7 @@ const PLATFORM_MODULES = [
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-conversation',
   '@deepseek-ai/dsh-client-ui-settings',
+  '@deepseek-ai/dsh-client-ui-primitives',
 ] as const
 
 /** Externals resolved from the loader module table. */

@@ -2480,3 +2480,32 @@ body[data-dsh-bg-glass] .commitHeader {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* First-run guide bubble (J8-2): one dismissible card under the toolbar.
+   Real theme tokens only (no ad-hoc colors), so both themes read well. */
+.guideBubble {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 8%);
+}
+
+.guideTitle {
+  color: var(--dsw-alias-label-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.guideList {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12.5px;
+  line-height: 1.6;
+}

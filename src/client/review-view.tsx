@@ -314,6 +314,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [stashOpen, setStashOpen] = useState(false)
   const [stashIncludeUntracked, setStashIncludeUntracked] = useState(true)
   const [stashArmed, setStashArmed] = useState<number | null>(null)
+  // Tags (J8-1, inside the branch popover): create input + target picker +
+  // per-row delete (two-step arm) and push; same busy/result plumbing.
+  const [tagName, setTagName] = useState('')
+  const [tagTarget, setTagTarget] = useState('')
+  const [tagDeleteArmed, setTagDeleteArmed] = useState<string | null>(null)
+  // First-run guide bubble (J8-2): localStorage once-per-user; a toolbar
+  // "?" button reopens it after dismissal.
+  const [guideSeen, setGuideSeen] = useState(() => {
+    try { return window.localStorage.getItem('dsh-git-review.guideSeen') === '1' } catch { return true }
+  })
   // Commit-amend: checking the box pulls the tip's message as the prefill
   // (never overwriting text the user already typed).
   const [amend, setAmend] = useState(false)
@@ -975,6 +985,50 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     }
   }, [cwd, refresh, t])
 
+  /** Check out a remote branch as a local tracking branch (J8-5). */
+  const executeTrack = useCallback(async (remote: string) => {
+    if (cwd === undefined) return
+    setBranchBusy(true)
+    setBranchResult(null)
+    const payload = await hostCall<GitWritePayload>('branch-track', { cwd, remote, confirm: true })
+    setBranchBusy(false)
+    if (payload === null) {
+      setBranchResult({ ok: false, text: t('state.hostUnavailable') })
+      return
+    }
+    setBranchResult({ ok: payload.ok, text: payload.ok ? (payload.output ?? '') : (payload.error ?? 'unknown error') })
+    if (payload.ok) refresh()
+  }, [cwd, refresh, t])
+
+  /** One tag action (J8-1): create / delete / push a lightweight local tag. */
+  const executeTag = useCallback(async (action: 'create' | 'delete' | 'push', body: Record<string, unknown>) => {
+    if (cwd === undefined) return
+    setBranchBusy(true)
+    setBranchResult(null)
+    const payload = await hostCall<GitWritePayload>('tag-' + action, { cwd, confirm: true, ...body })
+    setBranchBusy(false)
+    if (payload === null) {
+      setBranchResult({ ok: false, text: t('state.hostUnavailable') })
+      return
+    }
+    setBranchResult({ ok: payload.ok, text: payload.ok ? (payload.output ?? '') : (payload.error ?? 'unknown error') })
+    if (payload.ok) {
+      setTagDeleteArmed(null)
+      if (action === 'create') { setTagName(''); setTagTarget('') }
+      refresh()
+    }
+  }, [cwd, refresh, t])
+
+  /** Dismiss the first-run guide bubble (J8-2): persist once-per-user. */
+  const dismissGuide = useCallback(() => {
+    try { window.localStorage.setItem('dsh-git-review.guideSeen', '1') } catch { /* private mode — bubble just hides */ }
+    setGuideSeen(true)
+  }, [])
+  const reopenGuide = useCallback(() => {
+    try { window.localStorage.removeItem('dsh-git-review.guideSeen') } catch { /* ignore */ }
+    setGuideSeen(false)
+  }, [])
+
   /** Run the file tree's context-menu action handlers. Every one returns an
    *  error string to show in the popover, or null on success (the menu
    *  closes and the tree refreshes). */
@@ -1157,7 +1211,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
             className={css.branchBtn}
             title={t('branch.manage')}
             ref={branchBtnRef}
-            onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setBranchResult(null); loadStashes() }}
+            onClick={() => { setBranchOpen(value => !value); setDeleteArmed(null); setRenameTarget(null); setTagDeleteArmed(null); setBranchResult(null); loadStashes() }}
           >
             <BranchIcon />
             <span>{data?.branch ?? 'HEAD'}</span>
@@ -1370,6 +1424,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           >
             <CommentIcon />
             {draftList.length > 0 && <span className={css.iconBtnBadge}>{draftList.length > 9 ? '9+' : String(draftList.length)}</span>}
+          </button>
+          <button
+            type="button"
+            className={css.iconBtn}
+            title={t('guide.reopen')}
+            aria-label={t('guide.reopen')}
+            onClick={reopenGuide}
+          >
+            <span aria-hidden="true">{'?'}</span>
           </button>
           <button
             type="button"
@@ -1612,11 +1675,89 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 <summary>{t('branch.remote')}</summary>
                 {(refs ?? []).filter(ref => ref.kind === 'remote').map(ref => (
                   <div key={ref.name} className={css.branchRow + ' ' + css.branchRowRemote}>
-                    <span className={css.branchNameBtn}>{ref.name}</span>
+                    <span className={css.branchNameBtn} title={ref.name}>{ref.name}</span>
+                    <button
+                      type="button"
+                      className={css.branchIconBtn}
+                      disabled={branchBusy || running}
+                      title={t('branch.trackHint')}
+                      onClick={() => { void executeTrack(ref.name) }}
+                    >
+                      {t('branch.track')}
+                    </button>
                   </div>
                 ))}
               </details>
             )}
+            <div className={css.branchGroupLabel}>{t('tag.title')}</div>
+            <div className={css.branchCreateRow}>
+              <input
+                className={css.branchNameInput}
+                value={tagName}
+                onChange={event => { setTagName(event.target.value) }}
+                onKeyDown={event => { if (event.key === 'Escape') setBranchOpen(false) }}
+                placeholder={t('tag.newName')}
+                spellCheck={false}
+              />
+              <RefPicker
+                value={tagTarget === '' ? null : tagTarget}
+                headLabel={data.branch ?? 'HEAD'}
+                refs={refs}
+                commits={pickerCommits}
+                placeholder={t('tag.fromTarget')}
+                onPick={value => { setTagTarget(value ?? '') }}
+                t={t}
+              />
+              <button
+                type="button"
+                className={css.commitBtn}
+                disabled={tagName.trim() === '' || branchBusy || running}
+                onClick={() => { void executeTag('create', { name: tagName.trim(), target: tagTarget === '' ? undefined : tagTarget }) }}
+              >
+                {t('tag.create')}
+              </button>
+            </div>
+            <div className={css.branchListScroll}>
+              {(refs ?? []).filter(ref => ref.kind === 'tag').length === 0
+                ? <div className={css.draftEmpty}>{t('tag.empty')}</div>
+                : (refs ?? []).filter(ref => ref.kind === 'tag').map(ref => (
+                  <div key={ref.name} className={css.branchRow}>
+                    <span className={css.branchNameBtn} title={ref.name}>{ref.name}</span>
+                    <button
+                      type="button"
+                      className={css.branchIconBtn}
+                      disabled={branchBusy || running}
+                      title={t('tag.push')}
+                      onClick={() => { void executeTag('push', { name: ref.name }) }}
+                    >
+                      {t('tag.push')}
+                    </button>
+                    {tagDeleteArmed === ref.name
+                      ? (
+                        <button
+                          type="button"
+                          className={css.branchIconBtn + ' ' + css.branchDanger}
+                          disabled={branchBusy || running}
+                          title={t('tag.confirmDelete')}
+                          onClick={() => { void executeTag('delete', { name: ref.name }) }}
+                        >
+                          {t('tag.confirmDelete')}
+                        </button>
+                        )
+                      : (
+                        <button
+                          type="button"
+                          className={css.branchIconBtn + ' ' + css.branchDanger}
+                          disabled={branchBusy || running}
+                          title={t('tag.delete')}
+                          onClick={() => { setTagDeleteArmed(ref.name) }}
+                        >
+                          {'\u2715'}
+                        </button>
+                        )}
+                  </div>
+                ))}
+            </div>
           </div>
           <div className={css.stashSection}>
             <button
@@ -1707,6 +1848,19 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         </div>
       )}
       </header>
+      {!guideSeen && (
+        <div className={css.guideBubble} role="status">
+          <div className={css.guideTitle}>{t('guide.title')}</div>
+          <ul className={css.guideList}>
+            <li>{t('guide.step1')}</li>
+            <li>{t('guide.step2')}</li>
+            <li>{t('guide.step3')}</li>
+          </ul>
+          <button type="button" className={css.commitBtn} onClick={dismissGuide}>
+            {t('guide.dismiss')}
+          </button>
+        </div>
+      )}
       {inProgress !== null && (
         <div className={css.conflictBar} data-git-review-conflict="">
           <span className={css.conflictText}>

@@ -33,6 +33,10 @@
  *   POST /dsh-git-review/api/branch-switch  { cwd, name, confirm: true }
  *   POST /dsh-git-review/api/branch-delete  { cwd, name, force?, confirm: true }
  *   POST /dsh-git-review/api/branch-rename  { cwd, name, newName, confirm: true }
+ *   POST /dsh-git-review/api/branch-track   { cwd, remote, local?, confirm: true }
+ *   POST /dsh-git-review/api/tag-create     { cwd, name, target?, confirm: true }
+ *   POST /dsh-git-review/api/tag-delete     { cwd, name, confirm: true }
+ *   POST /dsh-git-review/api/tag-push       { cwd, name, confirm: true }
  *   GET  /dsh-git-review/api/ping
  *
  * `status`/`file-diff` accept an optional `base` ref name (validated by
@@ -96,6 +100,11 @@ const GIT_TIMEOUT_MS = 30_000
 const GIT_MAX_BUFFER = 64 * 1024 * 1024
 /** Diff text cap: larger answers truncate at a line boundary (flagged). */
 const DIFF_CAP = 2 * 1024 * 1024
+/** Streaming byte cap (J9-2): spawn-collected git output is killed past this
+ *  size instead of buffered whole (execFile's 64MB maxBuffer is only the
+ *  backstop). Dock-git's streaming-cap precedent; 8MB covers ~40k commits of
+ *  log feed or a very large diff without risking host OOM. */
+const STREAM_CAP = 8 * 1024 * 1024
 /** Untracked pseudo-diff read cap (parity with dsh-diff-stat's READ_CAP). */
 const READ_CAP = 512 * 1024
 /** Worktree files hashed per status call for the reviewed markers. */
@@ -546,21 +555,32 @@ export async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknow
   // the staged/all/override ranges hit the empty-tree literal on an unborn HEAD.
   const usesRange = overrideCommit !== null || diffScope !== 'unstaged'
   const rangeArg = overrideCommit ?? headCommit
-  const attempt = (range: string): Promise<string> => runGit(repoRoot, [
-    'diff',
-    ...(overrideCommit === null && diffScope === 'staged' ? ['--cached'] : []),
-    '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context), ...wsFlags,
-    ...(usesRange ? [range] : []),
-    '--', ...pathspecs,
-  ])
+  // J9-2: a single file's diff is bounded by DIFF_CAP after the fact, but a
+  // pathological file could still fill execFile's buffer first — stream it.
+  const attempt = async (range: string): Promise<{ text: string; streamedCut: boolean }> => {
+    const streamed = await runGitStreamed(repoRoot, [
+      'diff',
+      ...(overrideCommit === null && diffScope === 'staged' ? ['--cached'] : []),
+      '--no-color', '-M', '--no-ext-diff', '--unified=' + String(context), ...wsFlags,
+      ...(usesRange ? [range] : []),
+      '--', ...pathspecs,
+    ])
+    if (streamed.code !== 0) throw new Error('git diff failed: ' + (streamed.stderr.trim() || streamed.stdout.trim()))
+    return { text: streamed.stdout, streamedCut: streamed.truncated }
+  }
   let diffText: string
+  let streamedCut = false
   try {
-    diffText = await attempt(rangeArg)
+    const first = await attempt(rangeArg)
+    diffText = first.text
+    streamedCut = first.streamedCut
   } catch (error) {
     if (!usesRange) throw error
     // A diff against the empty tree literal is the one sha256-incompatible
     // path; surface git's own words rather than a generic failure.
-    diffText = await attempt('HEAD')
+    const fallback = await attempt('HEAD')
+    diffText = fallback.text
+    streamedCut = fallback.streamedCut
   }
   if (diffText === '') {
     // A scoped fetch legitimately answers "nothing in this half" — the
@@ -581,7 +601,7 @@ export async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknow
     return { ok: true, binary: true, diff: '', truncated: false, size }
   }
   const capped = capDiff(diffText)
-  return { ok: true, binary: false, diff: capped.diff, truncated: capped.truncated }
+  return { ok: true, binary: false, diff: capped.diff, truncated: streamedCut || capped.truncated }
 }
 
 /** One `file-content` answer: fenced full-file read for the file view. The
@@ -634,9 +654,11 @@ export async function gitBlame(cwd: unknown, path: unknown): Promise<GitBlamePay
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
-  const raw = await runGit(repoRoot, ['blame', '--porcelain', '--', relPath])
-  const rows = parseBlamePorcelain(raw)
-  return { ok: true, lines: rows.slice(0, BLAME_LINE_CAP), truncated: rows.length > BLAME_LINE_CAP }
+  // J9-2: blame porcelain is metadata-heavy (one block per line); stream it.
+  const streamed = await runGitStreamed(repoRoot, ['blame', '--porcelain', '--', relPath])
+  if (streamed.code !== 0) throw new Error('git blame failed: ' + (streamed.stderr.trim() || streamed.stdout.trim()))
+  const rows = parseBlamePorcelain(streamed.stdout)
+  return { ok: true, lines: rows.slice(0, BLAME_LINE_CAP), truncated: streamed.truncated || rows.length > BLAME_LINE_CAP }
 }
 
 /** Commit cap for the per-file history popover. */
@@ -670,7 +692,7 @@ export async function gitFileHistory(cwd: unknown, path: unknown): Promise<GitFi
 const LIST_FILES_CAP = 20_000
 
 /** One `list-files` answer: tracked + untracked repository files, sorted, deduped. */
-async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
+export async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -695,7 +717,7 @@ const REFS_CAP = 500
 /** One `refs` answer: selectable diff-base refs (branches, remotes, tags).
  *  Remote HEAD aliases (a `/HEAD` suffix) are skipped: they are pointers,
  *  not review targets. */
-async function gitRefs(cwd: unknown): Promise<GitRefsPayload> {
+export async function gitRefs(cwd: unknown): Promise<GitRefsPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -734,7 +756,7 @@ const LOG_CAP = 500
  *  `limit` feeds the ref picker's commit section; an optional `skip` pages
  *  the graph feed forward ("load more", stable because --date-order is a
  *  total order — earlier rows never shift). */
-async function gitLog(cwd: unknown, limit: unknown, skip: unknown): Promise<GitLogPayload> {
+export async function gitLog(cwd: unknown, limit: unknown, skip: unknown): Promise<GitLogPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -745,28 +767,32 @@ async function gitLog(cwd: unknown, limit: unknown, skip: unknown): Promise<GitL
   const skipCount = typeof skip === 'number' && Number.isFinite(skip) && skip >= 1
     ? Math.min(Math.floor(skip), 100_000)
     : 0
-  try {
-    raw = await runGit(repoRoot, [
+  {
+    // J9-2: the log feed is the largest unbounded answer (500 commits × full
+    // subjects); stream it with a byte cap instead of buffering whole.
+    const streamed = await runGitStreamed(repoRoot, [
       'log', '--all', '--date-order',
       ...(skipCount > 0 ? ['--skip=' + String(skipCount)] : []),
       '--max-count=' + String(maxCount),
       '--format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1e',
     ])
-  } catch (error) {
-    // An unborn HEAD has no commits: an empty graph, not a failure.
-    if (/does not have any commits yet|bad revision/i.test(String((error as Error).message ?? error))) {
-      return { ok: true, commits: [], truncated: false }
+    if (streamed.code !== 0) {
+      // An unborn HEAD has no commits: an empty graph, not a failure.
+      if (/does not have any commits yet|bad revision/i.test(streamed.stderr + streamed.stdout)) {
+        return { ok: true, commits: [], truncated: false }
+      }
+      throw new Error('git log failed: ' + (streamed.stderr.trim() || streamed.stdout.trim()))
     }
-    throw error
+    raw = streamed.stdout
+    const commits = parseLogLines(raw)
+    return { ok: true, commits, truncated: streamed.truncated || commits.length >= maxCount }
   }
-  const commits = parseLogLines(raw)
-  return { ok: true, commits, truncated: commits.length >= maxCount }
 }
 
 /** One `commit-files` answer: a single commit's changed files, diffed
  *  against its first parent (a root commit against the empty tree) — the
  *  same first-parent convention GitHub's commit pages use. */
-async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<GitCommitFilesPayload> {
+export async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<GitCommitFilesPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -796,7 +822,7 @@ async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<GitCommitF
  *  worktree-vs-HEAD diff (or a ref-range diff when `target` is given) plus
  *  untracked file content (bounded, worktree mode only). The response sorts
  *  loudest-first so the tree's top hit is the most-changed file. */
-async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: unknown, mode: unknown, cs: unknown, rx: unknown): Promise<GitSearchPayload> {
+export async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: unknown, mode: unknown, cs: unknown, rx: unknown): Promise<GitSearchPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (typeof query !== 'string' || query.trim() === '') return { ok: true, matches: [], truncated: false }
   const needle = query.slice(0, 200)
@@ -854,20 +880,30 @@ async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: un
 
   let diffText: string
   let refsMode = false
+  let searchCut = false
+  // J9-2: the range-wide diff backing diff-mode search is unbounded —
+  // stream it with the shared byte cap; a cut feed still searches its
+  // prefix, flagged via `truncated`.
+  const streamDiff = async (args: readonly string[]): Promise<string> => {
+    const streamed = await runGitStreamed(repoRoot, args)
+    if (streamed.code !== 0) throw new Error('git diff failed: ' + (streamed.stderr.trim() || streamed.stdout.trim()))
+    if (streamed.truncated) searchCut = true
+    return streamed.stdout
+  }
   if (targetRef !== null) {
     const baseCommit = await resolveRangeRef(repoRoot, normalizeBaseRef(base) ?? 'HEAD')
     const targetCommit = await resolveRangeRef(repoRoot, targetRef)
     if (baseCommit === null || targetCommit === null) throw new Error('cannot resolve diff range refs')
-    diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', ...refRange(baseCommit, targetCommit)])
+    diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', ...refRange(baseCommit, targetCommit)])
     refsMode = true
   } else {
     const { base } = await diffBase(repoRoot)
     try {
-      diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', base])
+      diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', base])
     } catch {
       // The empty-tree literal is the one sha256-incompatible path; git's own
       // words surface if the retry fails too.
-      diffText = await runGit(repoRoot, ['diff', '--no-color', '-M', '--no-ext-diff', 'HEAD'])
+      diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', 'HEAD'])
     }
   }
   const counts = new Map<string, number>()
@@ -876,7 +912,7 @@ async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: un
     const count = countMatches(section.body, needle, options)
     if (count > 0) counts.set(section.path, count)
   }
-  if (refsMode) return { ok: true, matches: [...counts.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count), truncated: false }
+  if (refsMode) return { ok: true, matches: [...counts.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count), truncated: searchCut }
   // Untracked content never appears in `git diff` — scan bounded prefixes.
   let untracked: string[] = []
   try {
@@ -899,7 +935,7 @@ async function gitSearch(cwd: unknown, query: unknown, base: unknown, target: un
   const matches = [...counts.entries()]
     .map(([path, count]) => ({ path, count }))
     .sort((a, b) => b.count - a.count)
-  return { ok: true, matches, truncated }
+  return { ok: true, matches, truncated: searchCut || truncated }
 }
 
 /** Parse `git grep -c` output: one `path:count` line per matching file.
@@ -944,6 +980,54 @@ function runGitCapture(root: string, args: readonly string[], timeoutMs: number 
         ? 0
         : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : 1
       resolvePromise({ code, stdout: String(stdout), stderr: String(stderr) })
+    })
+  })
+}
+
+/**
+ * Streaming git run with a byte cap (J9-2): collects stdout/stderr via spawn
+ * and kills the child past STREAM_CAP instead of buffering the whole answer
+ * (execFile's maxBuffer backstop stays for the small-call path). Large-answer
+ * endpoints (log / full-range diff) use this so a pathological repository
+ * cannot OOM the host. Returns the truncation flag alongside the streams.
+ */
+function runGitStreamed(root: string, args: readonly string[], timeoutMs: number = GIT_TIMEOUT_MS, byteCap: number = STREAM_CAP): Promise<{ code: number; stdout: string; stderr: string; truncated: boolean }> {
+  return new Promise((resolvePromise) => {
+    const child = spawn('git', ['-C', root, '--no-optional-locks', '-c', 'core.quotepath=false', ...args], {
+      windowsHide: true,
+      env: gitEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const out: Buffer[] = []
+    const err: Buffer[] = []
+    let size = 0
+    let truncated = false
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) { truncated = true; try { child.kill() } catch { /* already gone */ } }
+    }, timeoutMs)
+    const onChunk = (chunk: Buffer): void => {
+      size += chunk.length
+      if (size > byteCap && !truncated) {
+        truncated = true
+        try { child.kill() } catch { /* already gone */ }
+        return
+      }
+      if (!truncated) out.push(chunk)
+    }
+    child.stdout?.on('data', onChunk)
+    child.stderr?.on('data', (chunk: Buffer) => { if (err.length < 32) err.push(chunk) })
+    child.once('error', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise({ code: 1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
+    })
+    child.once('close', (code: number | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise({ code: code ?? 1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
     })
   })
 }
@@ -1331,7 +1415,7 @@ function writeAnswer(result: { code: number; stdout: string; stderr: string }, v
 
 /** One `branch-create` answer: `git branch <name> [startPoint]`. The start
  *  point accepts any ref and is resolved to a commit id before the call. */
-async function gitBranchCreate(cwd: unknown, name: unknown, startPoint: unknown, confirm: unknown): Promise<GitWritePayload> {
+export async function gitBranchCreate(cwd: unknown, name: unknown, startPoint: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -1351,7 +1435,7 @@ async function gitBranchCreate(cwd: unknown, name: unknown, startPoint: unknown,
 
 /** One `branch-switch` answer: `git switch <name>` (branches only; a dirty
  *  worktree is git's own call to refuse, and its words surface verbatim). */
-async function gitBranchSwitch(cwd: unknown, name: unknown, confirm: unknown): Promise<GitWritePayload> {
+export async function gitBranchSwitch(cwd: unknown, name: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -1362,7 +1446,7 @@ async function gitBranchSwitch(cwd: unknown, name: unknown, confirm: unknown): P
 
 /** One `branch-delete` answer: `git branch -d <name>` (force=true upgrades
  *  to `-D` for not-yet-merged branches; the client arms it separately). */
-async function gitBranchDelete(cwd: unknown, name: unknown, force: unknown, confirm: unknown): Promise<GitWritePayload> {
+export async function gitBranchDelete(cwd: unknown, name: unknown, force: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -1372,7 +1456,7 @@ async function gitBranchDelete(cwd: unknown, name: unknown, force: unknown, conf
 }
 
 /** One `branch-rename` answer: `git branch -m <old> <new>`. */
-async function gitBranchRename(cwd: unknown, name: unknown, newName: unknown, confirm: unknown): Promise<GitWritePayload> {
+export async function gitBranchRename(cwd: unknown, name: unknown, newName: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -1383,13 +1467,89 @@ async function gitBranchRename(cwd: unknown, name: unknown, newName: unknown, co
   return writeAnswer(await runGitCapture(repoRoot, ['branch', '-m', guard.name, guardNew.name]), 'branch -m')
 }
 
+/** One `branch-track` answer (J8-5): check out a remote branch as a new local
+ *  tracking branch (`git switch -c <local> --track <remote>`). The local name
+ *  defaults to the remote's tail (origin/feat → feat); an explicit local name
+ *  goes through the same branch guard. A dirty worktree is git's own call to
+ *  refuse, and its words surface verbatim. */
+export async function gitBranchTrack(cwd: unknown, remote: unknown, local: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  if (confirm !== true) return { ok: false, error: 'branch actions require confirm: true' }
+  const remoteRef = normalizeBaseRef(remote)
+  if (remoteRef === null || !remoteRef.includes('/')) return { ok: false, error: 'invalid remote branch name' }
+  const remoteCommit = await resolveRangeRef(repoRoot, remoteRef)
+  if (remoteCommit === null || remoteCommit === EMPTY_TREE_ID) return { ok: false, error: 'cannot resolve remote branch: ' + remoteRef }
+  const fallback = remoteRef.slice(remoteRef.indexOf('/') + 1)
+  const localRaw = typeof local === 'string' && local.trim() !== '' ? local : fallback
+  const guard = await branchGuard(repoRoot, confirm, localRaw)
+  if (!guard.ok) return guard
+  return writeAnswer(await runGitCapture(repoRoot, ['switch', '-c', guard.name, '--track', remoteRef]), 'switch --track')
+}
+
+/** Guard shared by the tag endpoints: confirm flag + normalizeBaseRef
+ *  pre-filter, then git's own rule checker on the full `refs/tags/` ref has
+ *  the final say (tags allow dots/slashes branches forbid only via the same
+ *  rule set; `--branch` would wrongly reject `v1.0.0`). */
+async function tagGuard(repoRoot: string, confirm: unknown, rawName: unknown): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  if (confirm !== true) return { ok: false, error: 'tag actions require confirm: true' }
+  const name = normalizeBaseRef(rawName)
+  if (name === null) return { ok: false, error: 'invalid tag name' }
+  const check = await runGitCapture(repoRoot, ['check-ref-format', 'refs/tags/' + name])
+  if (check.code !== 0) {
+    return { ok: false, error: check.stderr.trim() || check.stdout.trim() || 'invalid tag name: ' + name }
+  }
+  return { ok: true, name }
+}
+
+/** One `tag-create` answer (J8-1): lightweight `git tag <name> [<target>]`.
+ *  The target accepts any ref and resolves to a commit id first (default
+ *  HEAD); re-tagging an existing name is git's own call to refuse. */
+export async function gitTagCreate(cwd: unknown, name: unknown, target: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const guard = await tagGuard(repoRoot, confirm, name)
+  if (!guard.ok) return guard
+  let targetCommit: string | undefined
+  if (typeof target === 'string' && target.trim() !== '') {
+    const ref = normalizeBaseRef(target)
+    const commit = ref === null ? null : await resolveRangeRef(repoRoot, ref)
+    if (commit === null || commit === EMPTY_TREE_ID) return { ok: false, error: 'cannot resolve tag target: ' + (ref ?? '(invalid)') }
+    targetCommit = commit
+  }
+  return writeAnswer(await runGitCapture(repoRoot, ['tag', guard.name, ...(targetCommit !== undefined ? [targetCommit] : [])]), 'tag')
+}
+
+/** One `tag-delete` answer (J8-1): `git tag -d <name>` (local only). */
+export async function gitTagDelete(cwd: unknown, name: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const guard = await tagGuard(repoRoot, confirm, name)
+  if (!guard.ok) return guard
+  return writeAnswer(await runGitCapture(repoRoot, ['tag', '-d', guard.name]), 'tag -d')
+}
+
+/** One `tag-push` answer (J8-1): push one tag to its origin (`git push
+ *  origin refs/tags/<name>`), a network operation like push. */
+export async function gitTagPush(cwd: unknown, name: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const guard = await tagGuard(repoRoot, confirm, name)
+  if (!guard.ok) return guard
+  return writeAnswer(await runGitCapture(repoRoot, ['push', 'origin', 'refs/tags/' + guard.name], PUSH_TIMEOUT_MS), 'push tag')
+}
+
 /* ─ file-tree context-menu operations ──────────────────────────── */
 
 /** One workspace file operation the tree's context menu can run. Only
  *  regular files inside the repository are touched; every path goes through
  *  the same fence the read endpoints use. Rename/delete are guarded by the
  *  explicit confirm flag (the client's two-step UI sets it). */
-async function gitFileOp(cwd: unknown, path: unknown, action: unknown, newPath: unknown, confirm: unknown): Promise<GitWritePayload> {
+export async function gitFileOp(cwd: unknown, path: unknown, action: unknown, newPath: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (confirm !== true) return { ok: false, error: 'file operations require confirm: true' }
   const repoRoot = await resolveRepository(cwd)
@@ -1674,6 +1834,22 @@ export function apply(ctx: Context): void {
         }
         if (action === 'branch-rename') {
           respond(res, 200, await gitBranchRename(body['cwd'], body['name'], body['newName'], body['confirm']))
+          return
+        }
+        if (action === 'branch-track') {
+          respond(res, 200, await gitBranchTrack(body['cwd'], body['remote'], body['local'], body['confirm']))
+          return
+        }
+        if (action === 'tag-create') {
+          respond(res, 200, await gitTagCreate(body['cwd'], body['name'], body['target'], body['confirm']))
+          return
+        }
+        if (action === 'tag-delete') {
+          respond(res, 200, await gitTagDelete(body['cwd'], body['name'], body['confirm']))
+          return
+        }
+        if (action === 'tag-push') {
+          respond(res, 200, await gitTagPush(body['cwd'], body['name'], body['confirm']))
           return
         }
         if (action === 'blame') {

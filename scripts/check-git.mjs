@@ -1,14 +1,17 @@
-// J1 host-endpoint integration checks against REAL git repositories
-// (tempdir fixtures, the dsh-git-status test pattern). Covers the new write
+// J1–J9 host-endpoint integration checks against REAL git repositories
+// (tempdir fixtures, the dsh-git-status test pattern). Covers the write
 // surface — stage/unstage/discard, stash, amend, last-commit, fetch, the
-// status ahead/behind counts — plus the GIT_DIR env sanitization. Requires
-// Node >= 23.6 (native TS stripping) and git on PATH.
+// status ahead/behind counts, history ops, conflict flow, hunk ops, blame /
+// history / content, plus J8 tags + remote tracking, J3 log paging, J9 search
+// modes, file-op rename/delete — plus the GIT_DIR env sanitization and the
+// J9-2 streaming caps. Requires Node >= 23.6 (native TS stripping) and git
+// on PATH.
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
-import { gitBlame, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileDiff, gitFileHistory, gitFileContent, gitHunkOp, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
+import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitHunkOp, gitLastCommit, gitLog, gitMerge, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -325,6 +328,127 @@ assert.ok(patch0 !== null && patch1 !== null)
   let rejected = false
   try { await gitFileContent(repo, 'hunk.txt', '../escape') } catch { rejected = true }
   assert.equal(rejected, true)
+}
+
+// 11. refs + log paging (J3/J8): branches, remotes, tags all listed; log
+//     skip pages forward without shifting (N+1 pagination contract).
+{
+  sh(repo, 'tag', 'v-test-1')
+  const refs = await gitRefs(repo)
+  assert.equal(refs.ok, true)
+  assert.ok(refs.refs.some(r => r.kind === 'branch' && r.name === 'main'))
+  assert.ok(refs.refs.some(r => r.kind === 'tag' && r.name === 'v-test-1'))
+  const page0 = await gitLog(repo, 3, 0)
+  assert.equal(page0.ok, true)
+  assert.ok(page0.commits.length >= 1)
+  const page1 = await gitLog(repo, 3, 2)
+  assert.equal(page1.ok, true)
+  if (page0.commits.length >= 3 && page1.commits.length > 0) {
+    assert.ok(!page1.commits.some(c => c.hash === page0.commits[0].hash), 'skip pages forward')
+  }
+  // streaming cap surfaces as a boolean, never a crash
+  assert.equal(typeof page0.truncated, 'boolean')
+}
+
+// 12. search modes (J9-1): diff text, file content, case/regex toggles.
+{
+  writeFileSync(join(repo, 'searchable.txt'), 'alpha needle beta\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'searchable')
+  writeFileSync(join(repo, 'searchable.txt'), 'alpha needle beta\nsecond NEEDLE\n')
+  const diffHit = await gitSearch(repo, 'needle', null, null, 'diff', false, false)
+  assert.equal(diffHit.ok, true)
+  assert.ok(diffHit.matches.some(m => m.path === 'searchable.txt'), 'diff mode hits worktree drift')
+  const csHit = await gitSearch(repo, 'NEEDLE', null, null, 'content', true, false)
+  assert.equal(csHit.ok, true)
+  assert.ok(csHit.matches.some(m => m.path === 'searchable.txt'))
+  const rxHit = await gitSearch(repo, 'ne+dle', null, null, 'diff', false, true)
+  assert.ok(rxHit.matches.some(m => m.path === 'searchable.txt'), 'regex mode matches')
+  const rxBad = await gitSearch(repo, '([', null, null, 'diff', false, true)
+  assert.equal(rxBad.ok, true)
+  assert.equal(rxBad.matches.length, 0, 'invalid regex counts as 0')
+  sh(repo, 'checkout', '--', 'searchable.txt')
+}
+
+// 13. file-op rename/delete (J9-1): fenced, target-exists guarded.
+{
+  writeFileSync(join(repo, 'op-a.txt'), 'op\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'op file')
+  const renamed = await gitFileOp(repo, 'op-a.txt', 'rename', 'op-b.txt', true)
+  assert.equal(renamed.ok, true)
+  assert.equal(existsSync(join(repo, 'op-b.txt')), true)
+  const clash = await gitFileOp(repo, 'op-b.txt', 'rename', 'a.txt', true)
+  assert.equal(clash.ok, false, 'rename onto an existing file refuses')
+  const escape = await gitFileOp(repo, 'op-b.txt', 'rename', '../escape.txt', true).catch(e => ({ ok: false, error: String(e?.message ?? e) }))
+  assert.equal(escape.ok, false, 'path escape refuses')
+  const deleted = await gitFileOp(repo, 'op-b.txt', 'delete', undefined, true)
+  assert.equal(deleted.ok, true)
+  assert.equal(existsSync(join(repo, 'op-b.txt')), false)
+}
+
+// 14. branch lifecycle + remote tracking (J8-5): create/switch/rename/delete
+//     plus switch -c --track from a file:// remote branch.
+{
+  const created = await gitBranchCreate(repo, 'j9-branch', undefined, true)
+  assert.equal(created.ok, true)
+  const switched = await gitBranchSwitch(repo, 'j9-branch', true)
+  assert.equal(switched.ok, true)
+  assert.match(sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD').trim(), /^j9-branch$/)
+  const renamedB = await gitBranchRename(repo, 'j9-branch', 'j9-renamed', true)
+  assert.equal(renamedB.ok, true)
+  assert.match(sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD').trim(), /^j9-renamed$/)
+  sh(repo, 'checkout', 'main')
+  const dropped = await gitBranchDelete(repo, 'j9-renamed', false, true)
+  assert.equal(dropped.ok, true)
+  const badName = await gitBranchCreate(repo, '../escape', undefined, true)
+  assert.equal(badName.ok, false, 'branch injection refuses')
+  // remote tracking: publish main to the file:// origin, fetch a new remote
+  // branch there, then track it locally.
+  sh(repo, 'push', 'origin', 'main')
+  sh(repo, 'checkout', '-b', 'upstream-feat')
+  writeFileSync(join(repo, 'up.txt'), 'up\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'upstream feat')
+  sh(repo, 'push', '-u', 'origin', 'upstream-feat')
+  sh(repo, 'checkout', 'main')
+  sh(repo, 'branch', '-D', 'upstream-feat')
+  const fetched = await gitFetch(repo, true)
+  assert.equal(fetched.ok, true)
+  const tracked = await gitBranchTrack(repo, 'origin/upstream-feat', undefined, true)
+  assert.equal(tracked.ok, true)
+  assert.match(sh(repo, 'rev-parse', '--abbrev-ref', 'HEAD').trim(), /^upstream-feat$/)
+  assert.match(sh(repo, 'config', '--get', 'branch.upstream-feat.remote').trim(), /^origin$/)
+  sh(repo, 'checkout', 'main')
+  sh(repo, 'branch', '-D', 'upstream-feat')
+}
+
+// 15. tags (J8-1): create at HEAD/target, re-tag refuses, delete removes,
+//     invalid names refuse before git runs.
+{
+  const tip = sh(repo, 'rev-parse', 'HEAD').trim()
+  const made = await gitTagCreate(repo, 'j9-tag', undefined, true)
+  assert.equal(made.ok, true)
+  assert.equal(sh(repo, 'rev-list', '-n', '1', 'j9-tag').trim(), tip)
+  const retag = await gitTagCreate(repo, 'j9-tag', undefined, true)
+  assert.equal(retag.ok, false, 'existing tag refuses')
+  const parentHash = sh(repo, 'rev-parse', 'HEAD~1').trim()
+  const atTarget = await gitTagCreate(repo, 'j9-tag-2', parentHash, true)
+  assert.equal(atTarget.ok, true)
+  assert.equal(sh(repo, 'rev-list', '-n', '1', 'j9-tag-2').trim(), parentHash)
+  const badTag = await gitTagCreate(repo, '../escape', undefined, true)
+  assert.equal(badTag.ok, false, 'tag injection refuses')
+  const unconfirmed = await gitTagDelete(repo, 'j9-tag', false)
+  assert.equal(unconfirmed.ok, false)
+  const droppedTag = await gitTagDelete(repo, 'j9-tag', true)
+  assert.equal(droppedTag.ok, true)
+  await gitTagDelete(repo, 'j9-tag-2', true)
+  await gitTagDelete(repo, 'v-test-1', true)
+  // tag push targets origin; in the fixture the push succeeds (file://).
+  await gitTagCreate(repo, 'j9-push-tag', undefined, true)
+  const pushed = await gitTagPush(repo, 'j9-push-tag', true)
+  assert.equal(pushed.ok, true)
+  await gitTagDelete(repo, 'j9-push-tag', true)
 }
 
 for (const root of roots) rmSync(root, { recursive: true, force: true })

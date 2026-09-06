@@ -25,6 +25,20 @@ A **Review tab plus fenced git workbench** for DeepSeek Harness: everything an a
   <img src="docs/demo.svg" alt="DSH Git Review demo" width="720">
 </p>
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/review-changes.png" alt="Changes view: syntax-highlighted file with the filterable tree" width="720">
+  <br>
+  <em>Changes view — syntax-highlighted file with the filterable tree</em>
+</p>
+
+<p align="center">
+  <img src="docs/review-graph.png" alt="Graph view: commit detail with side-by-side diff and word highlights" width="720">
+  <br>
+  <em>Graph view — commit detail with side-by-side diff and word highlights</em>
+</p>
+
 ## What it does
 
 DSH Git Review registers a **Review** tab next to Chat and Trajectory in the session view. It shows the workspace repository against HEAD — or any two refs — and lets you act on what you see without leaving the tab:

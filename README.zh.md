@@ -25,6 +25,20 @@ DeepSeek Harness 的**审查标签页 + 围栏 Git 工作台**：把 agent 改�
   <img src="docs/demo-zh.svg" alt="DSH Git Review 演示" width="720">
 </p>
 
+## 界面预览
+
+<p align="center">
+  <img src="docs/review-changes.png" alt="变更视图：语法高亮文件与可过滤文件树" width="720">
+  <br>
+  <em>变更视图——语法高亮文件与可过滤文件树</em>
+</p>
+
+<p align="center">
+  <img src="docs/review-graph.png" alt="图谱视图：提交详情与双列差异加词级高亮" width="720">
+  <br>
+  <em>图谱视图——提交详情与双列差异加词级高亮</em>
+</p>
+
 ## 它能做什么
 
 DSH Git Review 在会话视图里对话与轨迹旁边注册一个**审查**标签页。展示工作区仓库相对 HEAD（或任意两 ref）的状态，看完直接动手，不用切走：

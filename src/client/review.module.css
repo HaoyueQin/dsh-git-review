@@ -39,6 +39,17 @@
   --dsw-alias-border-primary: var(--dsw-alias-border-l3);
   --dsw-alias-fill-hover: var(--dsw-alias-interactive-bg-hover);
   --dsw-alias-fill-active: var(--dsw-alias-interactive-bg-active);
+
+  /* Floating-composer clearance (the screenshot bug: tab content scrolled
+   * under the floating input card + task strip, neither visible nor
+   * clickable). ConversationRoot publishes the seat's LIVE height as
+   * --dsh-composer-height on the scroll body (ConversationRoot.tsx:170);
+   * ui-trajectory consumes it the same way (views.module.css:27) and
+   * ui-chat too (ChatView.module.css:194) — seat height + 16px breathing
+   * room. The old hardcoded 140px could never track the task strip
+   * appearing/disappearing; the 140px stays only as the fallback where no
+   * shell publishes the variable. */
+  --dsh-review-bottom-clearance: calc(var(--dsh-composer-height, 152px) + 16px);
 }
 
 .centered {
@@ -885,7 +896,8 @@ body[data-dsh-bg-glass] .root {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 4px 0 140px;
+  padding: 4px 0 var(--dsh-review-bottom-clearance, 140px);
+  scroll-padding-bottom: var(--dsh-review-bottom-clearance, 140px);
 }
 
 .treeEmpty {
@@ -1105,6 +1117,7 @@ body[data-dsh-bg-glass] .root {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  scroll-padding-bottom: var(--dsh-review-bottom-clearance, 140px);
   font-family: var(--ds-font-family-code, ui-monospace, monospace);
   font-size: 12px;
   line-height: 1.55;
@@ -1920,7 +1933,7 @@ body[data-dsh-bg-glass] .root {
 }
 
 .diffBottomReserve {
-  height: 140px;
+  height: var(--dsh-review-bottom-clearance, 140px);
 }
 
 /* ── shared notices / empty states ───────────────────────────────────── */
@@ -1944,6 +1957,8 @@ body[data-dsh-bg-glass] .root {
   min-height: 0;
   border-right: 1px solid var(--dsw-alias-border-secondary);
   overflow: auto;
+  padding-bottom: var(--dsh-review-bottom-clearance, 140px);
+  scroll-padding-bottom: var(--dsh-review-bottom-clearance, 140px);
 }
 
 /* Folded rail: the topology column plus each commit's subject + short
@@ -2079,7 +2094,9 @@ body[data-dsh-bg-glass] .root {
 }
 
 .commitList {
-  padding: 0 0 140px;
+  /* No bottom reserve of its own: the parent .graphList scroller carries the
+   * floating-composer clearance — padding on both would stack it twice. */
+  padding: 0;
   --graph-w: 48px;
 }
 

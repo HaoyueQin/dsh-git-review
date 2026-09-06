@@ -9,6 +9,16 @@
 
 <p align="center">English | <a href="README.zh.md">中文文档</a></p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/v/dsh-git-review?style=flat-square" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/dt/dsh-git-review?style=flat-square" alt="npm downloads"></a>
+  <img src="https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="dsh plugin">
+  <img src="https://img.shields.io/badge/dsh-%E2%89%A50.1.2-rc.1-4D6BFE?style=flat-square" alt="harness >=0.1.2-rc.1">
+  <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT">
+  <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">
+</p>
+
 A **Review tab plus fenced git workbench** for DeepSeek Harness: everything an agent changed, laid out for a decision — file tree, diffs, commit graph — with guarded git operations in the same place.
 
 <p align="center">
@@ -34,6 +44,13 @@ pnpm install
 pnpm build
 pnpm pack
 dsh plugin --profile web add ./dsh-git-review-0.1.0.tgz
+dsh web
+```
+
+Or from npm, once published:
+
+```bash
+dsh plugin --profile web add dsh-git-review
 dsh web
 ```
 

@@ -9,6 +9,16 @@
 
 <p align="center"><a href="README.md">English</a> | 中文</p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/v/dsh-git-review?style=flat-square" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/dt/dsh-git-review?style=flat-square" alt="npm downloads"></a>
+  <img src="https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="dsh plugin">
+  <img src="https://img.shields.io/badge/dsh-%E2%89%A50.1.2-rc.1-4D6BFE?style=flat-square" alt="harness >=0.1.2-rc.1">
+  <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT">
+  <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">
+</p>
+
 DeepSeek Harness 的**审查标签页 + 围栏 Git 工作台**：把 agent 改了什么摆在一页里做决定——文件树、差异、提交图谱，设防的 Git 操作同处一页。
 
 <p align="center">
@@ -34,6 +44,13 @@ pnpm install
 pnpm build
 pnpm pack
 dsh plugin --profile web add ./dsh-git-review-0.1.0.tgz
+dsh web
+```
+
+或从 npm 安装（首次发布后可用）：
+
+```bash
+dsh plugin --profile web add dsh-git-review
 dsh web
 ```
 

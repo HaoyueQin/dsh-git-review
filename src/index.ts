@@ -19,6 +19,11 @@
  *   POST /dsh-git-review/api/discard      { cwd, paths[], confirm: true }   (irreversible)
  *   POST /dsh-git-review/api/fetch        { cwd, confirm: true }
  *   POST /dsh-git-review/api/stash        { cwd, action, index?, includeUntracked?, confirm: true }
+ *   POST /dsh-git-review/api/reset        { cwd, commit, mode?, confirm: true }   (mode soft|mixed|hard)
+ *   POST /dsh-git-review/api/revert       { cwd, commit, confirm: true }
+ *   POST /dsh-git-review/api/cherry-pick  { cwd, commit, confirm: true }
+ *   POST /dsh-git-review/api/merge        { cwd, name, noFf?, confirm: true }
+ *   POST /dsh-git-review/api/pull         { cwd, rebase?, confirm: true }
  *   POST /dsh-git-review/api/branch-create  { cwd, name, startPoint?, confirm: true }
  *   POST /dsh-git-review/api/branch-switch  { cwd, name, confirm: true }
  *   POST /dsh-git-review/api/branch-delete  { cwd, name, force?, confirm: true }
@@ -113,6 +118,9 @@ export function gitEnv(): NodeJS.ProcessEnv {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !GIT_ENV_KEYS.includes(key as (typeof GIT_ENV_KEYS)[number])) env[key] = value
   }
+  // History operations (merge/revert/cherry-pick) can spawn an editor for
+  // messages even with --no-edit on older gits; pin it non-interactive.
+  env['GIT_EDITOR'] = 'true'
   return env
 }
 
@@ -1014,6 +1022,71 @@ async function gitPush(cwd: unknown, confirm: unknown): Promise<GitWritePayload>
   return { ok: true, output: result.stdout.trim() }
 }
 
+/** The commit target of a history operation: a bare 40-hex id (the graph
+ *  rows and detail bar carry full hashes; nothing else is accepted). */
+function historyTarget(raw: unknown): string {
+  const hash = typeof raw === 'string' ? raw.trim() : ''
+  if (!HASH_ONLY_RE.test(hash)) throw new Error('commit id required (40-hex)')
+  return hash
+}
+
+/** One `reset` answer: move the current branch to `commit`. 'soft' keeps
+ *  index+worktree, 'mixed' (the default) keeps the worktree only, 'hard'
+ *  destroys both — the client arms hard with an extra red confirmation. */
+export async function gitReset(cwd: unknown, commit: unknown, mode: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'reset requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const hash = historyTarget(commit)
+  const flag = mode === 'soft' ? '--soft' : mode === 'hard' ? '--hard' : '--mixed'
+  return writeAnswer(await runGitCapture(repoRoot, ['reset', flag, hash]), 'reset --' + (flag.slice(2)))
+}
+
+/** One `revert` answer: a new inverse commit on top (`git revert --no-edit`). */
+export async function gitRevert(cwd: unknown, commit: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'revert requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const hash = historyTarget(commit)
+  return writeAnswer(await runGitCapture(repoRoot, ['revert', '--no-edit', hash]), 'revert')
+}
+
+/** One `cherry-pick` answer: apply `commit` onto the current branch. */
+export async function gitCherryPick(cwd: unknown, commit: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'cherry-pick requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const hash = historyTarget(commit)
+  return writeAnswer(await runGitCapture(repoRoot, ['cherry-pick', hash]), 'cherry-pick')
+}
+
+/** One `merge` answer: merge `name` (a branch) into the current branch;
+ *  noFf forces a merge commit even when a fast-forward would do. */
+export async function gitMerge(cwd: unknown, name: unknown, noFf: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'merge requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const ref = normalizeBaseRef(name)
+  if (ref === null) return { ok: false, error: 'invalid branch name' }
+  const commit = await resolveRangeRef(repoRoot, ref)
+  if (commit === null) return { ok: false, error: 'cannot resolve branch: ' + ref }
+  return writeAnswer(await runGitCapture(repoRoot, ['merge', '--no-edit', ...(noFf === true ? ['--no-ff'] : []), commit]), 'merge')
+}
+
+/** One `pull` answer: fetch + integrate the upstream (--rebase on request,
+ *  --no-rebase otherwise so the config cannot surprise us). */
+export async function gitPull(cwd: unknown, rebase: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'pull requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  return writeAnswer(await runGitCapture(repoRoot, ['pull', rebase === true ? '--rebase' : '--no-rebase', '--no-edit'], PUSH_TIMEOUT_MS), 'pull')
+}
+
 /** Guard shared by the branch endpoints: confirm flag + normalizeBaseRef
  *  pre-filter, then git's own rule checker (`check-ref-format --branch`)
  *  has the final say on the name's validity. */
@@ -1317,6 +1390,26 @@ export function apply(ctx: Context): void {
         }
         if (action === 'last-commit') {
           respond(res, 200, await gitLastCommit(body['cwd']))
+          return
+        }
+        if (action === 'reset') {
+          respond(res, 200, await gitReset(body['cwd'], body['commit'], body['mode'], body['confirm']))
+          return
+        }
+        if (action === 'revert') {
+          respond(res, 200, await gitRevert(body['cwd'], body['commit'], body['confirm']))
+          return
+        }
+        if (action === 'cherry-pick') {
+          respond(res, 200, await gitCherryPick(body['cwd'], body['commit'], body['confirm']))
+          return
+        }
+        if (action === 'merge') {
+          respond(res, 200, await gitMerge(body['cwd'], body['name'], body['noFf'], body['confirm']))
+          return
+        }
+        if (action === 'pull') {
+          respond(res, 200, await gitPull(body['cwd'], body['rebase'], body['confirm']))
           return
         }
         if (action === 'branch-create') {

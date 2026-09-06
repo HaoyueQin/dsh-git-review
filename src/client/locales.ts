@@ -229,6 +229,18 @@ export const zh = {
   'viewed.marked': '已审（文件再次变更时会自动取消）',
   'tree.pending': '{count} 个文件待审',
   'aheadBehind.title': '领先上游 {ahead} 个提交、落后 {behind} 个',
+  'history.reset': '重置到此提交…',
+  'history.resetTitle': '把当前分支重置到此提交',
+  'history.resetSoft': '软重置（soft）',
+  'history.resetSoftHint': '保留暂存与工作区',
+  'history.resetMixed': '混合重置（mixed）',
+  'history.resetMixedHint': '保留工作区，取消暂存',
+  'history.resetHard': '强制重置（hard）',
+  'history.resetHardHint': '丢弃全部改动；此后新增的文件保留为未跟踪',
+  'history.revert': '还原此提交（生成反向提交）',
+  'history.cherryPick': '择取到当前分支',
+  'branch.merge': '合并到当前分支',
+  'branch.pull': '拉取并合并',
 }
 
 /** English dictionary (same key set). */
@@ -457,6 +469,18 @@ export const en: Record<ReviewKey, string> = {
   'viewed.marked': 'Reviewed (auto-cleared when the file changes again)',
   'tree.pending': '{count} files pending review',
   'aheadBehind.title': '{ahead} ahead of / {behind} behind the upstream',
+  'history.reset': 'Reset to this commit…',
+  'history.resetTitle': 'Reset the current branch onto this commit',
+  'history.resetSoft': 'Soft reset',
+  'history.resetSoftHint': 'keeps index and worktree',
+  'history.resetMixed': 'Mixed reset',
+  'history.resetMixedHint': 'keeps the worktree, unstages',
+  'history.resetHard': 'Hard reset',
+  'history.resetHardHint': 'discards all changes; files new to this commit stay untracked',
+  'history.revert': 'Revert (new inverse commit)',
+  'history.cherryPick': 'Cherry-pick onto this branch',
+  'branch.merge': 'Merge into current branch',
+  'branch.pull': 'Pull & merge',
 }
 
 /** Union of this namespace's dictionary keys. */

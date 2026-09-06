@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { gitCommit, gitDiscard, gitEnv, gitFetch, gitLastCommit, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
+import { gitCherryPick, gitCommit, gitDiscard, gitEnv, gitFetch, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -115,7 +115,7 @@ writeFileSync(join(repo, 'a.txt'), 'one\ntwo\nthree\n')
   const before = sh(repo, 'rev-list', '--count', 'HEAD')
   const amended = await gitCommit(repo, 'add lines (amended)', 'all', true, true)
   assert.equal(amended.ok, true)
-  assert.equal(sh(repo, 'rev-list', '--count', 'HEAD'), before, 'amend must not add a commit')
+  assert.equal(sh(repo, 'rev-list', '--count', 'HEAD').trim(), before.trim(), 'amend must not add a commit')
   const last = await gitLastCommit(repo)
   assert.equal(last.ok, true)
   assert.equal(last.message, 'add lines (amended)')
@@ -137,6 +137,67 @@ writeFileSync(join(repo, 'a.txt'), 'one\ntwo\nthree\n')
   // 6. fetch sees the remote (no new commits — fetch succeeds silently).
   const fetched = await gitFetch(repo, true)
   assert.equal(fetched.ok, true)
+}
+
+// 7. history operations: reset (soft/mixed/hard), revert, cherry-pick,
+//    merge (no-ff) and pull — against a scratch branch layout.
+writeFileSync(join(repo, 'd.txt'), 'feature\n')
+sh(repo, 'add', '-A')
+sh(repo, 'commit', '-m', 'feature work')
+const featureHash = sh(repo, 'rev-parse', 'HEAD').trim()
+sh(repo, 'checkout', '-b', 'side')
+writeFileSync(join(repo, 'e.txt'), 'side\n')
+sh(repo, 'add', '-A')
+sh(repo, 'commit', '-m', 'side work')
+const sideHash = sh(repo, 'rev-parse', 'HEAD').trim()
+sh(repo, 'checkout', 'main')
+
+// 7a. revert: a NEW commit lands on top; the file's change is undone.
+{
+  const reverted = await gitRevert(repo, featureHash, true)
+  assert.equal(reverted.ok, true)
+  assert.equal(sh(repo, 'rev-list', '--count', 'HEAD').trim(), '5', 'revert adds one commit')
+  assert.equal(existsSync(join(repo, 'd.txt')), false, 'revert undid the file')
+}
+// 7b. cherry-pick: apply the side commit onto main.
+{
+  const picked = await gitCherryPick(repo, sideHash, true)
+  assert.equal(picked.ok, true)
+  assert.equal(existsSync(join(repo, 'e.txt')), true)
+  assert.equal(sh(repo, 'rev-list', '--count', 'HEAD').trim(), '6')
+}
+// 7c. reset soft/mixed/hard from the feature hash (backward on main):
+//     soft keeps the index, mixed keeps only the worktree, hard destroys.
+{
+  const soft = await gitReset(repo, featureHash, 'soft', true)
+  assert.equal(soft.ok, true)
+  assert.equal(sh(repo, 'rev-list', '--count', 'HEAD').trim(), '4', 'back at feature work')
+  assert.notEqual(sh(repo, 'status', '--porcelain').trim(), '', 'soft keeps the index')
+  const mixed = await gitReset(repo, featureHash, 'mixed', true)
+  assert.equal(mixed.ok, true)
+  assert.notEqual(sh(repo, 'status', '--porcelain').trim(), '', 'mixed keeps the worktree')
+  const hard = await gitReset(repo, featureHash, 'hard', true)
+  assert.equal(hard.ok, true)
+  // reset --hard never deletes files the target commit does not have:
+  // the cherry-picked e.txt stays behind as an untracked leftover.
+  assert.equal(sh(repo, 'status', '--porcelain').trim(), '?? e.txt', 'hard leaves target-absent files untracked')
+  assert.equal(existsSync(join(repo, 'e.txt')), true)
+  sh(repo, 'clean', '-f')
+}
+// 7d. merge --no-ff of the side branch (a merge commit appears).
+{
+  const merged = await gitMerge(repo, 'side', true, true)
+  assert.equal(merged.ok, true)
+  assert.equal(sh(repo, 'rev-list', '--count', '--merges', 'HEAD').trim(), '1', 'no-ff produced a merge commit')
+}
+// 7e. pull: the remote is behind, so pull is a no-op success; a rejected
+//     confirm must be refused before any git runs.
+{
+  const pulled = await gitPull(repo, false, true)
+  assert.equal(pulled.ok, true)
+  const refused = await gitPull(repo, false, false)
+  assert.equal(refused.ok, false)
+  assert.match(refused.error, /confirm/)
 }
 
 for (const root of roots) rmSync(root, { recursive: true, force: true })

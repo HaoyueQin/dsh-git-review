@@ -104,6 +104,8 @@ export interface CommitGraphProps {
   worktree?: { files: number } | null
   worktreeSelected?: boolean
   onSelectWorktree?: () => void
+  /** Right-click a commit row: the history-operations menu anchor. */
+  onCommitMenu?: (hash: string, subject: string, x: number, y: number) => void
   t: T
 }
 
@@ -140,7 +142,7 @@ function WorktreeRow({ width, label, selected, onSelect }: { width: number; labe
  *  via the shared --graph-w variable (the widest lane canvas). Collapsed, it
  *  degrades to the topology rail so the detail pane gets the width while
  *  commits stay one click away. */
-export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = false, worktree, worktreeSelected = false, onSelectWorktree, t }: CommitGraphProps) {
+export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = false, worktree, worktreeSelected = false, onSelectWorktree, onCommitMenu, t }: CommitGraphProps) {
   const maxLanes = lanes.reduce((width, row) => Math.max(width, row !== undefined ? row.laneCount : 1), 1)
   const graphWidth = Math.max(maxLanes * LANE_W, LANE_W * 2)
   const columns = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px minmax(76px, 110px) 64px'
@@ -198,6 +200,10 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
             className={css.railRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
             aria-label={commit.subject + ' \u00b7 ' + commit.hash.slice(0, 7)}
             onClick={() => { onSelect(commit.hash) }}
+            onContextMenu={onCommitMenu === undefined ? undefined : event => {
+              event.preventDefault()
+              onCommitMenu(commit.hash, commit.subject, event.clientX, event.clientY)
+            }}
             onMouseEnter={event => { showTip(event.currentTarget, commit); const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
             onMouseLeave={() => { setTip(null); unlitLine() }}
             onFocus={event => { showTip(event.currentTarget, commit) }}
@@ -245,6 +251,10 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
           className={css.commitRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
           style={{ gridTemplateColumns: columns }}
           onClick={() => { onSelect(commit.hash) }}
+          onContextMenu={onCommitMenu === undefined ? undefined : event => {
+            event.preventDefault()
+            onCommitMenu(commit.hash, commit.subject, event.clientX, event.clientY)
+          }}
           onMouseEnter={() => { const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
           onMouseLeave={() => { unlitLine() }}
           title={commit.subject}

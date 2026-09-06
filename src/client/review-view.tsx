@@ -14,6 +14,7 @@ import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/cl
 import type { InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChangedFile, GitCommitFilesPayload, GitCommitSummary, GitFileContentPayload, GitFileDiffPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
+import { CommitMenu, type CommitMenuState } from './commit-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
 import { hostCall } from './api.ts'
 import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, RefreshIcon, SearchIcon, SwapIcon } from './icons.tsx'
@@ -265,6 +266,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // Commit-amend: checking the box pulls the tip's message as the prefill
   // (never overwriting text the user already typed).
   const [amend, setAmend] = useState(false)
+  // Graph commit context menu (reset/revert/cherry-pick).
+  const [commitMenu, setCommitMenu] = useState<CommitMenuState | null>(null)
   // File-tree context menu: the popover state + the open-with app list
   // (availability probed once per page by the host).
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null)
@@ -696,6 +699,48 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       })
     })
   }, [cwd, logState, graphLoadingMore])
+
+  /** One graph history operation (reset/revert/cherry-pick): the error text
+   *  to show in the commit menu, or null on success (it closes + refreshes). */
+  const runHistory = useCallback(async (action: 'reset' | 'revert' | 'cherry-pick', commit: string, mode?: 'soft' | 'mixed' | 'hard'): Promise<string | null> => {
+    if (cwd === undefined) return t('state.hostUnavailable')
+    const payload = await hostCall<GitWritePayload>(action, { cwd, commit, mode, confirm: true })
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
+    refresh()
+    return null
+  }, [cwd, refresh, t])
+
+  /** Merge a branch into the current one; the answer surfaces in the branch
+   *  popover's shared note area. */
+  const executeMerge = useCallback(async (name: string, noFf: boolean) => {
+    if (cwd === undefined) return
+    setBranchBusy(true)
+    setBranchResult(null)
+    const payload = await hostCall<GitWritePayload>('merge', { cwd, name, noFf, confirm: true })
+    setBranchBusy(false)
+    if (payload === null) {
+      setBranchResult({ ok: false, text: t('state.hostUnavailable') })
+      return
+    }
+    setBranchResult({ ok: payload.ok, text: payload.ok ? (payload.output ?? '') : (payload.error ?? 'unknown error') })
+    if (payload.ok) refresh()
+  }, [cwd, refresh, t])
+
+  /** Pull (fetch + integrate the upstream); like merge, verbatim output. */
+  const executePull = useCallback(async (rebase: boolean) => {
+    if (cwd === undefined) return
+    setBranchBusy(true)
+    setBranchResult(null)
+    const payload = await hostCall<GitWritePayload>('pull', { cwd, rebase, confirm: true })
+    setBranchBusy(false)
+    if (payload === null) {
+      setBranchResult({ ok: false, text: t('state.hostUnavailable') })
+      return
+    }
+    setBranchResult({ ok: payload.ok, text: payload.ok ? (payload.output ?? '') : (payload.error ?? 'unknown error') })
+    if (payload.ok) refresh()
+  }, [cwd, refresh, t])
 
   const toggleGraphList = useCallback(() => {
     // The user-facing fold toggle is the one that updates the remembered
@@ -1252,6 +1297,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               type="button"
               className={css.commitBtn}
               disabled={branchBusy || running}
+              title={t('branch.pull')}
+              onClick={() => { void executePull(false) }}
+            >
+              {t('branch.pull')}
+            </button>
+            <button
+              type="button"
+              className={css.commitBtn}
+              disabled={branchBusy || running}
               title={t('branch.fetch')}
               onClick={() => { void executeFetch() }}
             >
@@ -1330,6 +1384,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                     onClick={() => { void executeBranch('switch', { name: ref.name }) }}
                   >
                     {ref.name}
+                  </button>
+                  <button
+                    type="button"
+                    className={css.branchIconBtn}
+                    title={t('branch.merge')}
+                    disabled={isCurrent || branchBusy || running}
+                    onClick={() => { void executeMerge(ref.name, false) }}
+                  >
+                    {'\u21e5'}
                   </button>
                   <button
                     type="button"
@@ -1474,6 +1537,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         </div>
       )}
       </header>
+      {commitMenu !== null && (
+        <CommitMenu
+          state={commitMenu}
+          running={running}
+          onClose={() => { setCommitMenu(null) }}
+          run={runHistory}
+          t={t}
+        />
+      )}
       {fileMenu !== null && (
         <FileMenu
           state={fileMenu}
@@ -1532,6 +1604,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                         worktree={refsMode === false && ready !== null && ready.files.length > 0 ? { files: ready.files.length } : null}
                         worktreeSelected={graphWorktree}
                         onSelectWorktree={selectGraphWorktree}
+                        onCommitMenu={(hash, subject, x, y) => { setCommitMenu({ hash, subject, x, y }) }}
                         t={t}
                       />
                     )}
@@ -1629,6 +1702,26 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           </span>
                         ))}
                       </div>
+                    </div>
+                    <div className={css.commitActions}>
+                      <button
+                        type="button"
+                        className={css.toolBtn}
+                        disabled={running}
+                        title={t('history.reset')}
+                        onClick={event => {
+                          const r = (event.currentTarget as HTMLElement).getBoundingClientRect()
+                          setCommitMenu({ hash: commitInfo.hash, subject: commitInfo.subject, x: r.left, y: r.bottom })
+                        }}
+                      >
+                        {t('history.reset')}
+                      </button>
+                      <button type="button" className={css.toolBtn} disabled={running} title={t('history.revert')} onClick={() => { void runHistory('revert', commitInfo.hash) }}>
+                        {t('history.revert')}
+                      </button>
+                      <button type="button" className={css.toolBtn} disabled={running} title={t('history.cherryPick')} onClick={() => { void runHistory('cherry-pick', commitInfo.hash) }}>
+                        {t('history.cherryPick')}
+                      </button>
                     </div>
                     <div className={css.commitInfoGrid}>
                       <span className={css.commitInfoLabel}>{t('graph.col.commit')}</span>

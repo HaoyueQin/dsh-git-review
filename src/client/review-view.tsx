@@ -13,7 +13,7 @@ import type { RefObject } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload, GitCommitSummary, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
+import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload, GitCommitSummary, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitFsEntry, GitFsListPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { CommitMenu, type CommitMenuState } from './commit-menu.tsx'
 import { EMPTY_TREE_ID } from '../git-parse.ts'
@@ -63,7 +63,7 @@ type LogState =
 type StatusState =
   | { kind: 'loading' }
   | { kind: 'ready'; data: GitStatusPayload }
-  | { kind: 'notRepo' }
+  | { kind: 'notRepo'; root: string }
   | { kind: 'noWorkspace' }
   | { kind: 'hostUnavailable' }
   | { kind: 'error'; message: string }
@@ -81,7 +81,7 @@ type DiffState =
 async function loadStatus(cwd: string, base: string | null, target: string | null, wsIgnore: boolean): Promise<Exclude<StatusState, { kind: 'loading' }>> {
   const payload = await hostCall<GitStatusPayload | GitStatusFailure>('status', { cwd, base, target, ws: wsIgnore })
   if (payload === null) return { kind: 'hostUnavailable' }
-  if (!payload.ok) return payload.isRepository === false ? { kind: 'notRepo' } : { kind: 'error', message: payload.error }
+  if (!payload.ok) return payload.isRepository === false ? { kind: 'notRepo', root: payload.cwdRoot ?? cwd } : { kind: 'error', message: payload.error }
   return { kind: 'ready', data: payload }
 }
 
@@ -1326,7 +1326,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     }
   }, [cwd, commitMessage])
 
-  if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'notRepo' || status.kind === 'error') {
+  if (status.kind === 'notRepo') {
+    if (cwd === undefined) return <CenteredState t={t} status={{ kind: 'noWorkspace' }} onRetry={refresh} />
+    return <NotRepoView cwd={cwd} root={status.root} t={t} onDidInit={refresh} />
+  }
+  if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'error') {
     return <CenteredState t={t} status={status} onRetry={refresh} />
   }
 
@@ -2467,16 +2471,148 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   )
 }
 
-/** Full-surface state for the non-ready cases (degradation with guidance). */
-function CenteredState({ status, t, onRetry }: { status: Exclude<StatusState, { kind: 'ready' } | { kind: 'loading' }>; t: T; onRetry: () => void }) {
-  if (status.kind === 'notRepo') {
-    return (
-      <div className={css.root + ' ' + css.centered} data-conversation-composer-overlay="">
-        <div className={css.emptyTitle}>{t('state.notRepo.title')}</div>
-        <div className={css.emptyHint}>{t('state.notRepo.hint')}</div>
-      </div>
-    )
+/** Non-repository workspace: file browsing + preview with git disabled,
+ *  plus a confirm-gated `git init` that hands back to the review tab. */
+function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t: T; onDidInit: () => void }) {
+  const [dir, setDir] = useState('.')
+  const [entries, setEntries] = useState<GitFsEntry[] | null>(null)
+  const [listFailed, setListFailed] = useState(false)
+  const [selected, setSelected] = useState<string | null>(null)
+  const [content, setContent] = useState<DiffState>({ kind: 'idle' })
+  const [initArmed, setInitArmed] = useState(false)
+  const [initBusy, setInitBusy] = useState(false)
+  const [initError, setInitError] = useState<string | null>(null)
+  useEffect(() => {
+    let alive = true
+    setEntries(null)
+    setListFailed(false)
+    setSelected(null)
+    setContent({ kind: 'idle' })
+    void hostCall<GitFsListPayload>('fs-list', { cwd, path: dir }).then(payload => {
+      if (!alive) return
+      if (payload === null || !payload.ok) { setEntries([]); setListFailed(true); return }
+      setEntries(payload.entries)
+    })
+    return () => { alive = false }
+  }, [cwd, dir])
+  useEffect(() => {
+    if (selected === null) { setContent({ kind: 'idle' }); return }
+    let alive = true
+    setContent({ kind: 'loading' })
+    void hostCall<GitFileContentPayload & { error?: string }>('file-content', { cwd, path: selected }).then(payload => {
+      if (!alive) return
+      if (payload === null || !payload.ok) { setContent({ kind: 'failed', message: (payload as { error?: string } | null)?.error ?? 'unknown error' }); return }
+      setContent(payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'content', content: payload.content, truncated: payload.truncated, size: payload.size })
+    })
+    return () => { alive = false }
+  }, [cwd, selected])
+  const segments = dir === '.' ? [] : dir.split('/')
+  const goUp = (): void => {
+    if (segments.length === 0) return
+    setDir(segments.slice(0, -1).join('/') || '.')
   }
+  const init = (): void => {
+    if (!initArmed) { setInitArmed(true); return }
+    setInitBusy(true)
+    setInitError(null)
+    void hostCall<GitWritePayload>('git-init', { cwd, confirm: true }).then(payload => {
+      setInitBusy(false)
+      if (payload === null || !payload.ok) { setInitError(payload === null ? t('state.hostUnavailable') : (payload.error ?? t('state.error'))); return }
+      setInitArmed(false)
+      onDidInit()
+    })
+  }
+  const selectedEntry = selected !== null ? entries?.find(entry => entry.path === selected) ?? null : null
+  const syntheticFile: ChangedFile | null = selected !== null ? { path: selected, x: '?', y: '?', added: 0, deleted: 0, binary: content.kind === 'binary', untracked: true } : null
+  return (
+    <div className={css.root} data-conversation-composer-overlay="">
+      <header className={css.toolbar} data-git-review-toolbar="">
+        <div className={css.toolbarRow}>
+          <span className={css.emptyTitle} style={{ fontSize: 14 }}>{t('state.notRepo.title')}</span>
+          <span className={css.tbDivider} aria-hidden="true" />
+          <span style={{ fontSize: 12, opacity: 0.75 }}>{t('state.notRepo.gitDisabled')}</span>
+          <span style={{ flex: 1 }} />
+          <button type="button" className={css.toolBtn} disabled={initBusy} onClick={init} title={t('state.notRepo.initHint')}>
+            <span>{initArmed ? t('state.notRepo.confirmInit') : t('state.notRepo.init')}</span>
+          </button>
+          {initArmed && (
+            <button type="button" className={css.toolBtn} disabled={initBusy} onClick={() => { setInitArmed(false); setInitError(null) }}>
+              <span>{t('menu.cancel')}</span>
+            </button>
+          )}
+        </div>
+        {(initError !== null) && <div className={css.noticeRow + ' ' + css.noticeError}>{initError}</div>}
+      </header>
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <div style={{ width: 280, maxWidth: '40%', borderRight: '1px solid var(--dsw-alias-border, #e5e5e5)', overflowY: 'auto', padding: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 12, opacity: 0.8 }}>
+            <button type="button" className={css.toolBtn} disabled={segments.length === 0} onClick={goUp} title={t('state.notRepo.up')}>
+              <span>{t('state.notRepo.up')}</span>
+            </button>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={root + (dir === '.' ? '' : ' / ' + dir)}>
+              {dir === '.' ? root : dir}
+            </span>
+          </div>
+          {entries === null && <div className={css.paneNotice}>{t('state.notRepo.listLoading')}</div>}
+          {entries !== null && listFailed && <div className={css.noticeRow + ' ' + css.noticeError}>{t('state.notRepo.listFailed')}</div>}
+          {entries !== null && !listFailed && entries.length === 0 && <div className={css.paneNotice}>{t('state.notRepo.dirEmpty')}</div>}
+          {entries !== null && !listFailed && entries.map(entry => (
+            <button
+              key={entry.path}
+              type="button"
+              onClick={() => { if (entry.kind === 'dir') setDir(entry.path); else setSelected(entry.path) }}
+              onDoubleClick={() => { if (entry.kind === 'dir') setDir(entry.path) }}
+              style={{ display: 'flex', width: '100%', textAlign: 'left', padding: '4px 6px', borderRadius: 6, background: selected === entry.path ? 'var(--dsw-alias-fill-selected, #e8eefc)' : 'transparent', border: 'none', cursor: 'pointer', fontSize: 13 }}
+              title={entry.path}
+            >
+              <span style={{ marginRight: 6 }}>{entry.kind === 'dir' ? '📁' : '📄'}</span>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.name}</span>
+            </button>
+          ))}
+          {segments.length > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              <button type="button" className={css.toolBtn} onClick={() => setDir('.')}><span>~</span></button>
+              {segments.map((segment, index) => (
+                <button key={segments.slice(0, index + 1).join('/')} type="button" className={css.toolBtn} onClick={() => setDir(segments.slice(0, index + 1).join('/'))}>
+                  <span>{segment}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          {selected === null && <div className={css.paneNotice}>{t('state.notRepo.hint') + ' ' + t('state.notRepo.initHint')}</div>}
+          {selected !== null && content.kind === 'loading' && <div className={css.paneNotice}>{t('file.loading')}</div>}
+          {selected !== null && content.kind === 'failed' && <div className={css.noticeRow + ' ' + css.noticeError}>{content.message}</div>}
+          {selected !== null && content.kind === 'binary' && <div className={css.paneNotice}>{t('diff.binary')}</div>}
+          {selected !== null && content.kind === 'content' && syntheticFile !== null && (
+            <FilePane
+              file={syntheticFile}
+              search={{ query: '' }}
+              content={content.content}
+              truncated={content.truncated}
+              binary={false}
+              size={content.size}
+              loading={false}
+              canShowDiff={false}
+              view="file"
+              onViewChange={() => {}}
+              syntaxHighlight
+              blameOn={false}
+              onToggleBlame={() => {}}
+              blameState={{ kind: 'idle', lines: null, message: null }}
+              t={t}
+            />
+          )}
+          {selectedEntry !== null && selectedEntry.kind === 'file' && <div style={{ display: 'none' }}>{selectedEntry.size ?? ''}</div>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Full-surface state for the non-ready cases (degradation with guidance). */
+function CenteredState({ status, t, onRetry }: { status: Exclude<StatusState, { kind: 'ready' } | { kind: 'loading' } | { kind: 'notRepo' }>; t: T; onRetry: () => void }) {
   const message = status.kind === 'noWorkspace'
     ? t('state.noWorkspace')
     : status.kind === 'hostUnavailable'

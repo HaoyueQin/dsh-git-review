@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
-import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileBytes, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitHunkOp, gitLastCommit, gitLog, gitMerge, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
+import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileBytes, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitFsList, gitHunkOp, gitInit, gitLastCommit, gitLog, gitMerge, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -541,6 +541,36 @@ try {
   assert.equal(polluted.ok, true)
 } finally {
   delete process.env.GIT_DIR
+}
+
+// 21. Non-repository workspace degrades instead of refusing: status carries
+//     cwdRoot, fs-list browses, file-content falls back, git-init unlocks.
+//     (Outside ROOT: rev-parse walks up, so a dir under the project would
+//     resolve to the project repo itself.)
+{
+  const { tmpdir } = await import('node:os')
+  const plain = mkdtempSync(join(tmpdir(), 'dsh-git-review-plain-'))
+  roots.push(plain)
+  writeFileSync(join(plain, 'hello.txt'), 'hi\n')
+  mkdirSync(join(plain, 'sub'))
+  writeFileSync(join(plain, 'sub', 'b.txt'), 'b\n')
+  const s = await gitStatus(plain, null, null, false)
+  assert.equal(s.ok, false)
+  assert.equal(s.isRepository, false)
+  assert.ok(typeof s.cwdRoot === 'string')
+  const listed = await gitFsList(plain, undefined)
+  assert.equal(listed.ok, true)
+  assert.ok(listed.entries.some(e => e.path === 'hello.txt' && e.kind === 'file'))
+  assert.ok(listed.entries.some(e => e.path === 'sub' && e.kind === 'dir'))
+  const content = await gitFileContent(plain, 'hello.txt', undefined)
+  assert.equal(content.ok, true)
+  assert.equal(content.content, 'hi\n')
+  const refused = await gitInit(plain, false)
+  assert.equal(refused.ok, false)
+  const inited = await gitInit(plain, true)
+  assert.equal(inited.ok, true)
+  const after = await gitStatus(plain, null, null, false)
+  assert.equal(after.ok, true)
 }
 
 try {

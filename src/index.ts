@@ -75,7 +75,7 @@
  * need `git hash-object -t tree /dev/null` at status time.
  */
 import { execFile, spawn } from 'node:child_process'
-import { lstat, mkdtemp, open, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, mkdtemp, open, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -83,7 +83,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
 import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, sniffPreviewMime, splitDiffSections } from './git-parse.ts'
 import { installSettings } from './settings-schema.ts'
-import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
+import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitFsListPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 import type { PreviewMime } from './git-parse.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
@@ -210,6 +210,36 @@ function fenceRepoPath(repoRoot: string, requestedPath: string): string {
   if (!inside(repoRoot, candidate) || candidate === repoRoot) {
     throw new Error('path is outside the repository')
   }
+  return candidate
+}
+
+/** The session workspace root (realpath), or null when it cannot be read. */
+async function resolveWorkspace(cwd: string): Promise<string | null> {
+  try {
+    return await realpath(cwd)
+  } catch {
+    return null
+  }
+}
+
+/** Resolve a workspace-relative request path to a fenced absolute path. */
+function fenceWorkspacePath(workspaceRoot: string, requestedPath: string): string {
+  if (typeof requestedPath !== 'string' || requestedPath === '') {
+    throw new Error('path is required')
+  }
+  const candidate = resolve(workspaceRoot, requestedPath)
+  if (!inside(workspaceRoot, candidate) || candidate === workspaceRoot) {
+    throw new Error('path is outside the workspace')
+  }
+  return candidate
+}
+
+/** Resolve a workspace-relative dir to a fenced absolute dir ('.' = root). */
+function fenceWorkspaceDir(workspaceRoot: string, requestedPath: unknown): string {
+  const rel = typeof requestedPath === 'string' && requestedPath !== '' ? requestedPath : '.'
+  if (rel === '.' || rel === './') return workspaceRoot
+  const candidate = resolve(workspaceRoot, rel)
+  if (!inside(workspaceRoot, candidate)) throw new Error('path is outside the workspace')
   return candidate
 }
 
@@ -344,11 +374,12 @@ async function detectInProgress(repoRoot: string): Promise<OperationKind | null>
  *  edits are the loudest review noise, see the competitor survey). */
 const WS_FLAG = ['--ignore-all-space'] as const
 
-export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitStatusPayload | { ok: false; isRepository: boolean; error: string }> {
+export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitStatusPayload | { ok: false; isRepository: boolean; error: string; cwdRoot?: string }> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) {
-    return { ok: false, isRepository: false, error: 'not a git repository (or git is unavailable)' }
+    const workspaceRoot = await resolveWorkspace(cwd)
+    return { ok: false, isRepository: false, error: 'not a git repository (or git is unavailable)', ...(workspaceRoot !== null ? { cwdRoot: workspaceRoot } : {}) }
   }
   const baseRef = normalizeBaseRef(base)
   const targetRef = normalizeBaseRef(target)
@@ -630,7 +661,24 @@ export async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknow
 export async function gitFileContent(cwd: unknown, path: unknown, ref: unknown): Promise<GitFileContentPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
-  if (repoRoot === null) throw new Error('not a git repository')
+  if (repoRoot === null) {
+    if (typeof ref === 'string' && ref !== '') throw new Error('not a git repository')
+    const workspaceRoot = await resolveWorkspace(cwd)
+    if (workspaceRoot === null) throw new Error('not a git repository')
+    const absPath = fenceWorkspacePath(workspaceRoot, typeof path === 'string' ? path : '')
+    let size: number
+    try {
+      const stat = await lstat(absPath)
+      if (!stat.isFile()) throw new Error('not a regular file')
+      size = stat.size
+    } catch (error) {
+      throw new Error('cannot read file: ' + String((error as Error).message ?? error))
+    }
+    const { bytes } = await readPrefix(absPath, READ_CAP)
+    const truncated = size > READ_CAP
+    if (bytes.includes(0)) return { ok: true, binary: true, content: '', truncated, size }
+    return { ok: true, binary: false, content: bytes.toString('utf8'), truncated, size }
+  }
   const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
   const relPath = relative(repoRoot, absPath).replaceAll('\\', '/')
 
@@ -722,7 +770,24 @@ function runGitBytes(root: string, args: readonly string[], byteCap: number = PR
 async function readPreviewBytes(cwd: unknown, path: unknown, ref: unknown): Promise<{ data: Buffer; mime: PreviewMime | null; size: number; truncated: boolean }> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
-  if (repoRoot === null) throw new Error('not a git repository')
+  if (repoRoot === null) {
+    if (typeof ref === 'string' && ref !== '') throw new Error('not a git repository')
+    const workspaceRoot = await resolveWorkspace(cwd)
+    if (workspaceRoot === null) throw new Error('not a git repository')
+    const absPath = fenceWorkspacePath(workspaceRoot, typeof path === 'string' ? path : '')
+    let size: number
+    try {
+      const stat = await lstat(absPath)
+      if (!stat.isFile()) throw new Error('not a regular file')
+      size = stat.size
+    } catch (error) {
+      throw new Error('cannot read file: ' + String((error as Error).message ?? error))
+    }
+    const data = (await readPrefix(absPath, PREVIEW_CAP)).bytes
+    const truncated = size > PREVIEW_CAP
+    const mime = sniffPreviewMime(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+    return { data, mime, size, truncated }
+  }
   const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
   const relPath = relative(repoRoot, absPath).replaceAll('\\', '/')
   let data: Buffer
@@ -903,6 +968,70 @@ export async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
   for (const chunk of tokens(others.stdout, others.truncated)) if (chunk !== '') files.add(chunk)
   const sorted = [...files].sort()
   return { ok: true, files: sorted.slice(0, LIST_FILES_CAP), truncated: tracked.truncated || others.truncated || sorted.length > LIST_FILES_CAP }
+}
+
+/** Entry cap for non-repository browsing (a review tab is not a file manager). */
+const FS_LIST_CAP = 5000
+
+/** Dir names hidden in non-repository browsing (heavy/derived trees). */
+const FS_IGNORE_DIRS = new Set(['.git', 'node_modules', 'target', 'dist', 'build', '.next', '__pycache__'])
+
+/** One `fs-list` answer: one workspace directory's entries for non-repo mode.
+ *  Fenced inside the workspace root (never the repository); history refs
+ *  do not apply. Hidden names stay skippable by explicit navigation. */
+export async function gitFsList(cwd: unknown, relPath: unknown): Promise<GitFsListPayload> {
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const workspaceRoot = await resolveWorkspace(cwd)
+  if (workspaceRoot === null) throw new Error('workspace not found')
+  const absDir = fenceWorkspaceDir(workspaceRoot, relPath)
+  let dirents: Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>
+  try {
+    dirents = await readdir(absDir, { withFileTypes: true }) as Array<{ name: string; isFile(): boolean; isDirectory(): boolean }>
+  } catch (error) {
+    throw new Error('cannot list directory: ' + String((error as Error).message ?? error))
+  }
+  const relDir = relative(workspaceRoot, absDir).replaceAll('\\', '/')
+  const normalizedDir = relDir === '' ? '.' : relDir
+  const inIgnored = normalizedDir.split('/').some(segment => FS_IGNORE_DIRS.has(segment))
+  const entries: GitFsListPayload['entries'] = []
+  for (const entry of dirents) {
+    if (entry.name === '.' || entry.name === '..') continue
+    if (!inIgnored && FS_IGNORE_DIRS.has(entry.name)) continue
+    if (entry.isDirectory()) {
+      const p = normalizedDir === '.' ? entry.name : normalizedDir + '/' + entry.name
+      entries.push({ path: p, name: entry.name, kind: 'dir' })
+    } else if (entry.isFile()) {
+      const p = normalizedDir === '.' ? entry.name : normalizedDir + '/' + entry.name
+      let size: number | undefined
+      try {
+        size = (await lstat(join(absDir, entry.name))).size
+      } catch { size = undefined }
+      entries.push({ path: p, name: entry.name, kind: 'file', ...(size !== undefined ? { size } : {}) })
+    }
+  }
+  entries.sort((a, b) => a.kind !== b.kind ? (a.kind === 'dir' ? -1 : 1) : (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  const truncated = entries.length > FS_LIST_CAP
+  return { ok: true, root: workspaceRoot, path: normalizedDir, entries: entries.slice(0, FS_LIST_CAP), truncated }
+}
+
+/** One `git-init` answer: `git init` the workspace so the tab can review.
+ *  Confirm-gated like every other write; answers ok:false (not throw) when
+ *  git itself refuses, so the tab keeps its guidance copy. */
+export async function gitInit(cwd: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'git init requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const workspaceRoot = await resolveWorkspace(cwd)
+  if (workspaceRoot === null) throw new Error('workspace not found')
+  if (await resolveRepository(cwd) !== null) return { ok: true, output: '' }
+  return await new Promise<GitWritePayload>((resolvePromise) => {
+    execFile('git', ['init'], { timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true, cwd: workspaceRoot, env: gitEnv() }, (error, stdout, stderr) => {
+      if (error !== null) {
+        resolvePromise({ ok: false, error: (stderr.trim() || String(error.message ?? error)) })
+      } else {
+        resolvePromise({ ok: true, output: stdout.trim() })
+      }
+    })
+  })
 }
 
 /** Untracked files scanned by `search` (bounded: 64 files × 256 KiB). */
@@ -2104,6 +2233,14 @@ export function apply(ctx: Context): void {
         }
         if (action === 'list-files') {
           respond(res, 200, await gitListFiles(body['cwd']))
+          return
+        }
+        if (action === 'fs-list') {
+          respond(res, 200, await gitFsList(body['cwd'], body['path']))
+          return
+        }
+        if (action === 'git-init') {
+          respond(res, 200, await gitInit(body['cwd'], body['confirm']))
           return
         }
         if (action === 'search') {

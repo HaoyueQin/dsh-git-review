@@ -75,6 +75,30 @@ export interface GitStatusFailure {
   ok: false
   isRepository: boolean
   error: string
+  /** realpath of the workspace when it is not a repository (file browsing root). */
+  cwdRoot?: string
+}
+
+/** One workspace entry for non-repository browsing (fs-list). */
+export interface GitFsEntry {
+  /** Workspace-root-relative path with '/' separators. */
+  path: string
+  /** Entry display name (last segment). */
+  name: string
+  kind: 'file' | 'dir'
+  /** File size in bytes (dirs omit it). */
+  size?: number
+}
+
+/** Successful `fs-list` payload: one directory's entries. */
+export interface GitFsListPayload {
+  ok: true
+  /** realpath of the workspace root. */
+  root: string
+  /** Listed dir, workspace-relative ('.' = root). */
+  path: string
+  entries: GitFsEntry[]
+  truncated: boolean
 }
 
 /** Successful `file-diff` payload (text form). */
@@ -295,6 +319,7 @@ export interface GitFileDiffArgs {
 }
 export interface GitFileRefArgs { cwd: string; path: string; ref?: string }
 export interface GitCwdArgs { cwd: string }
+export interface GitFsListArgs { cwd: string; path?: string }
 export interface GitLogArgs { cwd: string; limit?: number; skip?: number }
 export interface GitCommitFilesArgs { cwd: string; commit: string }
 export interface GitCommitArgs { cwd: string; message: string; mode: 'all' | 'staged'; amend: boolean; confirm: true }
@@ -363,6 +388,8 @@ export interface GitActionArgs {
   'file-content': GitFileRefArgs
   'file-bytes': GitFileRefArgs
   'list-files': GitCwdArgs
+  'fs-list': GitFsListArgs
+  'git-init': GitConfirmArgs
   search: GitSearchArgs
   'file-op': GitFileOpArgs
   'open-with': GitOpenWithArgs

@@ -2655,3 +2655,10 @@ body[data-dsh-bg-glass] .commitHeader {
   font-size: 12.5px;
   line-height: 1.6;
 }
+
+/* Blame-jump return focus: the file line navigated back to from a graph commit. */
+.fileRowFocus {
+  outline: 1px solid var(--dsw-alias-border-focus, #4d6bfe);
+  outline-offset: -1px;
+  border-radius: 4px;
+}

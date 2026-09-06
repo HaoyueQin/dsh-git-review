@@ -250,6 +250,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null)
   const [commitTotals, setCommitTotals] = useState<{ added: number; deleted: number } | null>(null)
   const [copiedHash, setCopiedHash] = useState(false)
+  /** Blame-jump return: the file view (path + line) a graph commit was opened from. */
+  const [blameReturn, setBlameReturn] = useState<{ path: string; line: number } | null>(null)
+  /** Sticky focus line kept after the one-click return (drives FilePane highlight). */
+  const [blameFocus, setBlameFocus] = useState<{ path: string; line: number } | null>(null)
   // Commit/push popover state: two-step armed buttons, verbatim git output.
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMessage, setCommitMessage] = useState('')
@@ -910,6 +914,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setGraphWorktree(false)
     setGraphWorktreeFile(null)
     setGraphListCollapsed(false)
+    setBlameReturn(null)
+    setBlameFocus(null)
   }, [])
 
   /** Select a graph commit; the list folds to the topology rail so the
@@ -939,6 +945,30 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     changeViewTab('graph')
     if (known) selectCommit(hash)
   }, [logState, changeViewTab, selectCommit])
+
+  /** Jump from a blame gutter commit to the same graph detail, remembering
+   *  the file view for the one-click return. Mirrors jumpToCommit. */
+  const jumpFromBlame = useCallback((hash: string, line: number) => {
+    if (selected === null) return
+    const origin = { path: selected, line }
+    setBlameOn(true)
+    const known = logState.kind === 'ready' && logState.commits.some(commit => commit.hash === hash)
+    changeViewTab('graph')
+    // changeViewTab clears transient tab state; restore the return after it.
+    setBlameReturn(origin)
+    setBlameFocus(origin)
+    if (known) selectCommit(hash)
+  }, [selected, logState, changeViewTab, selectCommit])
+
+  /** Return from a blame-opened commit to the file view it came from. */
+  const backToBlameFile = useCallback(() => {
+    if (blameReturn === null) return
+    setBlameFocus(blameReturn)
+    setBlameReturn(null)
+    setViewTab('changes')
+    setSelected(blameReturn.path)
+    setBlameOn(true)
+  }, [blameReturn])
 
 
   /** Show the worktree's uncommitted changes in the graph detail pane. */
@@ -2198,6 +2228,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 <div className={css.emptyState}>
                   <div className={css.emptyTitle}>{t('graph.selectCommit')}</div>
                   <div className={css.emptyHint}>{t('graph.selectHint')}</div>
+                  {blameReturn !== null && (
+                    <button
+                      type="button"
+                      className={css.toolBtn}
+                      title={t('blame.backToFile') + ': ' + blameReturn.path + ':' + blameReturn.line}
+                      onClick={backToBlameFile}
+                    >
+                      {'← ' + t('blame.backToFile')}
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className={css.commitDetail} data-git-review-diff="">
@@ -2239,6 +2279,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                       <div className={css.commitBody}>{commitInfo.body}</div>
                     )}
                     <div className={css.commitActions}>
+                      {blameReturn !== null && (
+                        <button
+                          type="button"
+                          className={css.toolBtn}
+                          title={t('blame.backToFile') + ': ' + blameReturn.path + ':' + blameReturn.line}
+                          onClick={backToBlameFile}
+                        >
+                          {'← ' + t('blame.backToFile')}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={css.toolBtn}
@@ -2382,6 +2432,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                       blameOn={blameOn}
                       onToggleBlame={() => { setBlameOn(value => !value) }}
                       blameState={blameState}
+                      onBlameJump={jumpFromBlame}
+                      focusLine={blameFocus !== null && blameFocus.path === selected ? blameFocus.line : null}
                       previewAvailable={previewAvailable}
                       onShowPreview={() => { setPreviewSource(false) }}
                       t={t}

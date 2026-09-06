@@ -4,7 +4,7 @@
  * selecting an unchanged file in all-files tree mode. Rendering is capped by
  * the same global row cap the diff pane uses.
  */
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { makeSearchEngine, MAX_RENDER_ROWS, type SearchSpec } from './diff-parse.ts'
 import { makeLineHighlighter, sliceTokens, splitLineByTokens, type TokenSpan } from './highlight.ts'
 import { FileIcon, LineLeftIcon, LinesIcon } from './icons.tsx'
@@ -103,6 +103,10 @@ export interface FilePaneProps {
   onToggleBlame: () => void
   /** Blame rows (when loaded); same order/length as the file's lines. */
   blameState: { kind: 'idle' | 'loading' | 'ready' | 'failed'; lines: GitBlameLine[] | null; message: string | null }
+  /** Jump from a blame gutter commit to the graph detail (absent = gutter stays plain text). */
+  onBlameJump?: (hash: string, line: number) => void
+  /** 1-based file line to scroll into view after a graph-detail return. */
+  focusLine?: number | null
   /** In-tab preview available for this path (the header offers it). */
   previewAvailable?: boolean
   onShowPreview?: () => void
@@ -113,7 +117,15 @@ export interface FilePaneProps {
  * The pane showing one file's full content.
  * @param props - the file, its content state and the view switch.
  */
-export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, blameOn, onToggleBlame, blameState, previewAvailable, onShowPreview, t }: FilePaneProps) {
+export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, blameOn, onToggleBlame, blameState, onBlameJump, focusLine, previewAvailable, onShowPreview, t }: FilePaneProps) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (focusLine === undefined || focusLine === null || loading) return
+    const root = scrollRef.current
+    if (root === null) return
+    const target = root.querySelector('[data-file-line="' + focusLine + '"]')
+    if (target !== null) (target as HTMLElement).scrollIntoView({ block: 'center' })
+  }, [focusLine, loading, content])
   const engine = useMemo(() => makeSearchEngine(search), [search])
   const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight, content])
   const lines = useMemo(() => {
@@ -158,13 +170,13 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
       {!binary && truncated && <div className={css.noticeRow}>{t('file.truncated')}</div>}
       {blameOn && blameState.kind === 'loading' && <div className={css.noticeRow}>{t('blame.loading')}</div>}
       {blameOn && blameState.kind === 'failed' && <div className={css.noticeRow + ' ' + css.noticeError}>{blameState.message ?? ''}</div>}
-      <div className={css.diffScroll}>
+      <div className={css.diffScroll} ref={scrollRef}>
         {loading && <div className={css.paneNotice}>{t('file.loading')}</div>}
         {!loading && !binary && lines.length === 0 && (
           <div className={css.paneNotice}>{t('file.empty')}</div>
         )}
         {!loading && !binary && visible.map((line, index) => (
-          <div key={index} className={css.fileRowGrid + (blameOn && blameState.kind === 'ready' && blameState.lines !== null ? ' ' + css.fileRowGridBlame : '')}>
+          <div key={index} data-file-line={index + 1} className={css.fileRowGrid + (blameOn && blameState.kind === 'ready' && blameState.lines !== null ? ' ' + css.fileRowGridBlame : '') + (focusLine === index + 1 ? ' ' + css.fileRowFocus : '')}>
             {blameOn && blameState.kind === 'ready' && blameState.lines !== null && (
               (() => {
                 const row = blameState.lines![index] ?? null
@@ -176,10 +188,25 @@ export function FilePane({ file, search, content, truncated, binary, size, loadi
                 // a lone-surrogate replacement character.
                 const authorChars = Array.from(row.author)
                 const author = authorChars.length > 10 ? authorChars.slice(0, 9).join('') + '\u2026' : row.author
+                const jumpable = onBlameJump !== undefined && !repeated && row.hash !== '' && !/^0+$/.test(row.hash)
+                const label = repeated ? '' : author + ' ' + short
+                if (!jumpable) {
+                  return (
+                    <span className={css.blameGutter} title={repeated ? undefined : row.author + ' \u00b7 ' + row.hash + ' \u00b7 ' + row.summary}>
+                      {label}
+                    </span>
+                  )
+                }
                 return (
-                  <span className={css.blameGutter} title={repeated ? undefined : row.author + ' \u00b7 ' + row.hash + ' \u00b7 ' + row.summary}>
-                    {repeated ? '' : author + ' ' + short}
-                  </span>
+                  <button
+                    type="button"
+                    className={css.blameGutter}
+                    style={{ cursor: 'pointer', background: 'none', border: 'none', padding: 0, font: 'inherit', textAlign: 'left' }}
+                    title={t('blame.jump') + ': ' + row.author + ' \u00b7 ' + row.hash + ' \u00b7 ' + row.summary}
+                    onClick={() => { onBlameJump(row.hash, index + 1) }}
+                  >
+                    {label}
+                  </button>
                 )
               })()
             )}

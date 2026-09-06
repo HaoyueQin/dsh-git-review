@@ -202,13 +202,13 @@ function Row({ row, engine, words, highlighter, matchOrdinal, active, commentTit
         {renderCellText(row.right, engine, regions?.new ?? null, css.wordAdd, row.right === null ? null : highlighter?.line(row.right.text) ?? null)}
         {row.right?.noNewline === true && <em className={css.noNewline}>{'\u21a9'}</em>}
       </span>
-      {onComment !== undefined && (
+      {onComment !== undefined && row.right !== null && (
         <button
           type="button"
           className={css.rowCommentBtn}
           title={commentTitle}
           aria-label={commentTitle}
-          onClick={() => { onComment(row.right !== null ? row.right.no : 0) }}
+          onClick={() => { onComment(row.right!.no) }}
         >
           <CommentIcon />
         </button>
@@ -301,7 +301,9 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   const words = useMemo(() => makeWordHighlighter(), [parsed])
   // Line syntax highlighter: one budgeted instance per file (a very large
   // diff degrades to plain text mid-render, never stalls).
-  const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight])
+  // One budgeted instance per parsed diff (a spent budget must not leak into
+  // the next file's diff on the same path).
+  const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight, parsed])
   const unified = view === 'unified'
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [activeMatch, setActiveMatch] = useState(0)
@@ -311,12 +313,15 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   )
   useEffect(() => {
     setActiveMatch(0)
-  }, [search, file.path])
+  }, [search, file.path, unified])
+  // The count can shrink under a live selection (view switch, scope change):
+  // clamp for display and scrolling instead of showing an impossible n/m.
+  const shownMatch = matchRowCount === 0 ? 0 : Math.min(activeMatch, matchRowCount - 1)
   useEffect(() => {
     if (!engine.active || matchRowCount === 0) return
     const nodes = scrollRef.current?.querySelectorAll('[data-diff-match]')
-    nodes?.[activeMatch]?.scrollIntoView({ block: 'center' })
-  }, [activeMatch, engine, matchRowCount])
+    nodes?.[shownMatch]?.scrollIntoView({ block: 'center' })
+  }, [shownMatch, engine, matchRowCount])
   const gotoMatch = useCallback((delta: number) => {
     setActiveMatch(previous => {
       if (matchRowCount === 0) return 0
@@ -331,7 +336,10 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   const [armedHunk, setArmedHunk] = useState<number | null>(null)
   useEffect(() => {
     setArmedHunk(null)
-  }, [file.path, scope, hunkOps])
+  }, [file.path, scope, hunkOps, diff, full])
+  useEffect(() => {
+    setCommentTarget(null)
+  }, [file.path, diff])
   return (
     <div className={css.diffPane} data-git-review-diff="">
       <div className={css.diffHeader}>
@@ -349,7 +357,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
             <button type="button" className={css.toolBtn} onClick={() => { gotoMatch(-1) }} title={t('search.prev')} aria-label={t('search.prev')}>
               {'\u2039'}
             </button>
-            <span className={css.matchCount}>{(activeMatch + 1) + ' / ' + matchRowCount}</span>
+            <span className={css.matchCount}>{(shownMatch + 1) + ' / ' + matchRowCount}</span>
             <button type="button" className={css.toolBtn} onClick={() => { gotoMatch(1) }} title={t('search.next')} aria-label={t('search.next')}>
               {'\u203a'}
             </button>
@@ -405,7 +413,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
       {hunkNotice != null && hunkNotice !== '' && (
         <div className={css.noticeRow + ' ' + css.noticeError}>{hunkNotice}</div>
       )}
-      <div className={css.diffScroll}>
+      <div className={css.diffScroll} ref={scrollRef}>
         {loading && <div className={css.paneNotice}>{t('diff.loading')}</div>}
         {!loading && !showBinary && parsed.hunks.length === 0 && (
           <div className={css.paneNotice}>{t('diff.noTextChanges')}</div>

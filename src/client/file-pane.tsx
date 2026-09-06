@@ -115,7 +115,7 @@ export interface FilePaneProps {
  */
 export function FilePane({ file, search, content, truncated, binary, size, loading, canShowDiff, view, onViewChange, syntaxHighlight, blameOn, onToggleBlame, blameState, previewAvailable, onShowPreview, t }: FilePaneProps) {
   const engine = useMemo(() => makeSearchEngine(search), [search])
-  const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight])
+  const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight, content])
   const lines = useMemo(() => {
     if (content === '') return []
     const rows = content.split('\n')

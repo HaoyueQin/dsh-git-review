@@ -26,6 +26,20 @@ export function draftsKey(cwd: string): string {
   return 'dsh-git-review.drafts:' + encodeURIComponent(cwd)
 }
 
+/** Stored drafts cap (a review tab is not a notebook; the box is a
+ *  staging area, and unbounded localStorage growth evicts other keys). */
+export const DRAFTS_CAP = 200
+/** One draft's body cap (composer-bound text, not an essay store). */
+export const DRAFT_TEXT_CAP = 4000
+
+/** Normalize one stored draft; null when the entry is junk. */
+function normalizeDraft(record: Record<string, unknown>): CommentDraft | null {
+  if (typeof record['path'] !== 'string' || record['path'] === '' || record['path'].length > 1024) return null
+  if (typeof record['text'] !== 'string' || record['text'] === '') return null
+  if (typeof record['line'] !== 'number' || !Number.isFinite(record['line'])) return null
+  return { path: record['path'], line: Math.max(1, Math.trunc(record['line'])), text: record['text'].slice(0, DRAFT_TEXT_CAP) }
+}
+
 /** Parse a stored raw value into drafts; junk degrades to an empty list. */
 export function parseDrafts(raw: string | null): CommentDraft[] {
   if (raw === null) return []
@@ -39,11 +53,9 @@ export function parseDrafts(raw: string | null): CommentDraft[] {
   const out: CommentDraft[] = []
   for (const item of parsed) {
     if (item === null || typeof item !== 'object') continue
-    const record = item as Record<string, unknown>
-    if (typeof record['path'] !== 'string' || record['path'] === '') continue
-    if (typeof record['text'] !== 'string') continue
-    if (typeof record['line'] !== 'number' || !Number.isFinite(record['line'])) continue
-    out.push({ path: record['path'], line: Math.trunc(record['line']), text: record['text'] })
+    const draft = normalizeDraft(item as Record<string, unknown>)
+    if (draft !== null) out.push(draft)
+    if (out.length >= DRAFTS_CAP) break
   }
   return out
 }
@@ -79,7 +91,10 @@ export function createDraftBox(
   return {
     list: () => [...items],
     add(draft) {
-      items.push(draft)
+      const clean = normalizeDraft({ path: draft.path, line: draft.line, text: draft.text })
+      if (clean === null) return
+      items.push(clean)
+      while (items.length > DRAFTS_CAP) items.shift()
       persist()
     },
     remove(index) {

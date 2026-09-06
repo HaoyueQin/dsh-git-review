@@ -153,8 +153,12 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   /** Tree panel dragged width (J8-3): null = the CSS clamp default; the
    *  last dragged value persists across sessions. */
   const [treeWidth, setTreeWidth] = useState<number | null>(() => {
-    const stored = Number(localStorage.getItem('dsh-git-review.treeWidth'))
-    return Number.isFinite(stored) && stored >= 200 && stored <= 460 ? stored : null
+    try {
+      const stored = Number(localStorage.getItem('dsh-git-review.treeWidth'))
+      return Number.isFinite(stored) && stored >= 200 && stored <= 460 ? stored : null
+    } catch {
+      return null
+    }
   })
   const treeResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   /** Drag the divider between the diff pane and the tree: the tree sits on
@@ -175,7 +179,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       if (state === null) return
       void move
       const final = Math.min(460, Math.max(200, state.startWidth + (state.startX - move.clientX)))
-      localStorage.setItem('dsh-git-review.treeWidth', String(final))
+      try { localStorage.setItem('dsh-git-review.treeWidth', String(final)) } catch { /* private mode — width just doesn't persist */ }
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
@@ -362,7 +366,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [openApps, setOpenApps] = useState<OpenApp[] | null>(null)
   // Reviewed markers (worktree mode only): a plugin-local store keyed on
   // the worktree blob hash; bumpViewed re-renders the tree after a toggle.
-  const viewedStore = useMemo(() => createViewedStore(), [])
+  // Per-workspace reviewed markers: blob hashes are content-derived, but the
+  // store instance is still session-scoped so a workspace switch never leaks
+  // another repo's marks into this tab.
+  const viewedStore = useMemo(() => createViewedStore(), [cwd])
   const [viewedTick, bumpViewed] = useReducer(count => count + 1, 0)
   const viewedHas = useCallback((blob: string) => viewedStore.has(blob), [viewedStore])
   const toggleViewed = useCallback((blob: string) => {
@@ -728,7 +735,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setHistoryState({ kind: 'closed' })
   }, [])
 
-  /** Blame rows for the file view: loaded on demand when the toggle is on. */
+  /** Blame rows for the file view: loaded on demand when the toggle is on.
+   *  In ref-range mode the file view reads the target tree, so blame follows
+   *  the same revision (a worktree blame would misattribute every line). */
+  const blameRef = refsMode && targetRef !== null ? targetRef : null
   useEffect(() => {
     if (!blameOn || cwd === undefined || selected === null || effectiveView !== 'file') {
       setBlameState({ kind: 'idle', lines: null, message: null })
@@ -736,20 +746,26 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     }
     let alive = true
     setBlameState({ kind: 'loading', lines: null, message: null })
-    void hostCall<GitBlamePayload>('blame', { cwd, path: selected }).then(payload => {
+    void hostCall<GitBlamePayload>('blame', blameRef !== null ? { cwd, path: selected, ref: blameRef } : { cwd, path: selected }).then(payload => {
       if (!alive) return
       if (payload === null) setBlameState({ kind: 'failed', lines: null, message: t('state.hostUnavailable') })
       else if (!payload.ok) setBlameState({ kind: 'failed', lines: null, message: 'blame failed' })
       else setBlameState({ kind: 'ready', lines: payload.lines, message: null })
     })
     return () => { alive = false }
-  }, [blameOn, cwd, selected, effectiveView, t])
+  }, [blameOn, cwd, selected, effectiveView, blameRef, t])
 
+  /** Open-request token: fast file switches must not let a stale follow-log
+   *  win over the newer one (the second request's state would be dropped). */
+  const historyReqRef = useRef(0)
   /** Open the per-file history popover (fetches the follow log). */
   const openFileHistory = useCallback((path: string, x: number, y: number) => {
     if (cwd === undefined) return
+    historyReqRef.current += 1
+    const ticket = historyReqRef.current
     setHistoryState({ kind: 'loading' })
     void hostCall<GitFileHistoryPayload>('file-history', { cwd, path }).then(payload => {
+      if (historyReqRef.current !== ticket) return
       setHistoryState(current => {
         if (current.kind !== 'loading') return current
         if (payload === null || !payload.ok) return { kind: 'open', x, y, commits: [], truncated: false }
@@ -762,8 +778,12 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
    *  patch from the raw diff the pane is showing and hand it to host
    *  `hunk-op`. Failures stay verbatim under the diff header; success
    *  refreshes so the diff/scope halves re-read from git. */
+  /** Sync hunk-op gate: state alone still sees a stale false on rapid double
+   *  clicks (the re-render hasn't landed), so the ref closes the race. */
+  const hunkBusyRef = useRef(false)
   const executeHunkOp = useCallback(async (action: 'stage' | 'unstage' | 'revert', hunkIndex: number, path: string, rawDiff: string) => {
-    if (cwd === undefined || hunkBusy) return
+    if (cwd === undefined || running || refsMode || hunkBusyRef.current) return
+    hunkBusyRef.current = true
     const patch = buildHunkPatch(rawDiff, hunkIndex)
     if (patch === null) {
       setHunkNotice('internal error: failed to cut the hunk patch')
@@ -771,6 +791,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     }
     setHunkBusy(true)
     const payload = await hostCall<GitWritePayload>('hunk-op', { cwd, path, patch, action, confirm: true })
+    hunkBusyRef.current = false
     setHunkBusy(false)
     if (payload === null) {
       setHunkNotice(t('state.hostUnavailable'))
@@ -782,7 +803,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     }
     setHunkNotice(null)
     refresh()
-  }, [cwd, hunkBusy, refresh, t])
+  }, [cwd, running, refsMode, refresh, t])
 
   /** Switch the tree between changed files and the whole repository. */
   const changeTreeMode = useCallback((mode: 'changes' | 'all') => {
@@ -809,38 +830,50 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSearchScope(scope)
     settings.set('searchScope', scope)
   }, [settings])
+  // Preference flips write the store outside setState updaters (updaters must
+  // stay pure — StrictMode double-invokes them, which would publish twice).
   const toggleSearchCS = useCallback(() => {
-    setSearchCS(value => {
-      settings.set('searchCS', !value)
-      return !value
-    })
-  }, [settings])
+    const next = !searchCS
+    setSearchCS(next)
+    settings.set('searchCS', next)
+  }, [settings, searchCS])
   const toggleSearchRegex = useCallback(() => {
-    setSearchRegex(value => {
-      settings.set('searchRegex', !value)
-      return !value
-    })
-  }, [settings])
+    const next = !searchRegex
+    setSearchRegex(next)
+    settings.set('searchRegex', next)
+  }, [settings, searchRegex])
   const toggleWsIgnore = useCallback(() => {
-    setWsIgnore(value => {
-      settings.set('wsIgnore', !value)
-      return !value
-    })
-  }, [settings])
+    const next = !wsIgnore
+    setWsIgnore(next)
+    settings.set('wsIgnore', next)
+  }, [settings, wsIgnore])
+
+  /** Per-file transient states (blame gutter, hunk arms, preview, history):
+   *  they belong to one file+range, so every range/selection switch clears
+   *  them together with the selection. */
+  const resetFileTransient = useCallback(() => {
+    setBlameOn(false)
+    setHunkNotice(null)
+    setPreviewSource(false)
+    setPreviewBytes({ kind: 'idle' })
+    setHistoryState({ kind: 'closed' })
+  }, [])
 
   /** Pick a new diff base; the selection resets (the file list changes). */
   const changeBase = useCallback((ref: string | null) => {
     setBaseRef(ref)
     setSelected(null)
     setDiffScope('all')
-  }, [])
+    resetFileTransient()
+  }, [resetFileTransient])
 
   /** Pick the ref-range target; same reset semantics as the base. */
   const changeTarget = useCallback((ref: string | null) => {
     setTargetRef(ref)
     setSelected(null)
     setDiffScope('all')
-  }, [])
+    resetFileTransient()
+  }, [resetFileTransient])
 
   /** Swap the two range ends: flipping `A…B` to `B…A` is the fastest way to
    *  compare in the other direction (and to get HEAD back as an end). */
@@ -849,13 +882,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setTargetRef(baseRef)
     setSelected(null)
     setDiffScope('all')
-  }, [baseRef, targetRef])
+    resetFileTransient()
+  }, [baseRef, targetRef, resetFileTransient])
 
   /** Switch the comparison side between worktree and ref-range modes. */
   const changeCompareMode = useCallback((mode: CompareMode) => {
     setCompareMode(mode)
     setSelected(null)
     setDiffScope('all')
+    resetFileTransient()
     if (mode === 'refs') {
       // Both ends default to HEAD: the range is immediately ready (HEAD vs
       // HEAD shows no files — the picker invites real picks) instead of
@@ -863,7 +898,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       setBaseRef(previous => previous ?? 'HEAD')
       setTargetRef(previous => previous ?? 'HEAD')
     }
-  }, [])
+  }, [resetFileTransient])
 
   /** Switch the main view between workspace changes and the commit graph. */
   const changeViewTab = useCallback((tab: ViewTab) => {
@@ -932,13 +967,14 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   /** One graph history operation (reset/revert/cherry-pick): the error text
    *  to show in the commit menu, or null on success (it closes + refreshes). */
   const runHistory = useCallback(async (action: 'reset' | 'revert' | 'cherry-pick', commit: string, mode?: 'soft' | 'mixed' | 'hard'): Promise<string | null> => {
+    if (running) return t('commit.running')
     if (cwd === undefined) return t('state.hostUnavailable')
     const payload = await hostCall<GitWritePayload>(action, { cwd, commit, mode, confirm: true })
     if (payload === null) return t('state.hostUnavailable')
     if (!payload.ok) return payload.error ?? 'unknown error'
     refresh()
     return null
-  }, [cwd, refresh, t])
+  }, [cwd, running, refresh, t])
 
   /** Merge a branch into the current one; the answer surfaces in the branch
    *  popover's shared note area. */
@@ -998,11 +1034,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const toggleGraphList = useCallback(() => {
     // The user-facing fold toggle is the one that updates the remembered
     // default (auto-folds on commit selection are transient view state).
-    setGraphListCollapsed(value => {
-      settings.set('graphCollapsed', !value)
-      return !value
-    })
-  }, [settings])
+    const next = !graphListCollapsed
+    setGraphListCollapsed(next)
+    settings.set('graphCollapsed', next)
+  }, [settings, graphListCollapsed])
 
   const selectGraphFile = useCallback((path: string) => {
     setGraphFile(path)
@@ -1049,11 +1084,17 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     const next = at === -1 ? (forward ? 0 : files.length - 1) : forward ? Math.min(files.length - 1, at + 1) : Math.max(0, at - 1)
     selectFile(files[next]!.path)
   }, [viewTab, selected, selectedCommit, visibleGraph, allRows, ready, search, searchScope, selectFile, selectCommit, commitOpen, branchOpen, draftOpen, fileMenu])
-  // Focusing the root when the view activates (or the data lands) makes the
-  // keyboard flow live without a click; preventScroll keeps the view steady.
+  // Focusing the root when the view activates makes the keyboard flow live
+  // without a click; preventScroll keeps the view steady. Never steal focus
+  // on data refreshes (status.kind flips on every refresh — yanking focus
+  // out of the search box mid-typing), and never when focus is already
+  // inside the view.
   useEffect(() => {
-    rootRef.current?.focus({ preventScroll: true })
-  }, [viewTab, cwd, status.kind])
+    const root = rootRef.current
+    if (root !== null && (document.activeElement === null || !root.contains(document.activeElement))) {
+      root.focus({ preventScroll: true })
+    }
+  }, [viewTab, cwd])
 
   /** Run one branch management action and surface git's answer verbatim;
    *  a success refreshes status + refs (the branch may have changed). */
@@ -1147,6 +1188,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     }
   }, [t])
   const renameFile = useCallback(async (path: string, newPath: string): Promise<string | null> => {
+    if (running) return t('commit.running')
     if (cwd === undefined) return t('state.hostUnavailable')
     const payload = await hostCall<GitWritePayload>('file-op', { cwd, path, action: 'rename', newPath, confirm: true })
     if (payload === null) return t('state.hostUnavailable')
@@ -1154,8 +1196,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSelected(null)
     refresh()
     return null
-  }, [cwd, refresh, t])
+  }, [cwd, running, refresh, t])
   const removeFile = useCallback(async (path: string): Promise<string | null> => {
+    if (running) return t('commit.running')
     if (cwd === undefined) return t('state.hostUnavailable')
     const payload = await hostCall<GitWritePayload>('file-op', { cwd, path, action: 'delete', confirm: true })
     if (payload === null) return t('state.hostUnavailable')
@@ -1163,7 +1206,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSelected(null)
     refresh()
     return null
-  }, [cwd, refresh, t])
+  }, [cwd, running, refresh, t])
 
   /** Execute one armed write (commit / commit+push / push) against the host. */
   const executeWrite = useCallback(async (kind: 'commit' | 'commitPush' | 'push') => {
@@ -1204,6 +1247,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
    *  error text to show, or null on success (the menu closes and the
    *  worktree refreshes — the row's badges/staged halves may have changed). */
   const runGitAction = useCallback(async (action: 'stage' | 'unstage' | 'discard', path: string): Promise<string | null> => {
+    if (running) return t('commit.running')
     if (cwd === undefined) return t('state.hostUnavailable')
     const payload = await hostCall<GitWritePayload>(action, { cwd, paths: [path], confirm: true })
     if (payload === null) return t('state.hostUnavailable')
@@ -1211,17 +1255,18 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setSelected(null)
     refresh()
     return null
-  }, [cwd, refresh, t])
+  }, [cwd, running, refresh, t])
 
   /** One conflict resolution (ours/theirs + stage): the error text or null. */
   const runConflictResolve = useCallback(async (side: 'ours' | 'theirs', path: string): Promise<string | null> => {
+    if (running) return t('commit.running')
     if (cwd === undefined) return t('state.hostUnavailable')
     const payload = await hostCall<GitWritePayload>('conflict-resolve', { cwd, path, side, confirm: true })
     if (payload === null) return t('state.hostUnavailable')
     if (!payload.ok) return payload.error ?? 'unknown error'
     refresh()
     return null
-  }, [cwd, refresh, t])
+  }, [cwd, running, refresh, t])
 
   /** The stash list refresh (cheap; runs when the popover or section opens
    *  and after every stash mutation). */
@@ -1984,6 +2029,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       )}
       {fileMenu !== null && (
         <FileMenu
+          key={fileMenu.path}
           state={fileMenu}
           apps={openApps}
           // Graph-mode rows are historical files, not worktree files: no
@@ -1998,7 +2044,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           copyName={copyFileName}
           rename={renameFile}
           remove={removeFile}
-          gitAction={refsMode ? undefined : runGitAction}
+          gitAction={!refsMode && viewTab === 'changes' ? runGitAction : undefined}
           conflictResolve={runConflictResolve}
           t={t}
         />
@@ -2377,7 +2423,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               className={css.treeDivider}
               title={t('tree.resizeHint')}
               onMouseDown={startTreeResize}
-              onDoubleClick={() => { setTreeWidth(null); localStorage.removeItem('dsh-git-review.treeWidth') }}
+              onDoubleClick={() => { setTreeWidth(null); try { localStorage.removeItem('dsh-git-review.treeWidth') } catch { /* ignore */ } }}
             />
             <TreePanel
               width={treeWidth ?? undefined}

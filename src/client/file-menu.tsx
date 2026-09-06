@@ -71,21 +71,42 @@ interface LineItem {
   onClick: () => void
 }
 
+/** Add-to-chat row: owns the composer-draft subscription, so the menu
+ *  itself never calls a hook conditionally (the kit may arrive late). A
+ *  draft subscription at the review-view level would re-render the whole
+ *  pane on every composer keystroke — here only this row re-renders. */
+function ChatItem({ path, useInput, inputActions, onRun, t }: {
+  path: string
+  useInput: SnapshotSelectorHook<InputState>
+  inputActions: NonNullable<FileMenuProps['inputActions']>
+  onRun: (label: string, fn: () => Promise<string | null>) => void
+  t: T
+}) {
+  const draft = useInput((s: InputState) => s.draft)
+  return (
+    <button
+      type="button"
+      className={css.fileMenuItem}
+      onClick={() => {
+        onRun('chat', () => {
+          const current = draft.replace(/\s+$/, '')
+          inputActions.setDraft(current === '' ? path : current + '\n' + path)
+          return Promise.resolve(null)
+        })
+      }}
+    >
+      <span className={css.fileMenuItemIcon}><CheckIcon /></span>
+      <span className={css.pickerItemName}>{t('menu.addToChat')}</span>
+    </button>
+  )
+}
+
 export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, conflictResolve, t }: FileMenuProps) {
   const [mode, setMode] = useState<'menu' | 'apps' | 'rename' | 'delete' | 'discard' | 'busy'>('menu')
   const [renameValue, setRenameValue] = useState(state.path)
   const [note, setNote] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const canChat = useInput !== undefined && inputActions !== undefined
-  // The draft is read inside this component's render (a draft subscription
-  // at the review-view level would re-render the pane on every keystroke).
-  const draft = useInput !== undefined ? useInput((s: InputState) => s.draft) : ''
-  const addToChat = (path: string): Promise<string | null> => {
-    if (useInput === undefined || inputActions === undefined) return Promise.resolve(t('menu.chatUnavailable'))
-    const current = draft.replace(/\s+$/, '')
-    inputActions.setDraft(current === '' ? path : current + '\n' + path)
-    return Promise.resolve(null)
-  }
 
   useEffect(() => {
     if (mode === 'busy') return
@@ -140,6 +161,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
       case 'notepad': return t('menu.app.notepad')
       case 'code': return t('menu.app.code')
       case 'code-insiders': return t('menu.app.codeInsiders')
+      default: return id
     }
   }
 
@@ -155,7 +177,9 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
           value={renameValue}
           onChange={event => { setRenameValue(event.target.value) }}
           onKeyDown={event => {
-            if (event.key === 'Enter') void run('rename', () => rename(state.path, renameValue.trim()))
+            if (event.key === 'Enter' && renameValue.trim() !== '' && renameValue.trim() !== state.path) {
+              void run('rename', () => rename(state.path, renameValue.trim()))
+            }
             if (event.key === 'Escape') setMode('menu')
           }}
           autoFocus
@@ -210,7 +234,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
           <button
             type="button"
             className={css.commitBtn + ' ' + css.branchDanger}
-            onClick={() => { void run('discard', () => gitAction?.('discard', state.path) ?? Promise.resolve('unavailable')) }}
+            onClick={() => { void run('discard', () => gitAction?.('discard', state.path) ?? Promise.resolve(t('menu.unavailable'))) }}
           >
             {t('menu.confirmDiscard')}
           </button>
@@ -281,15 +305,8 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
             <span className={css.fileMenuItemIcon}><CopyIcon /></span>
             <span className={css.pickerItemName}>{t('menu.copyName')}</span>
           </button>
-          {canChat && (
-            <button
-              type="button"
-              className={css.fileMenuItem}
-              onClick={() => { void run('chat', () => addToChat(state.path)) }}
-            >
-              <span className={css.fileMenuItemIcon}><CheckIcon /></span>
-              <span className={css.pickerItemName}>{t('menu.addToChat')}</span>
-            </button>
+          {canChat && useInput !== undefined && inputActions !== undefined && (
+            <ChatItem path={state.path} useInput={useInput} inputActions={inputActions} onRun={(label, fn) => { void run(label, fn) }} t={t} />
           )}
           {writable && !refsMode && state.git?.conflicted === true && conflictResolve !== undefined && (
             <>

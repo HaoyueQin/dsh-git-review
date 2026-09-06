@@ -159,9 +159,19 @@ export function createReviewSettings(storage: PrefsStorage | undefined = typeof 
           if (raw !== null) {
             const fields = migrationFields(raw)
             if (fields !== null && snap.writable && sectionIsDefault(snap.value)) {
-              for (const [field, value] of Object.entries(fields)) void bound.set(field, value)
+              // The legacy store goes away only after every field lands: a
+              // failed write must keep the old copy for the next attempt.
+              const pending = Object.entries(fields).map(([field, value]) => bound.set(field, value))
+              void Promise.allSettled(pending).then(results => {
+                if (results.every(result => result.status === 'fulfilled')) removeLegacyStore(storage)
+              })
+            } else if (fields === null || sectionIsDefault(snap.value)) {
+              // Nothing to carry, or the scope already holds user choices
+              // (legacy superseded): drop the legacy copy. A read-only
+              // scope keeps it — deleting would strand the user's prefs
+              // with nowhere to live.
+              removeLegacyStore(storage)
             }
-            removeLegacyStore(storage)
           }
         }
         publish({ status: 'ready', prefs: prefsFromSection(snap.value), writable: snap.writable })

@@ -815,14 +815,24 @@ async function serveAsset(req: IncomingMessage, res: ServerResponse): Promise<vo
 /** Line cap for blame (a review tab is not a history aquarium). */
 const BLAME_LINE_CAP = 20_000
 
-/** One `blame` answer: per-final-line last-touched commit (porcelain). */
-export async function gitBlame(cwd: unknown, path: unknown): Promise<GitBlamePayload> {
+/** One `blame` answer: per-final-line last-touched commit (porcelain). A
+ *  `ref` blames that history tree instead of the worktree, so the gutter
+ *  matches the file view in ref-range mode (whose content reads the target
+ *  tree, not the worktree). */
+export async function gitBlame(cwd: unknown, path: unknown, ref: unknown): Promise<GitBlamePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
+  let rev: string | null = null
+  if (typeof ref === 'string' && ref !== '') {
+    const normalized = normalizeBaseRef(ref)
+    if (normalized === null) throw new Error('invalid ref')
+    rev = await resolveRangeRef(repoRoot, normalized)
+    if (rev === null || rev === EMPTY_TREE_ID) throw new Error('cannot resolve ref')
+  }
   // J9-2: blame porcelain is metadata-heavy (one block per line); stream it.
-  const streamed = await runGitStreamed(repoRoot, ['blame', '--porcelain', '--', relPath])
+  const streamed = await runGitStreamed(repoRoot, ['blame', '--porcelain', ...(rev !== null ? [rev] : []), '--', relPath])
   if (streamed.code !== 0) throw new Error('git blame failed: ' + (streamed.stderr.trim() || streamed.stdout.trim()))
   const rows = parseBlamePorcelain(streamed.stdout)
   return { ok: true, lines: rows.slice(0, BLAME_LINE_CAP), truncated: streamed.truncated || rows.length > BLAME_LINE_CAP }
@@ -2043,7 +2053,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'blame') {
-          respond(res, 200, await gitBlame(body['cwd'], body['path']))
+          respond(res, 200, await gitBlame(body['cwd'], body['path'], body['ref']))
           return
         }
         if (action === 'file-history') {

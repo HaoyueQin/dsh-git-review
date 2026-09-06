@@ -96,11 +96,18 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, viewedHas, onTo
           aria-checked={viewed}
           aria-label={viewedTitle}
           title={viewedTitle}
-          tabIndex={-1}
+          tabIndex={0}
           className={css.viewedDot + (viewed ? ' ' + css.viewedDotDone : '')}
           onClick={(event) => {
             event.stopPropagation()
             onToggleViewed(blob)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              event.stopPropagation()
+              onToggleViewed(blob)
+            }
           }}
         >
           {viewed ? '\u2713' : ''}

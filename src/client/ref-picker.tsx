@@ -134,7 +134,13 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
   const display = value !== null ? text : (headLabel !== null ? headLabel : placeholder)
 
   return (
-    <span className={css.pickerWrap} ref={rootRef}>
+    <span
+      className={css.pickerWrap}
+      ref={rootRef}
+      onKeyDown={event => {
+        if (event.key === 'Escape' && open) { setOpen(false); setQuery('') }
+      }}
+    >
       <button
         type="button"
         className={css.pickerBtn + (open ? ' ' + css.pickerBtnOpen : '')}

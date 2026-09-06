@@ -547,6 +547,16 @@ assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [{ pa
 box.clear()
 assert.deepEqual(box.list(), [])
 assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [])
+// 38b. Draft validation: empty path/text and non-finite lines drop, negative
+//      lines clamp to 1, oversized bodies trim, and the box caps at 200.
+assert.deepEqual(parseDrafts('[{"path":"a","line":-2,"text":""}]'), [])
+assert.deepEqual(parseDrafts('[{"path":"a","line":0,"text":"ok"}]'), [{ path: 'a', line: 1, text: 'ok' }])
+const bigBox = createDraftBox('D:\\big', memoryStorage())
+for (let i = 0; i < 205; i++) bigBox.add({ path: 'f' + i + '.ts', line: i + 1, text: 'c' })
+assert.equal(bigBox.list().length, 200)
+assert.equal(bigBox.list()[0].path, 'f5.ts')
+bigBox.add({ path: '', line: 1, text: 'junk' })
+assert.equal(bigBox.list().length, 200)
 
 // 39. Stash list parsing: stash@{n} selector extraction, / records,
 //     malformed records skipped (same shape the log feed uses).

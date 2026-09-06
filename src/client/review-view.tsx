@@ -184,6 +184,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }, [treeWidth])
+  /** Keyboard resize for the tree divider (arrows move 20px, Shift+arrows 100px). */
+  const onTreeResizeKey = useCallback((event: React.KeyboardEvent) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const step = event.shiftKey ? 100 : 20
+    // The tree sits on the right: dragging LEFT widens it, like the mouse path.
+    const next = Math.min(460, Math.max(200, Math.round((treeWidth ?? 260) + (event.key === 'ArrowLeft' ? step : -step))))
+    setTreeWidth(next)
+    try { localStorage.setItem('dsh-git-review.treeWidth', String(next)) } catch { /* private mode — width just doesn't persist */ }
+  }, [treeWidth])
   // All-files tree mode: the whole repository file list (lazily fetched).
   const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
   const [allFiles, setAllFiles] = useState<string[] | null>(null)
@@ -283,6 +293,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setGraphListWidth(null)
     try { localStorage.removeItem('dsh-git-review.graphWidth') } catch { /* private mode — nothing persisted */ }
   }, [])
+  /** Keyboard resize for the divider (arrows move 20px, Shift+arrows 100px). */
+  const onGraphResizeKey = useCallback((event: React.KeyboardEvent) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const step = event.shiftKey ? 100 : 20
+    const base = graphListWidth ?? graphListRef.current?.getBoundingClientRect().width ?? 480
+    const next = Math.min(900, Math.max(180, Math.round(base + (event.key === 'ArrowRight' ? step : -step))))
+    setGraphListWidth(next)
+    try { localStorage.setItem('dsh-git-review.graphWidth', String(next)) } catch { /* private mode — width just doesn't persist */ }
+  }, [graphListWidth])
   // The worktree virtual row's detail state (the graph view can show the
   // uncommitted changes as if they were a "commit").
   const [graphWorktree, setGraphWorktree] = useState(false)
@@ -571,12 +591,18 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     return () => { alive = false }
   }, [viewTab, cwd, selectedCommit])
 
+  /** Copy-feedback timer: cleared on unmount so a late tick never touches a dead tree. */
+  const copyTimerRef = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
+  }, [])
   /** Copy the selected commit's full hash (the detail bar's hash button). */
   const copyCommitHash = useCallback(() => {
     if (selectedCommit === null) return
     void navigator.clipboard?.writeText(selectedCommit).then(() => {
       setCopiedHash(true)
-      window.setTimeout(() => { setCopiedHash(false) }, 1500)
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
+      copyTimerRef.current = window.setTimeout(() => { setCopiedHash(false) }, 1500)
     }).catch(() => { /* clipboard unavailable — the hash stays visible */ })
   }, [selectedCommit])
 
@@ -980,6 +1006,17 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setGraphListCollapsed(true)
   }, [selectedCommit])
 
+  /** Select a graph commit unconditionally (jumps never toggle: re-jumping
+   *  the already-selected commit must land on its detail, not deselect). */
+  const jumpSelectCommit = useCallback((hash: string) => {
+    setGraphWorktree(false)
+    setGraphWorktreeFile(null)
+    setSelectedCommit(hash)
+    setGraphFile(null)
+    setDiffScope('all')
+    setGraphListCollapsed(true)
+  }, [])
+
   /** Jump from the history popover to the graph: switch tabs and select the
    *  commit when the loaded graph window has it (500-cap); otherwise just
    *  open the graph (its load-more reaches older commits). */
@@ -987,8 +1024,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setHistoryState({ kind: 'closed' })
     const known = logState.kind === 'ready' && logState.commits.some(commit => commit.hash === hash)
     changeViewTab('graph')
-    if (known) selectCommit(hash)
-  }, [logState, changeViewTab, selectCommit])
+    if (known) jumpSelectCommit(hash)
+  }, [logState, changeViewTab, jumpSelectCommit])
 
   /** Jump from a blame gutter commit to the same graph detail, remembering
    *  the file view for the one-click return. Mirrors jumpToCommit. */
@@ -1001,8 +1038,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     // changeViewTab clears transient tab state; restore the return after it.
     setBlameReturn(origin)
     setBlameFocus(origin)
-    if (known) selectCommit(hash)
-  }, [selected, logState, changeViewTab, selectCommit])
+    if (known) jumpSelectCommit(hash)
+  }, [selected, logState, changeViewTab, jumpSelectCommit])
 
   /** Return from a blame-opened commit to the file view it came from. */
   const backToBlameFile = useCallback(() => {
@@ -1162,7 +1199,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     if (event.ctrlKey || event.metaKey || event.altKey) return
     const target = event.target as HTMLElement | null
     if (target !== null && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
-    if (commitOpen || branchOpen || draftOpen || fileMenu !== null) return
+    if (commitOpen || branchOpen || draftOpen || fileMenu !== null || commitMenu !== null || historyState.kind !== 'closed') return
     if (event.key === '/') {
       event.preventDefault()
       searchInputRef.current?.focus()
@@ -1184,7 +1221,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     const at = files.findIndex(file => file.path === selected)
     const next = at === -1 ? (forward ? 0 : files.length - 1) : forward ? Math.min(files.length - 1, at + 1) : Math.max(0, at - 1)
     selectFile(files[next]!.path)
-  }, [viewTab, selected, selectedCommit, visibleGraph, allRows, ready, search, searchScope, selectFile, selectCommit, commitOpen, branchOpen, draftOpen, fileMenu])
+  }, [viewTab, selected, selectedCommit, visibleGraph, allRows, ready, search, searchScope, selectFile, selectCommit, commitOpen, branchOpen, draftOpen, fileMenu, commitMenu, historyState])
   // Focusing the root when the view activates makes the keyboard flow live
   // without a click; preventScroll keeps the view steady. Never steal focus
   // on data refreshes (status.kind flips on every refresh — yanking focus
@@ -2246,9 +2283,15 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                 className={css.graphResizeHandle}
                 role="separator"
                 aria-orientation="vertical"
+                aria-label={t('graph.resizeHint')}
+                aria-valuemin={180}
+                aria-valuemax={900}
+                aria-valuenow={graphListWidth === null ? undefined : graphListWidth}
+                tabIndex={0}
                 title={t('graph.resizeHint')}
                 onMouseDown={startGraphResize}
                 onDoubleClick={resetGraphWidth}
+                onKeyDown={onGraphResizeKey}
               />
             )}
             <main className={css.mainPane}>
@@ -2493,6 +2536,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
               <div className={css.emptyState}>
                 <div className={css.emptyTitle}>{refsMode && !rangeReady ? t('compare.refs') : t('empty.title')}</div>
                 <div className={css.emptyHint}>{refsMode && !rangeReady ? t('compare.pickHint') : t('empty.hint')}</div>
+                {pluginOpenReturn !== null && selected !== null && selectedFile === null && (
+                  <div className={css.emptyHint}>{t('graph.notInWorkspace')}</div>
+                )}
               </div>
             )
             : diff.kind === 'failed'
@@ -2576,9 +2622,17 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           <>
             <span
               className={css.treeDivider}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t('tree.resizeHint')}
+              aria-valuemin={200}
+              aria-valuemax={460}
+              aria-valuenow={treeWidth === null ? undefined : treeWidth}
+              tabIndex={0}
               title={t('tree.resizeHint')}
               onMouseDown={startTreeResize}
               onDoubleClick={() => { setTreeWidth(null); try { localStorage.removeItem('dsh-git-review.treeWidth') } catch { /* ignore */ } }}
+              onKeyDown={onTreeResizeKey}
             />
             <TreePanel
               width={treeWidth ?? undefined}
@@ -2631,6 +2685,9 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
   const [initArmed, setInitArmed] = useState(false)
   const [initBusy, setInitBusy] = useState(false)
   const [initError, setInitError] = useState<string | null>(null)
+  /** Preview bytes for raster images and PDFs (markdown stays source-only here). */
+  const [previewBytes, setPreviewBytes] = useState<PreviewBytesState>({ kind: 'idle' })
+  const [previewSource, setPreviewSource] = useState(false)
   useEffect(() => {
     let alive = true
     setEntries(null)
@@ -2655,6 +2712,22 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
     })
     return () => { alive = false }
   }, [cwd, selected])
+  const nrKind = selected !== null ? previewKindForPath(selected) : null
+  const nrSvg = selected !== null && selected.toLowerCase().endsWith('.svg')
+  /** Previewable without the changes view (markdown stays source-only: its
+   *  asset inliner needs the worktree diff pipeline). */
+  const nrPreviewKind = nrKind === 'image' || nrKind === 'pdf' || nrKind === 'html' ? nrKind : null
+  useEffect(() => {
+    setPreviewSource(false)
+    if (selected === null) { setPreviewBytes({ kind: 'idle' }); return }
+    const kind = previewKindForPath(selected)
+    if (kind !== 'image' && kind !== 'pdf') { setPreviewBytes({ kind: 'idle' }); return }
+    if (kind === 'image' && selected.toLowerCase().endsWith('.svg')) { setPreviewBytes({ kind: 'idle' }); return }
+    let alive = true
+    setPreviewBytes({ kind: 'loading' })
+    void loadPreviewBytes(cwd, selected).then(next => { if (alive) setPreviewBytes(next) })
+    return () => { alive = false }
+  }, [cwd, selected])
   const segments = dir === '.' ? [] : dir.split('/')
   const goUp = (): void => {
     if (segments.length === 0) return
@@ -2671,7 +2744,6 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
       onDidInit()
     })
   }
-  const selectedEntry = selected !== null ? entries?.find(entry => entry.path === selected) ?? null : null
   const syntheticFile: ChangedFile | null = selected !== null ? { path: selected, x: '?', y: '?', added: 0, deleted: 0, binary: content.kind === 'binary', untracked: true } : null
   return (
     <div className={css.root} data-conversation-composer-overlay="">
@@ -2731,10 +2803,47 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
         </div>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           {selected === null && <div className={css.paneNotice}>{t('state.notRepo.hint') + ' ' + t('state.notRepo.initHint')}</div>}
-          {selected !== null && content.kind === 'loading' && <div className={css.paneNotice}>{t('file.loading')}</div>}
+          {selected !== null && content.kind === 'loading' && nrPreviewKind === null && <div className={css.paneNotice}>{t('file.loading')}</div>}
           {selected !== null && content.kind === 'failed' && <div className={css.noticeRow + ' ' + css.noticeError}>{content.message}</div>}
-          {selected !== null && content.kind === 'binary' && <div className={css.paneNotice}>{t('diff.binary')}</div>}
-          {selected !== null && content.kind === 'content' && syntheticFile !== null && (
+          {selected !== null && content.kind === 'binary' && (nrPreviewKind === null || nrKind === 'html' || nrSvg) && <div className={css.paneNotice}>{t('diff.binary')}</div>}
+          {selected !== null && syntheticFile !== null && nrPreviewKind !== null && !previewSource && content.kind !== 'failed' && (
+            nrPreviewKind === 'html' || nrSvg
+              ? content.kind === 'content' ? (
+                <PreviewPane
+                  file={syntheticFile}
+                  kind={nrPreviewKind}
+                  text={content.content}
+                  textLoading={false}
+                  textTruncated={content.truncated}
+                  dataUrl={nrSvg ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(content.content) : null}
+                  bytesFailed={false}
+                  bytesTruncated={false}
+                  onShowSource={() => { setPreviewSource(true) }}
+                  t={t}
+                />
+              ) : null
+              : previewBytes.kind === 'ready' && !previewBytes.truncated &&
+                (nrPreviewKind === 'pdf' ? previewBytes.mime === 'application/pdf' : previewBytes.mime.startsWith('image/')) ? (
+                <PreviewPane
+                  file={syntheticFile}
+                  kind={nrPreviewKind}
+                  text=""
+                  textLoading={false}
+                  dataUrl={'data:' + previewBytes.mime + ';base64,' + previewBytes.base64}
+                  bytesFailed={false}
+                  bytesTruncated={false}
+                  onShowSource={() => { setPreviewSource(true) }}
+                  t={t}
+                />
+              ) : previewBytes.kind === 'failed' || (previewBytes.kind === 'ready' && (previewBytes.truncated ||
+                (nrPreviewKind === 'pdf' ? previewBytes.mime !== 'application/pdf' : !previewBytes.mime.startsWith('image/')))) ? (
+                <div className={css.paneNotice}>{
+                  previewBytes.kind === 'ready' && previewBytes.truncated ? t('preview.tooLarge') : t('preview.loadFailed')}</div>
+              ) : content.kind === 'loading' || previewBytes.kind === 'loading' ? (
+                <div className={css.paneNotice}>{t('preview.loading')}</div>
+              ) : null
+          )}
+          {selected !== null && content.kind === 'content' && syntheticFile !== null && (nrPreviewKind === null || previewSource) && (
             <FilePane
               file={syntheticFile}
               search={{ query: '' }}
@@ -2753,7 +2862,6 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
               t={t}
             />
           )}
-          {selectedEntry !== null && selectedEntry.kind === 'file' && <div style={{ display: 'none' }}>{selectedEntry.size ?? ''}</div>}
         </div>
       </div>
     </div>

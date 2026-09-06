@@ -155,7 +155,7 @@ function WorktreeRow({ width, label, selected, onSelect, columns, density }: { w
  *  shared template so header, rows and the worktree row never drift apart.
  *  Densities 1-3 are leading prefixes of the full template, so narrowing
  *  the list drops author, then hash, then date, in that order. */
-export const GRAPH_COLUMNS = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px 64px minmax(76px, 110px)'
+const GRAPH_COLUMNS = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px 64px minmax(76px, 110px)'
 const GRAPH_DENSITY_COLUMNS: Record<GraphDensity, string> = {
   0: 'var(--graph-w)',
   1: 'calc(var(--graph-w) + 6px) minmax(0, 1fr)',

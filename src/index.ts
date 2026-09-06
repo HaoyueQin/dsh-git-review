@@ -266,27 +266,85 @@ async function readPrefix(absPath: string, maxBytes: number): Promise<{ bytes: B
   }
 }
 
+/** Per-file exact line-count ceiling for untracked probes: files at or
+ *  under it are counted exactly with bounded streaming reads instead of the
+ *  512 KiB prefix estimate (whose undercount leaked into the status totals). */
+const PROBE_EXACT_CAP = 8 * 1024 * 1024
+/** Total exact-count bytes scanned per status call: past it, further probes
+ *  degrade to prefix estimates so one giant-untracked repo cannot stall the tab. */
+const PROBE_BUDGET_CAP = 32 * 1024 * 1024
+/** Prefix-scan chunk for exact counting (constant memory regardless of file size). */
+const PROBE_CHUNK = 64 * 1024
+
+/** Count newlines (plus a final unterminated line) over at most maxBytes of
+ *  a file, streaming in fixed chunks; reports whether EOF was reached (an
+ *  exact count) or the scan stopped early (a prefix estimate, as before). */
+async function scanLineCount(absPath: string, size: number, maxBytes: number): Promise<{ added: number; binary: boolean; scanned: number }> {
+  const handle = await open(absPath, 'r')
+  try {
+    const buf = Buffer.alloc(PROBE_CHUNK)
+    let pos = 0
+    let read = 0
+    let added = 0
+    let last = -1
+    let binary = false
+    while (pos < size && read < maxBytes) {
+      const want = Math.min(buf.length, size - pos, maxBytes - read)
+      const { bytesRead } = await handle.read(buf, 0, want, pos)
+      if (bytesRead === 0) break
+      const slice = buf.subarray(0, bytesRead)
+      if (slice.includes(0)) { binary = true; read += bytesRead; break }
+      for (let i = 0; i < bytesRead; i++) if (slice[i] === 0x0a) added += 1
+      last = slice[bytesRead - 1]!
+      pos += bytesRead
+      read += bytesRead
+    }
+    const eof = pos >= size
+    if (!binary && eof && size > 0 && last !== 0x0a) added += 1
+    return { added: binary ? 0 : added, binary, scanned: read }
+  } finally {
+    await handle.close()
+  }
+}
+
 /**
- * Line count + binary probe for one untracked file, bounded by READ_CAP:
- * a NUL byte anywhere in the prefix marks binary; otherwise the count is the
- * newline total (a final line without its newline still counts).
+ * Line count + binary probe for one untracked file: exact up to
+ * PROBE_EXACT_CAP per file and PROBE_BUDGET_CAP per status call (a NUL byte
+ * anywhere scanned marks binary); beyond either budget the count degrades
+ * to the READ_CAP prefix estimate. A final line without its newline counts.
  */
-async function probeUntracked(repoRoot: string, relPath: string): Promise<{ added: number; binary: boolean } | null> {
+async function probeUntracked(repoRoot: string, relPath: string, budget: { remaining: number }): Promise<{ added: number; binary: boolean } | null> {
   const absPath = resolve(repoRoot, relPath)
   if (!inside(repoRoot, absPath)) return null
+  let size: number
   try {
     const stat = await lstat(absPath)
     if (!stat.isFile()) return null
+    size = stat.size
   } catch {
     return null
   }
   try {
-    const { bytes } = await readPrefix(absPath, READ_CAP)
-    if (bytes.includes(0)) return { added: 0, binary: true }
-    let added = 0
-    for (let at = bytes.indexOf(0x0a); at !== -1; at = bytes.indexOf(0x0a, at + 1)) added += 1
-    if (bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) added += 1
-    return { added, binary: false }
+    if (size <= READ_CAP) {
+      const { bytes } = await readPrefix(absPath, READ_CAP)
+      if (bytes.includes(0)) return { added: 0, binary: true }
+      let added = 0
+      for (let at = bytes.indexOf(0x0a); at !== -1; at = bytes.indexOf(0x0a, at + 1)) added += 1
+      if (bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) added += 1
+      return { added, binary: false }
+    }
+    const allowance = Math.min(size, PROBE_EXACT_CAP, budget.remaining)
+    if (allowance <= READ_CAP) {
+      const { bytes } = await readPrefix(absPath, READ_CAP)
+      if (bytes.includes(0)) return { added: 0, binary: true }
+      let added = 0
+      for (let at = bytes.indexOf(0x0a); at !== -1; at = bytes.indexOf(0x0a, at + 1)) added += 1
+      if (bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) added += 1
+      return { added, binary: false }
+    }
+    const counted = await scanLineCount(absPath, size, allowance)
+    budget.remaining -= counted.scanned
+    return { added: counted.added, binary: counted.binary }
   } catch {
     return null
   }
@@ -453,11 +511,13 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
       ...porcelainEntries.filter(entry => entry.x === '?'),
     ]
     : porcelainEntries
-  // Untracked files have no numstat row: probe each once (bounded reads).
+  // Untracked files have no numstat row: probe each once (bounded reads,
+  // exact within the shared per-status budget, prefix estimates past it).
   const untrackedCounts = new Map<string, { added: number; binary: boolean }>()
+  const untrackedBudget = { remaining: PROBE_BUDGET_CAP }
   for (const entry of finalEntries) {
     if (entry.x !== '?') continue
-    const probe = await probeUntracked(repoRoot, entry.path)
+    const probe = await probeUntracked(repoRoot, entry.path, untrackedBudget)
     if (probe !== null) untrackedCounts.set(entry.path, probe)
   }
   const files: ChangedFile[] = mergeStatus(finalEntries, numstat, untrackedCounts)
@@ -2016,12 +2076,17 @@ const HUNK_BODY_CAP = 600 * 1024
 /** Read the request body with a hard cap; rejects oversized or non-JSON bodies. */
 function readJsonBody(req: IncomingMessage, res: ServerResponse, bodyCap: number = BODY_CAP): Promise<Record<string, unknown>> {
   return new Promise((resolvePromise, rejectPromise) => {
+    // Settled once a 415/413 answer goes out: the drained tail keeps
+    // flowing through 'data'/'end' below, and a second writeHead on the
+    // finished response would throw ERR_HTTP_HEADERS_SENT into the host.
+    let responded = false
     // CSRF hardening (J8-4): a JSON content-type cannot be sent cross-origin
     // by a plain form submit or a navigated <img>, which closes the classic
     // no-cors write vectors. The API is same-origin fenced already; this is
     // belt over the braces.
     const contentType = String(req.headers['content-type'] ?? '')
     if (!contentType.toLowerCase().includes('application/json')) {
+      responded = true
       rejectPromise(new Error('content-type must be application/json'))
       res.writeHead(415, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ ok: false, error: 'content-type must be application/json' }))
@@ -2034,8 +2099,10 @@ function readJsonBody(req: IncomingMessage, res: ServerResponse, bodyCap: number
     const chunks: Buffer[] = []
     let size = 0
     req.on('data', (chunk: Buffer) => {
+      if (responded) return
       size += chunk.length
       if (size > bodyCap) {
+        responded = true
         rejectPromise(new Error('request body too large'))
         // Answer before destroying: a bare destroy surfaces as a network
         // failure to the client, indistinguishable from the host being gone.
@@ -2049,6 +2116,7 @@ function readJsonBody(req: IncomingMessage, res: ServerResponse, bodyCap: number
       chunks.push(chunk)
     })
     req.on('end', () => {
+      if (responded) return
       try {
         const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         if (parsed === null || typeof parsed !== 'object') rejectPromise(new Error('body must be a JSON object'))

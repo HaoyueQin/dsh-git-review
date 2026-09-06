@@ -352,7 +352,7 @@ export type GitFileOpArgs =
   | { cwd: string; path: string; action: 'rename'; newPath: string; confirm: true }
   | { cwd: string; path: string; action: 'delete'; confirm: true }
 export interface GitOpenWithArgs { cwd: string; path: string; app: OpenApp['id']; confirm: true }
-/** Action → request-body map (38 dispatch actions; ping/asset are GET). */
+/** Action → request-body map (40 dispatch actions; ping/asset are GET). */
 export interface GitActionArgs {
   status: GitStatusArgs
   'file-diff': GitFileDiffArgs

@@ -268,13 +268,6 @@ export function parseNameStatusZ(raw: string): NameStatusRow[] {
   return rows
 }
 
-/** Index name-status rows by destination path. */
-export function nameStatusIndex(rows: readonly NameStatusRow[]): Map<string, NameStatusRow> {
-  const index = new Map<string, NameStatusRow>()
-  for (const row of rows) index.set(row.path, row)
-  return index
-}
-
 /** One decoration in a `%D` list: the ref name and its display class. */
 export interface DecorationEntry {
   name: string
@@ -566,7 +559,7 @@ export function sniffPreviewMime(bytes: Uint8Array): PreviewMime | null {
   if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
     return 'image/jpeg'
   }
-  if (bytes.length >= 6 && ascii(0, 'GIF87a') || bytes.length >= 6 && ascii(0, 'GIF89a')) {
+  if (bytes.length >= 6 && (ascii(0, 'GIF87a') || ascii(0, 'GIF89a'))) {
     return 'image/gif'
   }
   if (bytes.length >= 12 && ascii(0, 'RIFF') && ascii(8, 'WEBP')) {
@@ -598,7 +591,8 @@ export function sniffPreviewMime(bytes: Uint8Array): PreviewMime | null {
     at += 1
     while (at < bytes.length && (bytes[at] === 0x20 || bytes[at] === 0x09 || bytes[at] === 0x0A || bytes[at] === 0x0D)) at += 1
   }
-  if (ascii(at, '<svg')) {
+  // '<svg' must end at a tag delimiter — '<svgx…' is not SVG.
+  if (ascii(at, '<svg') && (at + 4 >= bytes.length || [0x20, 0x09, 0x0a, 0x0d, 0x3e, 0x2f].includes(bytes[at + 4]!))) {
     return 'image/svg+xml'
   }
   return null

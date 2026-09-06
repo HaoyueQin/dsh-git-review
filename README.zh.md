@@ -68,7 +68,7 @@ dsh plugin --profile web add ./dsh-git-review-0.1.0.tgz
 dsh web
 ```
 
-要求 DeepSeek Harness `>=0.1.2-rc.1`、harness 工作区位于 git 仓库内，且宿主 PATH 里有 git。其他情况下标签页内给出明确指引，绝不白屏。
+要求 DeepSeek Harness `>=0.1.2-rc.1`，且宿主 PATH 里有 git。工作区不在 git 仓库内时，标签页提供文件浏览与一键初始化，而不是审查工作台——绝不白屏。
 
 ## 检查
 

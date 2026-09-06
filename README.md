@@ -70,7 +70,7 @@ dsh plugin --profile web add ./dsh-git-review-0.1.0.tgz
 dsh web
 ```
 
-Requires DeepSeek Harness `>=0.1.2-rc.1`, the harness workspace to sit inside a git repository, and git on the host PATH. Anywhere else, the tab degrades to explicit guidance copy — never a blank screen.
+Requires DeepSeek Harness `>=0.1.2-rc.1` and git on the host PATH. Outside a git repository the tab offers file browsing with one-click `git init` instead of the review workbench — never a blank screen.
 
 ## Checks
 

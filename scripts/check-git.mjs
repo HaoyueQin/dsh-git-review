@@ -573,6 +573,16 @@ try {
   assert.equal(after.ok, true)
 }
 
+// 22. Untracked probes count exactly past the 512 KiB prefix cap (bounded
+//     streaming reads within the per-status budget).
+{
+  const big = fixture()
+  const lines = 6000
+  writeFileSync(join(big, 'big.txt'), ('x'.repeat(99) + '\n').repeat(lines))
+  const st = await gitStatus(big, null, null, false)
+  assert.equal(st.files.find(file => file.path === 'big.txt')?.added, lines)
+}
+
 try {
   for (const root of roots) rmSync(root, { recursive: true, force: true })
   rmSync(ROOT, { recursive: true, force: true })

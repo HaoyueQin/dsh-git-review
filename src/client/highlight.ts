@@ -24,14 +24,16 @@ export interface TokenSpan {
 /** Map a file path to its highlighting language family (null = no highlighting). */
 export function langOf(path: string): string | null {
   const name = path.split('/').pop() ?? path
-  if (/^dockerfile/i.test(name) && (name.length === 10 || name[10] === '.')) return 'sh'
+  // Any Dockerfile* basename highlights as shell (one prefix test covers
+  // Dockerfile, Dockerfile.dev and bare 'dockerfile' alike).
+  if (/^dockerfile/i.test(name)) return 'sh'
   const dot = name.lastIndexOf('.')
   if (dot <= 0) return null
   const ext = name.slice(dot + 1).toLowerCase()
   if (['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts'].includes(ext)) return 'c'
   if (['json', 'jsonc', 'json5'].includes(ext)) return 'json'
   if (['py', 'pyw', 'pyi'].includes(ext)) return 'py'
-  if (['sh', 'bash', 'zsh', 'ps1', 'dockerfile'].includes(ext) || /^dockerfile/i.test(name)) return 'sh'
+  if (['sh', 'bash', 'zsh', 'ps1', 'dockerfile'].includes(ext)) return 'sh'
   if (['css', 'scss', 'less'].includes(ext)) return 'css'
   if (['go', 'rs', 'java', 'kt', 'swift', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs', 'php', 'dart', 'vue'].includes(ext)) return 'c'
   if (ext === 'sql') return 'sql'

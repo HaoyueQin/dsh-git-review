@@ -7,7 +7,8 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
+import { buildHunkPatch } from '../src/client/diff-parse.ts'
+import { gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileDiff, gitHunkOp, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -242,6 +243,59 @@ sh(repo, 'checkout', 'main')
   assert.equal(aborted.ok, true)
   assert.equal((await gitStatus(repo, null, null, false)).inProgress ?? null, null)
   assert.equal(readLF('a.txt'), 'main2 line\n')
+}
+
+// 9. hunk-op: a two-hunk diff is cut apart — staging hunk 0 lands only that
+//    half in the index, unstaging returns it, reverting hunk 1 restores the
+//    worktree text. The validator rejects multi-hunk patches and path swaps.
+const HUNK_FILE = 'hunk.txt'
+const baseline = Array.from({ length: 20 }, (_, i) => 'line ' + String(i + 1)).join('\n') + '\n'
+writeFileSync(join(repo, HUNK_FILE), baseline)
+sh(repo, 'add', '-A')
+sh(repo, 'commit', '-m', 'hunk baseline')
+const lines = baseline.split('\n')
+lines[2] = 'line 3 edited'
+lines[16] = 'line 17 edited'
+const edited = lines.join('\n')
+writeFileSync(join(repo, HUNK_FILE), edited)
+const worktreeDiff = await gitFileDiff(repo, HUNK_FILE, false, false, undefined, 'unstaged', null, null)
+assert.equal(worktreeDiff.ok, true)
+if (!('diff' in worktreeDiff) || worktreeDiff.binary === true) throw new Error('expected a text diff')
+const rawDiff = worktreeDiff.diff
+assert.ok(rawDiff.includes('@@ -1,') && rawDiff.includes('@@ -1'), 'two hunks expected')
+assert.ok((rawDiff.match(/^@@ /gm) ?? []).length === 2)
+const patch0 = buildHunkPatch(rawDiff, 0)
+const patch1 = buildHunkPatch(rawDiff, 1)
+assert.ok(patch0 !== null && patch1 !== null)
+{
+  // stage hunk 0 only: the staged half carries 'line 3 edited', the
+  // unstaged half still carries 'line 17 edited'.
+  const staged = await gitHunkOp(repo, HUNK_FILE, patch0, 'stage', true)
+  assert.equal(staged.ok, true)
+  const stagedDiff = await gitFileDiff(repo, HUNK_FILE, false, false, undefined, 'staged', null, null)
+  assert.ok(stagedDiff.ok && stagedDiff.diff.includes('line 3 edited'))
+  assert.ok(!stagedDiff.diff.includes('line 17 edited'))
+  const stillUnstaged = await gitFileDiff(repo, HUNK_FILE, false, false, undefined, 'unstaged', null, null)
+  assert.ok(stillUnstaged.ok && stillUnstaged.diff.includes('line 17 edited'))
+  // unstage the same hunk: the index is clean again.
+  const undone = await gitHunkOp(repo, HUNK_FILE, patch0, 'unstage', true)
+  assert.equal(undone.ok, true)
+  const emptyStaged = await gitFileDiff(repo, HUNK_FILE, false, false, undefined, 'staged', null, null)
+  assert.ok(emptyStaged.ok && emptyStaged.diff === '')
+  // revert hunk 1 from the worktree: 'line 17' returns, 'line 3 edited' stays.
+  const reverted = await gitHunkOp(repo, HUNK_FILE, patch1, 'revert', true)
+  assert.equal(reverted.ok, true)
+  assert.equal(readLF(HUNK_FILE), edited.split('line 17 edited').join('line 17'))
+  // validator: a two-hunk patch and a path-swapped patch both bounce.
+  const twoHunks = patch0 + patch1.replace('diff --git a/' + HUNK_FILE + ' b/' + HUNK_FILE + '\n', '')
+  const multi = await gitHunkOp(repo, HUNK_FILE, twoHunks, 'stage', true)
+  assert.equal(multi.ok, false)
+  const swapped = await gitHunkOp(repo, HUNK_FILE, patch0.replaceAll(HUNK_FILE, 'other.txt'), 'stage', true)
+  assert.equal(swapped.ok, false)
+  // The shared fileOpGuard throws on a missing confirm (same as stage/discard).
+  const unconfirmed = await gitHunkOp(repo, HUNK_FILE, patch0, 'stage', false).catch(error => ({ ok: false, error: String(error && error.message) }))
+  assert.equal(unconfirmed.ok, false)
+  assert.match(unconfirmed.error, /confirm/)
 }
 
 for (const root of roots) rmSync(root, { recursive: true, force: true })

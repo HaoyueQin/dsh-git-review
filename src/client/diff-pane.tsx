@@ -66,6 +66,17 @@ export interface DiffPaneProps {
   inputActions: InputActions | undefined
   /** Park a comment in the pending draft box (absent = draft entry hidden). */
   onDraftAdd: ((draft: CommentDraft) => void) | undefined
+  /** Per-hunk operations the view offers: 'stage-revert' on the unstaged
+   *  half, 'unstage' on the staged half; undefined hides the buttons
+   *  (refs/commit diffs, 'all' scope, untracked and binary files). */
+  hunkOps?: 'stage-revert' | 'unstage'
+  /** Fire one hunk operation (the view cuts the patch and runs host
+   *  `hunk-op`, then refreshes the diff). */
+  onHunkOp?: (action: 'stage' | 'unstage' | 'revert', hunkIndex: number) => void
+  /** True while a hunk op is in flight (buttons disable). */
+  hunkBusy?: boolean
+  /** Verbatim failure of the last hunk op (null/undefined hides the row). */
+  hunkNotice?: string | null
   t: T
 }
 
@@ -268,7 +279,7 @@ function CommentEditor({ path, line, useInput, inputActions, onDraftAdd, onClose
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, syntaxHighlight, search, baseActive, useInput, inputActions, onDraftAdd, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, syntaxHighlight, search, baseActive, useInput, inputActions, onDraftAdd, hunkOps, onHunkOp, hunkBusy, hunkNotice, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
   const showBinary = binary || parsed.binary
   const notice = showBinary
@@ -309,6 +320,13 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   }, [matchRowCount])
   // Inline comment editor target: hunk/row coordinates plus the new-side line.
   const [commentTarget, setCommentTarget] = useState<{ hi: number; ri: number; line: number } | null>(null)
+  // Two-step revert confirm per hunk: the first click arms the button, the
+  // second (or arming another hunk) resolves it. Reset when the file/scope
+  // changes so a stale arm never outlives the diff it belongs to.
+  const [armedHunk, setArmedHunk] = useState<number | null>(null)
+  useEffect(() => {
+    setArmedHunk(null)
+  }, [file.path, scope, hunkOps])
   return (
     <div className={css.diffPane} data-git-review-diff="">
       <div className={css.diffHeader}>
@@ -364,6 +382,9 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
         </button>
       </div>
       {notice !== null && <div className={css.noticeRow}>{notice}</div>}
+      {hunkNotice != null && hunkNotice !== '' && (
+        <div className={css.noticeRow + ' ' + css.noticeError}>{hunkNotice}</div>
+      )}
       <div className={css.diffScroll}>
         {loading && <div className={css.paneNotice}>{t('diff.loading')}</div>}
         {!loading && !showBinary && parsed.hunks.length === 0 && (
@@ -387,6 +408,11 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           useInput,
           inputActions,
           onDraftAdd,
+          hunkOps,
+          onHunkOp,
+          hunkBusy: hunkBusy === true,
+          armedHunk,
+          onRevertArm: hi => { setArmedHunk(current => (current === hi ? null : hi)) },
         })}
         {/* Seat overlay reserve: the composer card floats over the pane's bottom. */}
         <div className={css.diffBottomReserve} />
@@ -414,6 +440,11 @@ function renderHunks(
     useInput: SnapshotSelectorHook<InputState> | undefined
     inputActions: InputActions | undefined
     onDraftAdd: ((draft: CommentDraft) => void) | undefined
+    hunkOps: 'stage-revert' | 'unstage' | undefined
+    onHunkOp: ((action: 'stage' | 'unstage' | 'revert', hunkIndex: number) => void) | undefined
+    hunkBusy: boolean
+    armedHunk: number | null
+    onRevertArm: (hunkIndex: number) => void
   },
 ): readonly ReactNode[] {
   let budget = MAX_RENDER_ROWS
@@ -439,7 +470,52 @@ function renderHunks(
           </button>
         )}
         <div className={css.hunkHeader}>
-          {'@@ -' + hunk.oldStart + ',' + hunk.oldCount + ' +' + hunk.newStart + ',' + hunk.newCount + ' @@' + (hunk.section === '' ? '' : ' ' + hunk.section)}
+          <span className={css.hunkHeaderText}>
+            {'@@ -' + hunk.oldStart + ',' + hunk.oldCount + ' +' + hunk.newStart + ',' + hunk.newCount + ' @@' + (hunk.section === '' ? '' : ' ' + hunk.section)}
+          </span>
+          {ui.hunkOps !== undefined && ui.onHunkOp !== undefined && (
+            <span className={css.hunkActions}>
+              {ui.hunkOps === 'unstage' ? (
+                <button
+                  type="button"
+                  className={css.hunkOpBtn}
+                  disabled={ui.hunkBusy}
+                  title={ui.t('hunk.unstageHint')}
+                  onClick={() => { ui.onHunkOp!('unstage', hi) }}
+                >
+                  {ui.t('hunk.unstage')}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className={css.hunkOpBtn}
+                    disabled={ui.hunkBusy}
+                    title={ui.t('hunk.stageHint')}
+                    onClick={() => { ui.onHunkOp!('stage', hi) }}
+                  >
+                    {ui.t('hunk.stage')}
+                  </button>
+                  <button
+                    type="button"
+                    className={css.hunkOpBtn + ' ' + css.hunkOpDanger + (ui.armedHunk === hi ? ' ' + css.hunkOpArmed : '')}
+                    disabled={ui.hunkBusy}
+                    title={ui.t('hunk.revertHint')}
+                    onClick={() => {
+                      if (ui.armedHunk === hi) {
+                        ui.onHunkOp!('revert', hi)
+                        ui.onRevertArm(hi)
+                      } else {
+                        ui.onRevertArm(hi)
+                      }
+                    }}
+                  >
+                    {ui.armedHunk === hi ? ui.t('hunk.revertConfirm') : ui.t('hunk.revert')}
+                  </button>
+                </>
+              )}
+            </span>
+          )}
         </div>
         {ui.unified
           ? unifyHunkRows(rows).map((line, li) => {

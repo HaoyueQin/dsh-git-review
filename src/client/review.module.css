@@ -1111,12 +1111,80 @@ body[data-dsh-bg-glass] .root {
 }
 
 .hunkHeader {
-  padding: 2px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px 2px 12px;
   background: var(--dsw-alias-markdown-code-block);
   color: var(--dsw-alias-label-secondary);
+  user-select: none;
+}
+
+/* The @@ text keeps pre-wrap (long section headings wrap); the actions stay
+ * one row on the right. */
+.hunkHeaderText {
+  min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  user-select: none;
+}
+
+.hunkActions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Hunk-level op buttons: small bordered chips, quieter than the toolbar —
+ * they are row-attached actions, not primary controls. */
+.hunkOpBtn {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 10.5px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hunkOpBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
+  border-color: color-mix(in srgb, var(--dsw-alias-label-primary) 22%, var(--dsw-alias-border-secondary));
+}
+
+.hunkOpBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Revert destroys worktree content: danger accent, and the armed step
+ * (irreversible confirm) fills solid red. */
+.hunkOpDanger:hover:not(:disabled) {
+  color: var(--dsw-alias-state-error-primary);
+  border-color: color-mix(in srgb, var(--dsw-alias-state-error-primary) 45%, var(--dsw-alias-border-secondary));
+}
+
+.hunkOpArmed {
+  background: var(--dsw-alias-state-error-primary);
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-bg-layer-1);
+}
+
+.hunkOpArmed:hover:not(:disabled) {
+  background: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-bg-layer-1);
+}
+
+/* Verbatim failure of a hunk op, under the diff header (error tint over the
+ * neutral notice row shape). */
+.noticeError {
+  color: var(--dsw-alias-state-error-primary);
+  white-space: pre-wrap;
 }
 
 .gapBar {

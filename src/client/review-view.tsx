@@ -20,6 +20,7 @@ import { hostCall } from './api.ts'
 import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, RefreshIcon, SearchIcon, SwapIcon } from './icons.tsx'
 import { RefPicker } from './ref-picker.tsx'
 import { DiffPane, type DiffScope } from './diff-pane.tsx'
+import { buildHunkPatch } from './diff-parse.ts'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
@@ -119,6 +120,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [diffFull, setDiffFull] = useState(false)
   const [diffScope, setDiffScope] = useState<DiffScope>('all')
+  /** Per-hunk op transport state: busy flag + verbatim git failure. */
+  const [hunkBusy, setHunkBusy] = useState(false)
+  const [hunkNotice, setHunkNotice] = useState<string | null>(null)
   const [diff, setDiff] = useState<DiffState>({ kind: 'idle' })
   // All-files tree mode: the whole repository file list (lazily fetched).
   const [treeMode, setTreeMode] = useState<'changes' | 'all'>('changes')
@@ -572,7 +576,34 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const selectFile = useCallback((path: string) => {
     setSelected(path)
     setDiffScope('all')
+    setHunkNotice(null)
   }, [])
+
+  /** One per-hunk operation (stage/unstage/revert): cut the standalone
+   *  patch from the raw diff the pane is showing and hand it to host
+   *  `hunk-op`. Failures stay verbatim under the diff header; success
+   *  refreshes so the diff/scope halves re-read from git. */
+  const executeHunkOp = useCallback(async (action: 'stage' | 'unstage' | 'revert', hunkIndex: number, path: string, rawDiff: string) => {
+    if (cwd === undefined || hunkBusy) return
+    const patch = buildHunkPatch(rawDiff, hunkIndex)
+    if (patch === null) {
+      setHunkNotice('internal error: failed to cut the hunk patch')
+      return
+    }
+    setHunkBusy(true)
+    const payload = await hostCall<GitWritePayload>('hunk-op', { cwd, path, patch, action, confirm: true })
+    setHunkBusy(false)
+    if (payload === null) {
+      setHunkNotice(t('state.hostUnavailable'))
+      return
+    }
+    if (!payload.ok) {
+      setHunkNotice(payload.error ?? 'git apply failed')
+      return
+    }
+    setHunkNotice(null)
+    refresh()
+  }, [cwd, hunkBusy, refresh, t])
 
   /** Switch the tree between changed files and the whole repository. */
   const changeTreeMode = useCallback((mode: 'changes' | 'all') => {
@@ -1929,6 +1960,12 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                           onToggleWs={toggleWsIgnore}
                           search={searchSpec}
                           baseActive={baseRef !== null || refsMode}
+                    hunkOps={!refsMode && baseRef === null && !running && selectedFile.untracked !== true
+                      ? (diffScope === 'staged' ? 'unstage' : diffScope === 'unstaged' ? 'stage-revert' : undefined)
+                      : undefined}
+                    onHunkOp={(action, hi) => { void executeHunkOp(action, hi, selectedFile.path, diff.kind === 'text' ? diff.diff : '') }}
+                    hunkBusy={hunkBusy}
+                    hunkNotice={hunkNotice}
                     useInput={useInput}
                     inputActions={inputActions}
                     onDraftAdd={addDraft}

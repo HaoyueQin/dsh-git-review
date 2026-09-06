@@ -17,6 +17,7 @@
  *   POST /dsh-git-review/api/stage        { cwd, paths[], confirm: true }
  *   POST /dsh-git-review/api/unstage      { cwd, paths[], confirm: true }
  *   POST /dsh-git-review/api/discard      { cwd, paths[], confirm: true }   (irreversible)
+ *   POST /dsh-git-review/api/hunk-op      { cwd, path, patch, action, confirm: true }  (action stage|unstage|revert)
  *   POST /dsh-git-review/api/fetch        { cwd, confirm: true }
  *   POST /dsh-git-review/api/stash        { cwd, action, index?, includeUntracked?, confirm: true }
  *   POST /dsh-git-review/api/reset        { cwd, commit, mode?, confirm: true }   (mode soft|mixed|hard)
@@ -65,8 +66,9 @@
  * need `git hash-object -t tree /dev/null` at status time.
  */
 import { execFile, spawn } from 'node:child_process'
-import { lstat, open, realpath, rename, rm } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { lstat, mkdtemp, open, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
@@ -488,7 +490,7 @@ function asScope(value: unknown): DiffScope {
  *  worktree-vs-base and the staged/unstaged scope is ignored. With a
  *  validated `target`, the ref-range mode runs `base...target` instead and
  *  neither scope nor untracked probing applies. */
-async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitFileDiffPayload> {
+export async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknown, full: unknown, origPath: unknown, scope: unknown, base: unknown, target: unknown, ws: unknown): Promise<GitFileDiffPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
@@ -1006,6 +1008,102 @@ export async function gitDiscard(cwd: unknown, paths: unknown, confirm: unknown)
   return { ok: true, output: '' }
 }
 
+/** Unified-diff header line prefixes a client-cut hunk patch may carry.
+ *  rename/copy lines are deliberately absent — those diffs span two paths
+ *  and their apply semantics do not fit a per-hunk operation. */
+const HUNK_PATCH_HEADER_PREFIXES: readonly string[] = [
+  'diff --git ',
+  'index ',
+  'old mode ',
+  'new mode ',
+  'new file mode ',
+  'deleted file mode ',
+  'similarity index ',
+  'dissimilarity index ',
+  '--- ',
+  '+++ ',
+]
+
+/**
+ * Validate a client-supplied single-hunk patch before `git apply` eats it.
+ * The patch text arrives from the browser, so it is re-checked line by
+ * line: exactly one `diff --git` head, exactly one `@@` hunk, every header
+ * line whitelisted, the `---`/`+++` paths pinned to the fenced repo path
+ * (or /dev/null for creations/deletions), and the hunk body limited to
+ * ' ' / '+' / '-' / backslash-prefixed lines. Returns the problem
+ * description, or null when the patch is safe.
+ */
+function validateHunkPatch(patch: string, relPath: string): string | null {
+  const lines = patch.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop()
+  const gitLines = lines.filter(line => line.startsWith('diff --git '))
+  if (gitLines.length !== 1) {
+    return 'patch must contain exactly one "diff --git" line'
+  }
+  // The head names both sides; either side drifting to another path would
+  // let a fenced request drive a patch at a different file.
+  if (gitLines[0] !== 'diff --git a/' + relPath + ' b/' + relPath) {
+    return 'diff --git path does not match the fenced file path'
+  }
+  let hunkSeen = false
+  for (const line of lines) {
+    if (hunkSeen) {
+      if (line.startsWith('@@')) return 'patch must contain exactly one hunk'
+      const isBody = line === '' || line.startsWith(' ') || line.startsWith('+') || line.startsWith('-') || line.startsWith('\\')
+      if (!isBody) return 'unexpected line inside the hunk body'
+      continue
+    }
+    if (line.startsWith('@@')) {
+      if (!/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(line)) return 'malformed hunk header'
+      hunkSeen = true
+      continue
+    }
+    if (!HUNK_PATCH_HEADER_PREFIXES.some(prefix => line.startsWith(prefix))) {
+      return 'unexpected line in the patch header'
+    }
+    if (line === '--- a/' + relPath || line === '+++ b/' + relPath) continue
+    if (line === '--- /dev/null' || line === '+++ /dev/null') continue
+    if (line.startsWith('--- ') || line.startsWith('+++ ')) {
+      return 'patch path does not match the fenced file path'
+    }
+  }
+  if (!hunkSeen) return 'patch must contain exactly one hunk'
+  return null
+}
+
+/** One `hunk-op` answer: apply a single client-cut hunk patch to the index
+ *  (stage / unstage via --reverse --cached) or the worktree (revert via
+ *  --reverse). The patch travels through a temp file (git apply reads
+ *  paths, not stdin pipes); it is validated against the fenced path before
+ *  git ever sees it, and the temp dir is always removed. */
+export async function gitHunkOp(cwd: unknown, path: unknown, patch: unknown, action: unknown, confirm: unknown): Promise<GitWritePayload> {
+  const repoRoot = await fileOpGuard(cwd, confirm)
+  if (typeof patch !== 'string' || patch === '' || patch.length > 512 * 1024) {
+    return { ok: false, error: 'invalid patch payload' }
+  }
+  if (action !== 'stage' && action !== 'unstage' && action !== 'revert') {
+    return { ok: false, error: 'unsupported hunk action' }
+  }
+  // relative + '/'-separated: the wire form git writes into the patch text.
+  const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
+  const problem = validateHunkPatch(patch, relPath)
+  if (problem !== null) return { ok: false, error: problem }
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-git-review-hunk-'))
+  try {
+    const patchFile = join(dir, 'hunk.patch')
+    await writeFile(patchFile, patch, 'utf8')
+    // No --whitespace=fix: apply must reproduce the hunk byte-for-byte.
+    const args = ['apply']
+    if (action === 'stage') args.push('--cached')
+    if (action === 'unstage') args.push('--cached', '--reverse')
+    if (action === 'revert') args.push('--reverse')
+    args.push(patchFile)
+    return writeAnswer(await runGitCapture(repoRoot, args), 'git apply')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 /** Stash selector cap: real `stash@{n}` indices stay far below this; the
  *  bound keeps a bogus request from address-spoofing other selectors. */
 const STASH_INDEX_CAP = 999
@@ -1439,6 +1537,10 @@ export function apply(ctx: Context): void {
         }
         if (action === 'discard') {
           respond(res, 200, await gitDiscard(body['cwd'], body['paths'], body['confirm']))
+          return
+        }
+        if (action === 'hunk-op') {
+          respond(res, 200, await gitHunkOp(body['cwd'], body['path'], body['patch'], body['action'], body['confirm']))
           return
         }
         if (action === 'fetch') {

@@ -5,6 +5,7 @@
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
 import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, splitDiffSections } from '../src/git-parse.ts'
+import { buildHunkPatch } from '../src/client/diff-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { langOf, makeLineHighlighter, sliceTokens, tokenizeLine } from '../src/client/highlight.ts'
@@ -559,5 +560,44 @@ assert.equal(hl.line('y = 2'), null, 'budget exhausted -> plain')
 const sliced = sliceTokens([{ start: 0, end: 10, kind: 'kw' }], 2, 5)
 assert.deepEqual(sliced, [{ start: 0, end: 3, kind: 'kw' }])
 assert.equal(sliceTokens(null, 0, 5), null)
+
+// 41. buildHunkPatch: cut one hunk with the file header from a raw unified
+//     diff as a standalone `git apply` patch (per-hunk stage/unstage/revert).
+const RAW_DIFF = [
+  'diff --git a/app.ts b/app.ts',
+  'index 1111111..2222222 100644',
+  '--- a/app.ts',
+  '+++ b/app.ts',
+  '@@ -1,3 +1,3 @@ const a',
+  '-old one',
+  '+new one',
+  ' context',
+  ' still',
+  '@@ -20,3 +20,4 @@ fn b',
+  ' tail',
+  '+added tail',
+  ' end',
+  '\\ No newline at end of file',
+].join('\n')
+const hunk0 = buildHunkPatch(RAW_DIFF, 0)
+assert.equal(hunk0, [
+  'diff --git a/app.ts b/app.ts',
+  'index 1111111..2222222 100644',
+  '--- a/app.ts',
+  '+++ b/app.ts',
+  '@@ -1,3 +1,3 @@ const a',
+  '-old one',
+  '+new one',
+  ' context',
+  ' still',
+  '',
+].join('\n'))
+const hunk1 = buildHunkPatch(RAW_DIFF, 1)
+assert.ok(hunk1.startsWith('diff --git a/app.ts b/app.ts\nindex 1111111..2222222 100644\n--- a/app.ts\n+++ b/app.ts\n@@ -20,3 +20,4 @@ fn b\n'))
+assert.ok(hunk1.endsWith('+added tail\n end\n\\ No newline at end of file\n'))
+assert.equal(buildHunkPatch(RAW_DIFF, 2), null)
+assert.equal(buildHunkPatch(RAW_DIFF, -1), null)
+assert.equal(buildHunkPatch('', 0), null)
+assert.equal(buildHunkPatch('diff --git a/x b/x\nBinary files a/x and b/x differ\n', 0), null)
 
 console.log('check-parse: all assertions passed')

@@ -69,6 +69,34 @@ const EMPTY_DIFF: ParsedDiff = {
 
 const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/
 
+/**
+ * Cut one hunk (with the enclosing file header) out of a raw unified diff
+ * as a standalone patch `git apply` accepts — the wire form of the per-hunk
+ * stage/unstage/revert operations. The text is sliced verbatim (never
+ * re-rendered from the parsed rows, whose pairing order is a display
+ * concept), so line numbers, context and \\-markers stay byte-identical to
+ * what git produced. Returns null for an out-of-range index or a diff with
+ * no hunks (binary/empty).
+ */
+export function buildHunkPatch(raw: string, hunkIndex: number): string | null {
+  if (raw === '' || hunkIndex < 0) return null
+  const lines = raw.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop()
+  const hunkStarts: number[] = []
+  let firstHunk = -1
+  for (let i = 0; i < lines.length; i++) {
+    if (HUNK_RE.test(lines[i]!)) {
+      hunkStarts.push(i)
+      if (firstHunk < 0) firstHunk = i
+    }
+  }
+  if (hunkIndex >= hunkStarts.length) return null
+  const headEnd = firstHunk
+  const bodyStart = hunkStarts[hunkIndex]!
+  const bodyEnd = hunkIndex + 1 < hunkStarts.length ? hunkStarts[hunkIndex + 1]! : lines.length
+  return [...lines.slice(0, headEnd), ...lines.slice(bodyStart, bodyEnd), ''].join('\n')
+}
+
 /** Strip the a/ b/ prefix git prepends to diff paths. */
 function stripPrefix(field: string): string {
   return field.startsWith('a/') || field.startsWith('b/') ? field.slice(2) : field

@@ -147,6 +147,8 @@ export function countMatches(haystack: string, needle: string, options: MatchOpt
       return 0
     }
   }
+  // The insensitive scan is exactly countOccurrences' contract — one
+  // implementation, not two drifting copies.
   if (options.caseSensitive) {
     let count = 0
     let at = haystack.indexOf(needle)
@@ -206,13 +208,16 @@ export function mergeDiffRows(
 ): ChangedFile[] {
   return rows.map(row => {
     const stat = numstat.get(row.path)
+    // Mirror mergeStatus: a corrupt count (NaN) renders as 0, never NaN.
+    const added = stat?.added ?? 0
+    const deleted = stat?.deleted ?? 0
     return {
       path: row.path,
       origPath: row.origPath,
       x: row.letter,
       y: ' ',
-      added: stat === undefined ? 0 : stat.added ?? 0,
-      deleted: stat === undefined ? 0 : stat.deleted ?? 0,
+      added: Number.isFinite(added) ? added : 0,
+      deleted: Number.isFinite(deleted) ? deleted : 0,
       binary: stat !== undefined && (stat.added === null || stat.deleted === null),
       untracked: false,
     }

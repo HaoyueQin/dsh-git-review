@@ -433,10 +433,17 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
   // Worktree blob hashes (the reviewed marker rides them): one hash-object
   // process covers every existing worktree file; deleted rows have no file
   // and stay blob-less, which the client renders as "not viewable".
-  const hashable = finalEntries
-    .filter(entry => entry.x !== 'D' && entry.y !== 'D')
-    .map(entry => entry.path)
-    .slice(0, BLOB_HASH_CAP)
+  // Two caps: entry count AND total argv bytes — 200 deep CJK paths can
+  // exceed Windows' 32K command-line limit even under the count cap.
+  const hashable: string[] = []
+  let hashArgBytes = 0
+  for (const entry of finalEntries) {
+    if (hashable.length >= BLOB_HASH_CAP) break
+    if (entry.x === 'D' || entry.y === 'D') continue
+    hashArgBytes += Buffer.byteLength(entry.path, 'utf8') + 1
+    if (hashArgBytes > 16 * 1024) break
+    hashable.push(entry.path)
+  }
   if (hashable.length > 0) {
     try {
       const hashesRaw = await runGit(repoRoot, ['hash-object', '--', ...hashable])
@@ -1338,21 +1345,25 @@ export async function gitDiscard(cwd: unknown, paths: unknown, confirm: unknown)
   const tracked = new Set(trackedRaw.split('\0').filter(chunk => chunk !== ''))
   const trackedSpecs = specs.filter(spec => tracked.has(spec))
   const untrackedSpecs = specs.filter(spec => !tracked.has(spec))
+  // Both halves always run: a tracked-restore failure must not silently
+  // skip the untracked clean (or vice versa) — errors combine verbatim.
+  const failures: string[] = []
   if (trackedSpecs.length > 0) {
     // Restore index AND worktree to HEAD: "discard" means back to HEAD
     // (VS Code's Discard semantics — a staged-only change discards the same).
     const restored = await runGitCapture(repoRoot, ['restore', '--source=HEAD', '--staged', '--worktree', '--', ...trackedSpecs])
     if (restored.code !== 0) {
-      return { ok: false, error: restored.stderr.trim() || restored.stdout.trim() || 'git restore failed (exit ' + restored.code + ')' }
+      failures.push(restored.stderr.trim() || restored.stdout.trim() || 'git restore failed (exit ' + restored.code + ')')
     }
   }
   if (untrackedSpecs.length > 0) {
     // No -x: ignored files are never touched by a discard.
     const cleaned = await runGitCapture(repoRoot, ['clean', '-f', '--', ...untrackedSpecs])
     if (cleaned.code !== 0) {
-      return { ok: false, error: cleaned.stderr.trim() || cleaned.stdout.trim() || 'git clean failed (exit ' + cleaned.code + ')' }
+      failures.push(cleaned.stderr.trim() || cleaned.stdout.trim() || 'git clean failed (exit ' + cleaned.code + ')')
     }
   }
+  if (failures.length > 0) return { ok: false, error: failures.join('\n') }
   return { ok: true, output: '' }
 }
 

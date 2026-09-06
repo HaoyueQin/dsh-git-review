@@ -81,8 +81,8 @@ export function collectMdAssets(text: string): string[] {
   return out
 }
 
-/** Rewrite collected URLs via `table` (raw -> data: URL); unknown URLs and
- *  surrounding titles survive byte-identical. */
+/** Rewrite collected URLs via `table` (raw -> absolute same-origin asset URL;
+ *  unknown URLs and surrounding titles survive byte-identical). */
 export function rewriteMdAssets(text: string, table: ReadonlyMap<string, string>): string {
   INLINE_IMG.lastIndex = 0
   const inline = text.replace(INLINE_IMG,

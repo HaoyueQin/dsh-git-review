@@ -25,9 +25,11 @@ const PLUGIN_ID = 'dsh-git-review'
 const LIB_EXTERNALS = ['@deepseek-ai/cordis', '@deepseek-ai/schemastery'] as const
 
 /** Module specifiers the dsh web shell shares into its frozen module table
- *  — the client half declares these in dsh.client.inject and must never
- *  inline them; listing an unused entry would silently hide a future
- *  accidental import of a shareable module. */
+ *  — the client half declares the dsh.* entries in dsh.client.inject and
+ *  must never inline them; listing an unused entry would silently hide a
+ *  future accidental import of a shareable module. `react` needs no inject
+ *  entry: the shell provides it unconditionally (every client factory
+ *  receives it), so it is listed here only for the neverBundle gate. */
 const PLATFORM_MODULES = [
   'react', 'react/jsx-runtime',
   '@deepseek-ai/dsh-client-ui-slots',
@@ -87,7 +89,13 @@ const clientBundle: UserConfig = {
     name: 'dsh-client-bundle-purity',
     resolveId(source: string) {
       if (!source.startsWith('@deepseek-ai/')) return null
+      // Compare past the '/client' entry suffix: type imports spell the
+      // full entry ('.../client') while runtime requires use the bare
+      // package name — both name the same table slot, so a suffixed VALUE
+      // import stays external instead of inlining a duplicate instance.
+      const bare = source.endsWith('/client') ? source.slice(0, -'/client'.length) : source
       if (CLIENT_EXTERNALS.includes(source)) return null
+      if (CLIENT_EXTERNALS.includes(bare)) return { id: source, external: true }
       throw new Error(
         'client bundle purity: "' + source + '" is not a platform module (CLIENT_EXTERNALS) '
         + 'and not an @deepseek-ai import the bundle inlines by default — cross-plugin '

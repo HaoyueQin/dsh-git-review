@@ -51,6 +51,8 @@ export interface GitStatusPayload {
   ahead?: number
   /** Upstream commits the local branch lacks (worktree mode only). */
   behind?: number
+  /** A history operation is mid-flight (its continue/abort UI shows). */
+  inProgress?: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null
 }
 
 /** One selectable ref for the diff-base dropdown. */

@@ -24,6 +24,8 @@
  *   POST /dsh-git-review/api/cherry-pick  { cwd, commit, confirm: true }
  *   POST /dsh-git-review/api/merge        { cwd, name, noFf?, confirm: true }
  *   POST /dsh-git-review/api/pull         { cwd, rebase?, confirm: true }
+ *   POST /dsh-git-review/api/conflict-resolve { cwd, path, side, confirm: true }   (side ours|theirs)
+ *   POST /dsh-git-review/api/conflict-finish  { cwd, action, kind, confirm: true } (action continue|abort)
  *   POST /dsh-git-review/api/branch-create  { cwd, name, startPoint?, confirm: true }
  *   POST /dsh-git-review/api/branch-switch  { cwd, name, confirm: true }
  *   POST /dsh-git-review/api/branch-delete  { cwd, name, force?, confirm: true }
@@ -291,6 +293,28 @@ function capDiff(diffText: string): { diff: string; truncated: boolean } {
   return { diff: cut === -1 ? '' : diffText.slice(0, cut), truncated: true }
 }
 
+/** The kinds of in-progress history operations the tab can surface. */
+type OperationKind = 'merge' | 'rebase' | 'cherry-pick' | 'revert'
+
+/** Detect a mid-operation state (merge/rebase/cherry-pick/revert) by
+ *  probing its marker ref: whichever `rev-parse --verify` answers exists. */
+async function detectInProgress(repoRoot: string): Promise<OperationKind | null> {
+  const probes: ReadonlyArray<[OperationKind, string]> = [
+    ['merge', 'MERGE_HEAD'],
+    ['rebase', 'REBASE_HEAD'],
+    ['cherry-pick', 'CHERRY_PICK_HEAD'],
+    ['revert', 'REVERT_HEAD'],
+  ]
+  for (const [kind, marker] of probes) {
+    try {
+      await runGit(repoRoot, ['rev-parse', '-q', '--verify', marker])
+      return kind
+    } catch { // marker absent — next probe
+    }
+  }
+  return null
+}
+
 /** One `status` answer: repo detection, porcelain + numstat in one shot.
  *  With a validated `base` override the tracked rows come from a
  *  worktree-vs-base name-status/numstat pair instead (untracked unchanged).
@@ -351,7 +375,7 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
     ? null
     : await resolveRangeRef(repoRoot, baseRef).then(commit => (commit !== null && commit !== headCommit && commit !== EMPTY_TREE_ID ? commit : null))
   const wsFlags = ws === true ? WS_FLAG : []
-  const [branchRaw, porcelainRaw, numstatRaw, nameStatusRaw] = await Promise.all([
+  const [branchRaw, porcelainRaw, numstatRaw, nameStatusRaw, inProgress] = await Promise.all([
     runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ''),
     runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
     overrideCommit !== null
@@ -360,6 +384,7 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
     overrideCommit !== null
       ? runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...wsFlags, overrideCommit])
       : Promise.resolve(''),
+    detectInProgress(repoRoot),
   ])
   const porcelainEntries = parsePorcelainV1(porcelainRaw)
   const numstat = numstatIndex(parseNumstatZ(numstatRaw))
@@ -443,6 +468,7 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
     totals: { added, deleted },
     ahead,
     behind,
+    inProgress,
   }
 }
 
@@ -1087,6 +1113,41 @@ export async function gitPull(cwd: unknown, rebase: unknown, confirm: unknown): 
   return writeAnswer(await runGitCapture(repoRoot, ['pull', rebase === true ? '--rebase' : '--no-rebase', '--no-edit'], PUSH_TIMEOUT_MS), 'pull')
 }
 
+/** One `conflict-resolve` answer: take one file's ours/theirs half and
+ *  stage it (`checkout --ours|--theirs` + `add`) — the manual-edit path
+ *  stays outside this plugin by design. */
+export async function gitConflictResolve(cwd: unknown, path: unknown, side: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'conflict resolution requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const relPath = relative(repoRoot, fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')).replaceAll('\\', '/')
+  const flag = side === 'theirs' ? '--theirs' : '--ours'
+  const taken = await runGitCapture(repoRoot, ['checkout', flag, '--', relPath])
+  if (taken.code !== 0) {
+    return { ok: false, error: taken.stderr.trim() || 'git checkout ' + flag + ' failed (the file may not be in an unmerged state)' }
+  }
+  return writeAnswer(await runGitCapture(repoRoot, ['add', '--', relPath]), 'add')
+}
+
+/** Continue or abort the in-progress operation the client detected from the
+ *  status payload (the host re-verifies the marker instead of trusting it). */
+export async function gitConflictFinish(cwd: unknown, action: unknown, kind: unknown, confirm: unknown): Promise<GitWritePayload> {
+  if (confirm !== true) return { ok: false, error: 'conflict finish requires confirm: true' }
+  if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const repoRoot = await resolveRepository(cwd)
+  if (repoRoot === null) throw new Error('not a git repository')
+  const op = kind === 'merge' || kind === 'rebase' || kind === 'cherry-pick' || kind === 'revert' ? kind : null
+  if (op === null) return { ok: false, error: 'unknown operation kind' }
+  const marker = op === 'merge' ? 'MERGE_HEAD' : op === 'rebase' ? 'REBASE_HEAD' : op === 'cherry-pick' ? 'CHERRY_PICK_HEAD' : 'REVERT_HEAD'
+  const still = await detectInProgress(repoRoot)
+  if (still !== op) {
+    return { ok: false, error: 'no ' + op + ' in progress (marker ' + marker + ' absent)' }
+  }
+  const verb = action === 'abort' ? '--abort' : '--continue'
+  return writeAnswer(await runGitCapture(repoRoot, [op, verb], PUSH_TIMEOUT_MS), op + ' ' + verb)
+}
+
 /** Guard shared by the branch endpoints: confirm flag + normalizeBaseRef
  *  pre-filter, then git's own rule checker (`check-ref-format --branch`)
  *  has the final say on the name's validity. */
@@ -1410,6 +1471,14 @@ export function apply(ctx: Context): void {
         }
         if (action === 'pull') {
           respond(res, 200, await gitPull(body['cwd'], body['rebase'], body['confirm']))
+          return
+        }
+        if (action === 'conflict-resolve') {
+          respond(res, 200, await gitConflictResolve(body['cwd'], body['path'], body['side'], body['confirm']))
+          return
+        }
+        if (action === 'conflict-finish') {
+          respond(res, 200, await gitConflictFinish(body['cwd'], body['action'], body['kind'], body['confirm']))
           return
         }
         if (action === 'branch-create') {

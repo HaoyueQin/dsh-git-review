@@ -710,6 +710,28 @@ body[data-dsh-bg-glass] .root {
   opacity: 0.5;
 }
 
+/* The conflict banner: a warning-tinted strip between the toolbar and the
+   body — a mid-flight merge/rebase must be impossible to miss. */
+.conflictBar {
+  display: flex;
+  flex: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-error-primary)) 40%, var(--dsw-alias-border-secondary));
+  background: color-mix(in srgb, var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-error-primary)) 10%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.conflictText {
+  flex: 1;
+  min-width: 200px;
+  font-weight: 600;
+}
+
 /* ── body split ──────────────────────────────────────────────────────── */
 
 .body {

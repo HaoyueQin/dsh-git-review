@@ -104,9 +104,9 @@ export function mergeAllFiles(allFiles: readonly string[], changed: readonly Cha
 /** The badge the panel shows for one file. */
 export interface FileBadge {
   /** Glyph rendered in the badge square. */
-  glyph: '+' | '\u00b1' | '\u2212' | 'R' | 'C' | '?'
+  glyph: '+' | '\u00b1' | '\u2212' | 'R' | 'C' | '?' | 'U'
   /** Locale key under 'badge.*'. */
-  key: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked'
+  key: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'untracked' | 'conflict'
   /** CSS tone class suffix in the module (badgeSuccess/badgeBusiness/badgeError/badgeMuted). */
   tone: 'Success' | 'Business' | 'Error' | 'Muted'
   /** true = staged (index) half, false = unstaged (worktree) half; absent for untracked. */
@@ -116,6 +116,7 @@ export interface FileBadge {
 /** Map one porcelain status letter to its badge (null = inactive column). */
 function badgeForCode(code: string): FileBadge | null {
   switch (code) {
+    case 'U': return { glyph: 'U', key: 'conflict', tone: 'Error' }
     case 'A': return { glyph: '+', key: 'added', tone: 'Success' }
     case 'D': return { glyph: '\u2212', key: 'deleted', tone: 'Error' }
     case 'R': return { glyph: 'R', key: 'renamed', tone: 'Business' }
@@ -134,6 +135,9 @@ function badgeForCode(code: string): FileBadge | null {
 export function badgesFor(file: ChangedFile): FileBadge[] {
   if (file.unchanged === true) return []
   if (file.untracked) return [{ glyph: '?', key: 'untracked', tone: 'Muted' }]
+  // An unmerged row (UU/AA/DD/UA/DU…) shows one red conflict badge; the
+  // split staged/unstaged halves have no meaning mid-conflict.
+  if (/[UA]{2}|U[AD]|DU/.test(file.x + file.y)) return [{ glyph: 'U', key: 'conflict', tone: 'Error' }]
   const out: FileBadge[] = []
   const x = badgeForCode(file.x)
   if (x !== null) out.push({ ...x, staged: true })

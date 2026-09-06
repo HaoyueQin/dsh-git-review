@@ -36,6 +36,8 @@ export interface FileMenuState {
     /** The file has unstaged changes (worktree differs from index). */
     unstaged: boolean
     untracked: boolean
+    /** Unmerged (UU/AA/DD/…): the ours/theirs items show. */
+    conflicted?: boolean
   }
 }
 
@@ -57,6 +59,8 @@ export interface FileMenuProps {
   remove: (path: string) => Promise<string | null>
   /** SCM row actions (stage/unstage/discard); absent hides the group. */
   gitAction?: (action: 'stage' | 'unstage' | 'discard', path: string) => Promise<string | null>
+  /** Conflict resolution (ours/theirs); absent hides the conflict group. */
+  conflictResolve?: (side: 'ours' | 'theirs', path: string) => Promise<string | null>
   t: T
 }
 
@@ -67,7 +71,7 @@ interface LineItem {
   onClick: () => void
 }
 
-export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, t }: FileMenuProps) {
+export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, conflictResolve, t }: FileMenuProps) {
   const [mode, setMode] = useState<'menu' | 'apps' | 'rename' | 'delete' | 'discard' | 'busy'>('menu')
   const [renameValue, setRenameValue] = useState(state.path)
   const [note, setNote] = useState<string | null>(null)
@@ -287,7 +291,28 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
               <span className={css.pickerItemName}>{t('menu.addToChat')}</span>
             </button>
           )}
-          {writable && !refsMode && state.git !== undefined && gitAction !== undefined && (
+          {writable && !refsMode && state.git?.conflicted === true && conflictResolve !== undefined && (
+            <>
+              <div className={css.fileMenuDivider} />
+              <button
+                type="button"
+                className={css.fileMenuItem}
+                onClick={() => { void run('ours', () => conflictResolve('ours', state.path)) }}
+              >
+                <span className={css.fileMenuItemIcon}><CheckIcon /></span>
+                <span className={css.pickerItemName}>{t('conflict.ours')}</span>
+              </button>
+              <button
+                type="button"
+                className={css.fileMenuItem}
+                onClick={() => { void run('theirs', () => conflictResolve('theirs', state.path)) }}
+              >
+                <span className={css.fileMenuItemIcon}><CheckIcon /></span>
+                <span className={css.pickerItemName}>{t('conflict.theirs')}</span>
+              </button>
+            </>
+          )}
+          {writable && !refsMode && state.git !== undefined && state.git.conflicted !== true && gitAction !== undefined && (
             <>
               <div className={css.fileMenuDivider} />
               {(state.git.unstaged || state.git.untracked) && (

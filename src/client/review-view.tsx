@@ -268,6 +268,8 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const [amend, setAmend] = useState(false)
   // Graph commit context menu (reset/revert/cherry-pick).
   const [commitMenu, setCommitMenu] = useState<CommitMenuState | null>(null)
+  // Conflict banner: the abort action is a two-step arm.
+  const [conflictAbortArmed, setConflictAbortArmed] = useState(false)
   // File-tree context menu: the popover state + the open-with app list
   // (availability probed once per page by the host).
   const [fileMenu, setFileMenu] = useState<FileMenuState | null>(null)
@@ -742,6 +744,30 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     if (payload.ok) refresh()
   }, [cwd, refresh, t])
 
+  /** A mid-flight history operation (merge/rebase/…): its conflicted files
+   *  and the banner's continue/abort actions. */
+  const inProgress = ready?.inProgress ?? null
+  const conflictCount = useMemo(
+    () => (ready === null ? 0 : ready.files.filter(file => /[UA]{2}|U[AD]|DU/.test(file.x + file.y)).length),
+    [ready],
+  )
+  const conflictFinish = useCallback(async (action: 'continue' | 'abort') => {
+    if (cwd === undefined || inProgress === null) return
+    setBranchBusy(true)
+    const payload = await hostCall<GitWritePayload>('conflict-finish', { cwd, action, kind: inProgress, confirm: true })
+    setBranchBusy(false)
+    setConflictAbortArmed(false)
+    if (payload === null || !payload.ok) {
+      setBranchOpen(true)
+      setBranchResult({ ok: false, text: payload === null ? t('state.hostUnavailable') : (payload.error ?? 'unknown error') })
+      return
+    }
+    refresh()
+  }, [cwd, inProgress, refresh, t])
+  useEffect(() => {
+    if (inProgress === null) setConflictAbortArmed(false)
+  }, [inProgress])
+
   const toggleGraphList = useCallback(() => {
     // The user-facing fold toggle is the one that updates the remembered
     // default (auto-folds on commit selection are transient view state).
@@ -912,6 +938,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     if (payload === null) return t('state.hostUnavailable')
     if (!payload.ok) return payload.error ?? 'unknown error'
     setSelected(null)
+    refresh()
+    return null
+  }, [cwd, refresh, t])
+
+  /** One conflict resolution (ours/theirs + stage): the error text or null. */
+  const runConflictResolve = useCallback(async (side: 'ours' | 'theirs', path: string): Promise<string | null> => {
+    if (cwd === undefined) return t('state.hostUnavailable')
+    const payload = await hostCall<GitWritePayload>('conflict-resolve', { cwd, path, side, confirm: true })
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
     refresh()
     return null
   }, [cwd, refresh, t])
@@ -1537,6 +1573,30 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         </div>
       )}
       </header>
+      {inProgress !== null && (
+        <div className={css.conflictBar} data-git-review-conflict="">
+          <span className={css.conflictText}>
+            {t('conflict.inProgress', { kind: t(('conflict.kind.' + inProgress) as ReviewKey), count: conflictCount })}
+          </span>
+          <button type="button" className={css.commitBtn} disabled={branchBusy || running} onClick={() => { void conflictFinish('continue') }}>
+            {t('conflict.continue', { kind: t(('conflict.kind.' + inProgress) as ReviewKey) })}
+          </button>
+          {conflictAbortArmed ? (
+            <>
+              <button type="button" className={css.commitBtn + ' ' + css.branchDanger} disabled={branchBusy || running} onClick={() => { void conflictFinish('abort') }}>
+                {t('conflict.abortConfirm')}
+              </button>
+              <button type="button" className={css.commitBtn} onClick={() => { setConflictAbortArmed(false) }}>
+                {t('menu.cancel')}
+              </button>
+            </>
+          ) : (
+            <button type="button" className={css.commitBtn + ' ' + css.branchDanger} disabled={branchBusy || running} onClick={() => { setConflictAbortArmed(true) }}>
+              {t('conflict.abort', { kind: t(('conflict.kind.' + inProgress) as ReviewKey) })}
+            </button>
+          )}
+        </div>
+      )}
       {commitMenu !== null && (
         <CommitMenu
           state={commitMenu}
@@ -1563,6 +1623,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           rename={renameFile}
           remove={removeFile}
           gitAction={refsMode ? undefined : runGitAction}
+          conflictResolve={runConflictResolve}
           t={t}
         />
       )}
@@ -1893,6 +1954,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                   staged: !file.untracked && file.x !== ' ',
                   unstaged: file.y !== ' ',
                   untracked: file.untracked,
+                  conflicted: /[UA]{2}|U[AD]|DU/.test(file.x + file.y),
                 },
               })
             }}

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { gitCherryPick, gitCommit, gitDiscard, gitEnv, gitFetch, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
+import { gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitLastCommit, gitMerge, gitPull, gitReset, gitRevert, gitStage, gitStash, gitStatus, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -198,6 +198,50 @@ sh(repo, 'checkout', 'main')
   const refused = await gitPull(repo, false, false)
   assert.equal(refused.ok, false)
   assert.match(refused.error, /confirm/)
+}
+
+// 8. conflict flow: both branches edit the same line → merge conflicts →
+//    in-progress detection + resolve(ours) + continue → clean again.
+{
+  sh(repo, 'checkout', '-b', 'conflicter')
+  writeFileSync(join(repo, 'a.txt'), 'conflicter line\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'conflicter work')
+  sh(repo, 'checkout', 'main')
+  writeFileSync(join(repo, 'a.txt'), 'main line\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'main work')
+  const merged = await gitMerge(repo, 'conflicter', false, true)
+  console.log('MERGE RESULT:', JSON.stringify(merged))
+  assert.equal(merged.ok, false, 'merge must conflict')
+  const mid = await gitStatus(repo, null, null, false)
+  assert.equal(mid.inProgress, 'merge')
+  console.log('STATUS:', JSON.stringify({ ip: mid.inProgress, xy: mid.files.map(f => f.x + f.y + ':' + f.path) }))
+  const conflicted = mid.files.filter(file => /[UA]{2}|U[AD]|DU/.test(file.x + file.y))
+  assert.ok(conflicted.some(file => file.path === 'a.txt'), 'a.txt is unmerged')
+  const resolved = await gitConflictResolve(repo, 'a.txt', 'ours', true)
+  assert.equal(resolved.ok, true)
+  const finished = await gitConflictFinish(repo, 'continue', 'merge', true)
+  assert.equal(finished.ok, true)
+  const clean = await gitStatus(repo, null, null, false)
+  assert.equal(clean.inProgress ?? null, null)
+  assert.equal(readLF('a.txt'), 'main line\n')
+  // 8b. abort: a fresh conflict pair, then abort restores the pre-merge state.
+  sh(repo, 'checkout', '-b', 'conflicter2')
+  writeFileSync(join(repo, 'a.txt'), 'conflicter2 line\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'conflicter2 work')
+  sh(repo, 'checkout', 'main')
+  writeFileSync(join(repo, 'a.txt'), 'main2 line\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'main2 work')
+  try { sh(repo, 'merge', 'conflicter2') } catch { /* the expected conflict */ }
+  const mid2 = await gitStatus(repo, null, null, false)
+  assert.equal(mid2.inProgress, 'merge')
+  const aborted = await gitConflictFinish(repo, 'abort', 'merge', true)
+  assert.equal(aborted.ok, true)
+  assert.equal((await gitStatus(repo, null, null, false)).inProgress ?? null, null)
+  assert.equal(readLF('a.txt'), 'main2 line\n')
 }
 
 for (const root of roots) rmSync(root, { recursive: true, force: true })

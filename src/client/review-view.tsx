@@ -66,6 +66,10 @@ type ViewTab = 'changes' | 'graph'
 
 /** Shared empty feed: a fresh [] per render would defeat the lanes memo. */
 const NO_COMMITS: GitCommitSummary[] = []
+/** List width applied on commit selection when nothing was ever dragged. */
+const GRAPH_READING_WIDTH = 340
+/** Drag release below this width snaps the list shut (titles live on). */
+const GRAPH_COLLAPSE_SNAP = 140
 
 /** The commit-graph feed's load state. */
 type LogState =
@@ -193,6 +197,63 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   }, [])
   /** Drag the divider between the diff pane and the tree: the tree sits on
    *  the right, so dragging LEFT widens it; clamped, persisted on release. */
+  /** Commit-detail file tree width (graph worktree + commit panes share it).
+   *  Null = the 260px default. */
+  const [commitTreeWidth, setCommitTreeWidth] = useState<number | null>(() => {
+    try {
+      const stored = Number(localStorage.getItem('dsh-git-review.commitTreeWidth'))
+      return Number.isFinite(stored) && stored >= 160 && stored <= 480 ? stored : null
+    } catch {
+      return null
+    }
+  })
+  const commitTreeResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const startCommitTreeResize = useCallback((event: React.MouseEvent) => {
+    event.preventDefault()
+    commitTreeResizeRef.current = { startX: event.clientX, startWidth: commitTreeWidth ?? 260 }
+    let raf = 0
+    let latest = 0
+    const onMove = (move: MouseEvent): void => {
+      const state = commitTreeResizeRef.current
+      if (state === null) return
+      latest = Math.min(480, Math.max(160, state.startWidth + (move.clientX - state.startX)))
+      if (raf !== 0) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        setCommitTreeWidth(latest)
+      })
+    }
+    const done = (): void => {
+      if (raf !== 0) cancelAnimationFrame(raf)
+      raf = 0
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (dragCleanupRef.current === done) dragCleanupRef.current = null
+    }
+    const onUp = (move: MouseEvent): void => {
+      const state = commitTreeResizeRef.current
+      commitTreeResizeRef.current = null
+      done()
+      if (state === null) return
+      void move
+      const final = Math.min(480, Math.max(160, state.startWidth + (move.clientX - state.startX)))
+      setCommitTreeWidth(final)
+      try { localStorage.setItem('dsh-git-review.commitTreeWidth', String(final)) } catch { /* private mode — width just doesn't persist */ }
+    }
+    dragCleanupRef.current?.()
+    dragCleanupRef.current = done
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [commitTreeWidth])
+  /** Keyboard resize for the commit-tree divider (mirrors the tree keys). */
+  const onCommitTreeResizeKey = useCallback((event: React.KeyboardEvent) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    event.preventDefault()
+    const step = event.shiftKey ? 100 : 20
+    const next = Math.min(480, Math.max(160, Math.round((commitTreeWidth ?? 260) + (event.key === 'ArrowRight' ? step : -step))))
+    setCommitTreeWidth(next)
+    try { localStorage.setItem('dsh-git-review.commitTreeWidth', String(next)) } catch { /* private mode — width just doesn't persist */ }
+  }, [commitTreeWidth])
   const startTreeResize = useCallback((event: React.MouseEvent) => {
     event.preventDefault()
     treeResizeRef.current = { startX: event.clientX, startWidth: treeWidth ?? 260 }
@@ -318,7 +379,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     const section = graphListRef.current
     const startWidth = graphListWidth ?? section?.getBoundingClientRect().width ?? 480
     graphResizeRef.current = { startX: event.clientX, startWidth }
-    const clamp = (value: number): number => Math.min(900, Math.max(180, value))
+    const clamp = (value: number): number => Math.min(900, Math.max(120, value))
     let raf = 0
     let latest = 0
     const onMove = (move: MouseEvent): void => {
@@ -343,13 +404,23 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
       graphResizeRef.current = null
       done()
       if (state === null) return
-      try { localStorage.setItem('dsh-git-review.graphWidth', String(Math.round(clamp(state.startWidth + (up.clientX - state.startX)))) ) } catch { /* private mode — width just doesn't persist */ }
+      const final = clamp(state.startWidth + (up.clientX - state.startX))
+      if (final < GRAPH_COLLAPSE_SNAP) {
+        // Dragged into the snap zone: collapse instead of squeezing (the
+        // pre-drag width is stashed for the expand trip back).
+        lastExpandedWidthRef.current = state.startWidth
+        setGraphListCollapsed(true)
+        settings.set('graphCollapsed', true)
+        return
+      }
+      setGraphListWidth(final)
+      try { localStorage.setItem('dsh-git-review.graphWidth', String(Math.round(final))) } catch { /* private mode — width just doesn't persist */ }
     }
     dragCleanupRef.current?.()
     dragCleanupRef.current = done
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [graphListWidth])
+  }, [graphListWidth, settings])
   /** Double-click the divider restores the default list width. */
   const resetGraphWidth = useCallback(() => {
     setGraphListWidth(null)
@@ -361,7 +432,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     event.preventDefault()
     const step = event.shiftKey ? 100 : 20
     const base = graphListWidth ?? graphListRef.current?.getBoundingClientRect().width ?? 480
-    const next = Math.min(900, Math.max(180, Math.round(base + (event.key === 'ArrowRight' ? step : -step))))
+    const next = Math.min(900, Math.max(120, Math.round(base + (event.key === 'ArrowRight' ? step : -step))))
     setGraphListWidth(next)
     try { localStorage.setItem('dsh-git-review.graphWidth', String(next)) } catch { /* private mode — width just doesn't persist */ }
   }, [graphListWidth])
@@ -1075,9 +1146,33 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     setPluginOpenReturn(null)
   }, [])
 
-  /** Select a graph commit; the list folds to the topology rail so the
-   *  detail gets the width (the rail keeps every commit one click away).
-   *  Clicking the selected commit again deselects and unfolds the list. */
+  /** Last expanded list width (restored on expand; the toggle and the
+   *  drag-snap both stash here so a collapse never eats the user's width). */
+  const lastExpandedWidthRef = useRef<number | null | undefined>(undefined)
+  const collapseGraphList = useCallback(() => {
+    lastExpandedWidthRef.current = graphListWidth
+    setGraphListCollapsed(true)
+    settings.set('graphCollapsed', true)
+  }, [settings, graphListWidth])
+  const expandGraphList = useCallback(() => {
+    if (lastExpandedWidthRef.current !== undefined) setGraphListWidth(lastExpandedWidthRef.current)
+    setGraphListCollapsed(false)
+    settings.set('graphCollapsed', false)
+  }, [settings])
+  /** Commit selection keeps titles visible: expand a collapsed list (last
+   *  width wins, else the reading default) and narrow an untouched default
+   *  once — but never shrink the user's own dragged width. */
+  const expandForReading = useCallback(() => {
+    if (graphListCollapsed) {
+      expandGraphList()
+    }
+    if (graphListWidth === null && lastExpandedWidthRef.current === undefined) {
+      setGraphListWidth(GRAPH_READING_WIDTH)
+    }
+  }, [graphListCollapsed, expandGraphList, graphListWidth])
+  /** Select a graph commit; the list opens at a title-readable width so the
+   *  detail gets room without losing the titles. Clicking the selected
+   *  commit again deselects and unfolds the list. */
   const selectCommit = useCallback((hash: string) => {
     setGraphWorktree(false)
     setGraphWorktreeFile(null)
@@ -1090,9 +1185,9 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     setSelectedCommit(hash)
     setGraphFile(null)
     setDiffScope('all')
-    setGraphListCollapsed(true)
+    expandForReading()
     setInfoOpenHash(null)
-  }, [selectedCommit])
+  }, [selectedCommit, expandForReading])
 
   /** Select a graph commit unconditionally (jumps never toggle: re-jumping
    *  the already-selected commit must land on its detail, not deselect). */
@@ -1102,9 +1197,9 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     setSelectedCommit(hash)
     setGraphFile(null)
     setDiffScope('all')
-    setGraphListCollapsed(true)
+    expandForReading()
     setInfoOpenHash(null)
-  }, [])
+  }, [expandForReading])
 
   /** Jump from the history popover to the graph: switch tabs and select the
    *  commit when the loaded graph window has it (500-cap); otherwise just
@@ -1164,8 +1259,8 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     setViewTab('graph')
     setSelectedCommit(origin.commit)
     setGraphFile(origin.graphFile)
-    setGraphListCollapsed(true)
-  }, [pluginOpenReturn])
+    expandForReading()
+  }, [pluginOpenReturn, expandForReading])
 
 
   /** Show the worktree's uncommitted changes in the graph detail pane. */
@@ -1262,12 +1357,11 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   }, [inProgress])
 
   const toggleGraphList = useCallback(() => {
-    // The user-facing fold toggle is the one that updates the remembered
-    // default (auto-folds on commit selection are transient view state).
-    const next = !graphListCollapsed
-    setGraphListCollapsed(next)
-    settings.set('graphCollapsed', next)
-  }, [settings, graphListCollapsed])
+    // One remembered open state shared by the toggle and the selection
+    // paths below (no transient divergence to snap back from).
+    if (graphListCollapsed) expandGraphList()
+    else collapseGraphList()
+  }, [graphListCollapsed, expandGraphList, collapseGraphList])
 
   const selectGraphFile = useCallback((path: string) => {
     setGraphFile(path)
@@ -2369,10 +2463,11 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
         )}
         {viewTab === 'graph' ? (
           <>
+            {!graphListCollapsed && (
             <section
               ref={graphListRef as React.Ref<HTMLElement>}
-              className={css.graphList + (graphListCollapsed ? ' ' + css.graphListNarrow : '')}
-              style={!graphListCollapsed && graphListWidth !== null ? { width: graphListWidth, minWidth: graphListWidth } : undefined}
+              className={css.graphList}
+              style={graphListWidth !== null ? { width: graphListWidth, minWidth: graphListWidth } : undefined}
               data-git-review-graph=""
             >
               <div className={css.graphToggleRow}>
@@ -2405,8 +2500,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                         lanes={visibleGraph.map(row => row.lane)}
                         selected={selectedCommit}
                         onSelect={selectCommit}
-                        collapsed={graphListCollapsed}
-                        density={graphDensity as 0 | 1 | 2 | 3 | 4}
+                                  density={graphDensity}
                         worktree={refsMode === false && ready !== null && ready.files.length > 0 ? { files: ready.files.length } : null}
                         worktreeSelected={graphWorktree}
                         onSelectWorktree={selectGraphWorktree}
@@ -2417,13 +2511,14 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                 </>
               )}
             </section>
+            )}
             {!graphListCollapsed && (
               <div
                 className={css.graphResizeHandle}
                 role="separator"
                 aria-orientation="vertical"
                 aria-label={t('graph.resizeHint')}
-                aria-valuemin={180}
+                aria-valuemin={120}
                 aria-valuemax={900}
                 aria-valuenow={graphListWidth === null ? undefined : graphListWidth}
                 tabIndex={0}
@@ -2434,6 +2529,17 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
               />
             )}
             <main className={css.mainPane}>
+              {graphListCollapsed && (
+                <button
+                  type="button"
+                  className={css.returnFab + ' ' + css.expandFab}
+                  title={t('graph.expandList')}
+                  aria-label={t('graph.expandList')}
+                  onClick={expandGraphList}
+                >
+                  {'\u25b8'}
+                </button>
+              )}
               {graphWorktree ? (
                 <div className={css.commitDetail} data-git-review-diff="">
                   <div className={css.commitInfo}>
@@ -2451,7 +2557,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     </div>
                   </div>
                   <div className={css.commitSplit}>
-                    <div className={css.commitTreePanel} data-git-review-tree="">
+                    <div className={css.commitTreePanel} data-git-review-tree="" style={commitTreeWidth !== null ? { width: commitTreeWidth } : undefined}>
                       {ready === null || ready.files.length === 0
                         ? <div className={css.paneNotice}>{t('tree.noChanges')}</div>
                         : (
@@ -2473,6 +2579,20 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                           />
                         )}
                     </div>
+                    <span
+                      className={css.treeDivider}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={t('tree.resizeHint')}
+                      aria-valuemin={160}
+                      aria-valuemax={480}
+                      aria-valuenow={commitTreeWidth === null ? undefined : commitTreeWidth}
+                      tabIndex={0}
+                      title={t('tree.resizeHint')}
+                      onMouseDown={startCommitTreeResize}
+                      onDoubleClick={() => { setCommitTreeWidth(null); try { localStorage.removeItem('dsh-git-review.commitTreeWidth') } catch { /* ignore */ } }}
+                      onKeyDown={onCommitTreeResizeKey}
+                    />
                     <div className={css.commitDiffArea}>
                       {graphWorktreeFile !== null && diff.kind !== 'idle' && (
                         <DiffPane
@@ -2598,7 +2718,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     )}
                   </div>
                   <div className={css.commitSplit}>
-                    <div className={css.commitTreePanel} data-git-review-tree="">
+                    <div className={css.commitTreePanel} data-git-review-tree="" style={commitTreeWidth !== null ? { width: commitTreeWidth } : undefined}>
                       {commitFiles === null
                         ? <div className={css.paneNotice}>{t('graph.loading')}</div>
                         : commitFiles.length === 0
@@ -2621,6 +2741,20 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                             />
                           )}
                     </div>
+                    <span
+                      className={css.treeDivider}
+                      role="separator"
+                      aria-orientation="vertical"
+                      aria-label={t('tree.resizeHint')}
+                      aria-valuemin={160}
+                      aria-valuemax={480}
+                      aria-valuenow={commitTreeWidth === null ? undefined : commitTreeWidth}
+                      tabIndex={0}
+                      title={t('tree.resizeHint')}
+                      onMouseDown={startCommitTreeResize}
+                      onDoubleClick={() => { setCommitTreeWidth(null); try { localStorage.removeItem('dsh-git-review.commitTreeWidth') } catch { /* ignore */ } }}
+                      onKeyDown={onCommitTreeResizeKey}
+                    />
                     <div className={css.commitDiffArea}>
                       {graphFileInfo !== null && diff.kind !== 'idle' && (
                         <DiffPane

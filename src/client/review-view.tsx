@@ -3043,9 +3043,29 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
   }, [cwd, selected])
   const nrKind = selected !== null ? previewKindForPath(selected) : null
   const nrSvg = selected !== null && selected.toLowerCase().endsWith('.svg')
-  /** Previewable without the changes view (markdown stays source-only: its
-   *  asset inliner needs the worktree diff pipeline). */
-  const nrPreviewKind = nrKind === 'image' || nrKind === 'pdf' || nrKind === 'html' ? nrKind : null
+  /** Previewable without the changes view. Markdown renders through the same
+   *  fallback + same-origin asset pipeline as the worktree file view (the
+   *  asset endpoint serves workspace files, so no git is involved). */
+  const nrPreviewMdOk = nrKind !== 'markdown' || markdownRenderer() !== null
+  const nrPreviewKind = nrKind === 'markdown'
+    ? (nrPreviewMdOk ? 'markdown' : null)
+    : (nrKind === 'image' || nrKind === 'pdf' || nrKind === 'html' ? nrKind : null)
+  /** Markdown text for the renderer: the worktree file view's recipe —
+   *  safe-HTML fallback, remote images defanged, workspace-relative images
+   *  rewritten to same-origin asset URLs (ref-less: the workspace revision). */
+  const nrMdFallback = useMemo(() => (
+    nrKind === 'markdown' && content.kind === 'content' ? htmlFallbackForPreview(content.content) : null
+  ), [nrKind, content])
+  const nrMdText = useMemo(() => {
+    if (nrKind !== 'markdown' || nrMdFallback === null || selected === null) return nrMdFallback ?? ''
+    const defanged = defangRemoteImages(nrMdFallback)
+    const table = new Map<string, string>()
+    for (const url of collectMdAssets(defanged).slice(0, MD_ASSET_CAP)) {
+      const rel = resolveMdAsset(selected, url)
+      if (rel !== null) table.set(url, assetUrl(cwd, rel, null))
+    }
+    return rewriteMdAssets(defanged, table)
+  }, [nrKind, nrMdFallback, selected, cwd])
   useEffect(() => {
     setPreviewSource(false)
     if (selected === null) { setPreviewBytes({ kind: 'idle' }); return }
@@ -3137,9 +3157,24 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
           {selected === null && <div className={css.paneNotice}>{t('state.notRepo.hint') + ' ' + t('state.notRepo.initHint')}</div>}
           {selected !== null && content.kind === 'loading' && nrPreviewKind === null && <div className={css.paneNotice}>{t('file.loading')}</div>}
           {selected !== null && content.kind === 'failed' && <div className={css.noticeRow + ' ' + css.noticeError}>{content.message}</div>}
-          {selected !== null && content.kind === 'binary' && (nrPreviewKind === null || nrKind === 'html' || nrSvg) && <div className={css.paneNotice}>{t('diff.binary')}</div>}
+          {selected !== null && content.kind === 'binary' && (nrPreviewKind === null || nrKind === 'html' || nrSvg || nrKind === 'markdown') && <div className={css.paneNotice}>{t('diff.binary')}</div>}
           {selected !== null && syntheticFile !== null && nrPreviewKind !== null && !previewSource && content.kind !== 'failed' && (
-            nrPreviewKind === 'html' || nrSvg
+            nrPreviewKind === 'markdown'
+              ? (content.kind === 'content' || content.kind === 'loading') ? (
+                <PreviewPane
+                  file={syntheticFile}
+                  kind="markdown"
+                  text={nrMdText}
+                  textLoading={content.kind === 'loading'}
+                  textTruncated={content.kind === 'content' && content.truncated}
+                  dataUrl={null}
+                  bytesFailed={false}
+                  bytesTruncated={false}
+                  onShowSource={() => { setPreviewSource(true) }}
+                  t={t}
+                />
+              ) : null
+              : nrPreviewKind === 'html' || nrSvg
               ? content.kind === 'content' ? (
                 <PreviewPane
                   file={syntheticFile}
@@ -3191,6 +3226,8 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
               blameOn={false}
               onToggleBlame={() => {}}
               blameState={{ kind: 'idle', lines: null, message: null }}
+              previewAvailable={nrPreviewKind !== null}
+              onShowPreview={() => { setPreviewSource(false) }}
               t={t}
             />
           )}

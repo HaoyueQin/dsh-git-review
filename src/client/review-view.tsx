@@ -8,7 +8,7 @@
  * fixes the view's height and floats the input card over its bottom, so the
  * review→agent feedback loop stays one keystroke away.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import type { RefObject } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -1376,12 +1376,37 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     if (inProgress === null) setConflictAbortArmed(false)
   }, [inProgress])
 
+  /** Armed by the toggle: the next committed expand fits the content width
+   *  (selection and drag-out expands keep their own widths). */
+  const fitOnExpandRef = useRef(false)
   const toggleGraphList = useCallback(() => {
     // One remembered open state shared by the toggle and the selection
     // paths below (no transient divergence to snap back from).
-    if (graphListCollapsed) expandGraphList()
-    else collapseGraphList()
+    if (graphListCollapsed) {
+      fitOnExpandRef.current = true
+      expandGraphList()
+    } else collapseGraphList()
   }, [graphListCollapsed, expandGraphList, collapseGraphList])
+  // Fit-to-content on toggle-expand: measure with an unconstrained width
+  // pre-paint (no flash), then pin the smallest width showing everything
+  // (capped like a drag). Consumed once; a not-ready feed keeps it armed.
+  useLayoutEffect(() => {
+    if (!fitOnExpandRef.current || graphListCollapsed) return
+    if (logState.kind !== 'ready' || logState.commits.length === 0) return
+    const el = graphListRef.current
+    if (el === null) return
+    fitOnExpandRef.current = false
+    const prevWidth = el.style.width
+    const prevMin = el.style.minWidth
+    el.style.width = 'max-content'
+    el.style.minWidth = '0'
+    const need = Math.ceil(el.scrollWidth) + 2
+    el.style.width = prevWidth
+    el.style.minWidth = prevMin
+    const fit = Math.min(GRAPH_WIDTH_MAX, Math.max(GRAPH_WIDTH_MIN, need))
+    setGraphListWidth(fit)
+    try { localStorage.setItem('dsh-git-review.graphWidth', String(fit)) } catch { /* private mode — width just doesn't persist */ }
+  }, [graphListCollapsed, logState])
 
   const selectGraphFile = useCallback((path: string) => {
     setGraphFile(path)

@@ -127,6 +127,17 @@ export interface MatchOptions {
   regex?: boolean
 }
 
+/** Heuristic ReDoS guard: a group that both contains a quantifier and is
+ *  itself quantified ((a+)+$, (x*)*, (a|aa)+) backtracks inside ONE exec
+ *  call — no iteration cap can stop it, and the host loop is shared by the
+ *  whole harness. Escapes and character classes are stripped first (neither
+ *  can hide a group quantifier); suspects degrade to literal matching.
+ *  Conservative by design: false positives only lose regex, never hang. */
+export function isPathologicalRegex(source: string): boolean {
+  const stripped = source.replace(/\\./g, '').replace(/\[([^\]\\]|\\.)*\]/g, '')
+  return /\([^()]*[+*{][^()]*\)[+*?{]/.test(stripped) || /\([^()]*\|[^()]*\)[+*?{]/.test(stripped)
+}
+
 /** Occurrence count honoring the optional case-sensitivity / regex toggles.
  *  An invalid regex counts as 0 (never throws); a non-regex query is a
  *  literal, non-overlapping scan — the same contract `countOccurrences`
@@ -134,6 +145,8 @@ export interface MatchOptions {
 export function countMatches(haystack: string, needle: string, options: MatchOptions = {}): number {
   if (needle === '') return 0
   if (options.regex === true) {
+    // Fail safe: a pathological pattern counts literally instead of hanging.
+    if (isPathologicalRegex(needle)) return countMatches(haystack, needle, { ...options, regex: false })
     try {
       const re = new RegExp(needle, options.caseSensitive ? 'g' : 'gi')
       let count = 0

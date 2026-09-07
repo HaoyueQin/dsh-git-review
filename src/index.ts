@@ -70,10 +70,13 @@
  * "Adding a Host Remote package is an explicit choice by the Client
  * composition owner"), so the plugin-served route is the one sanctioned
  * channel left. Trust model follows dsh-diff-stat: same-origin and
- * unauthenticated like every plugin-served Web API, therefore no more
- * powerful than the page that calls it — here, git commands whose every
- * path is fenced inside the session workspace's repository (refs re-resolved
- * server-side, write verbs confirm-gated).
+ * unauthenticated like every plugin-served Web API. The caller asserts
+ * `cwd` (the session tab owns it) and it is NOT allowlisted: any
+ * repository on the host is servable, and non-repository directories get
+ * file browsing. Every path is then fenced relative to the resolved
+ * root, refs are re-resolved server-side, write verbs are confirm-gated —
+ * so no stronger than the calling page, but the page CAN reach git (and
+ * the filesystem) through it by design.
  *
  * All git output is NUL/verbatim safe: `--no-optional-locks` (never contend
  * with a running agent's index.lock), `-c core.quotepath=false`, `-z` wire
@@ -139,18 +142,26 @@ interface WebServerService {
  * host process (or its parent shell) may carry GIT_DIR/GIT_WORK_TREE from an
  * unrelated context, and `-C <root>` does NOT override an explicit GIT_DIR.
  * Stripping them pins every invocation to the `-C` workspace (dock-git's
- * env-sanitization precedent).
+ * env-sanitization precedent). GIT_CONFIG_COUNT/PARAMETERS/KEY_* are
+ * arbitrary-config injection (they can set core.sshCommand and friends), so
+ * they go too. Deliberately KEPT: GIT_SSH[_COMMAND]/GIT_ASKPASS (users need
+ * them for authenticated fetch/push/pull) — a poisoned host env is outside
+ * this plugin's threat model, but config injection is stripped regardless.
  */
-const GIT_ENV_KEYS = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR'] as const
+const GIT_ENV_STRIP_EXACT = new Set(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS', 'GIT_PAGER', 'GIT_SEQUENCE_EDITOR'])
+const GIT_ENV_STRIP_PREFIX = 'GIT_CONFIG_KEY_'
 
 export function gitEnv(): NodeJS.ProcessEnv {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && !GIT_ENV_KEYS.includes(key as (typeof GIT_ENV_KEYS)[number])) env[key] = value
+    if (value === undefined || GIT_ENV_STRIP_EXACT.has(key) || key.startsWith(GIT_ENV_STRIP_PREFIX)) continue
+    env[key] = value
   }
   // History operations (merge/revert/cherry-pick) can spawn an editor for
-  // messages even with --no-edit on older gits; pin it non-interactive.
+  // messages even with --no-edit on older gits; pin editors non-interactive.
   env['GIT_EDITOR'] = 'true'
+  env['GIT_SEQUENCE_EDITOR'] = 'true'
+  env['GIT_PAGER'] = 'cat'
   return env
 }
 
@@ -267,6 +278,9 @@ async function diffBase(repoRoot: string): Promise<{ base: string; unbornHead: b
  *  file must never enter memory whole just to count its lines). */
 async function readPrefix(absPath: string, maxBytes: number): Promise<{ bytes: Buffer; truncated: boolean }> {
   const handle = await open(absPath, 'r')
+  // The lstat gate upstream runs before open (TOCTOU): re-check the opened
+  // handle so a swapped-in directory/FIFO/symlink target is never read.
+  if (!(await handle.stat()).isFile()) { await handle.close(); throw new Error('not a regular file') }
   try {
     const buf = Buffer.alloc(maxBytes)
     const { bytesRead } = await handle.read(buf, 0, maxBytes, 0)
@@ -291,6 +305,8 @@ const PROBE_CHUNK = 64 * 1024
  *  exact count) or the scan stopped early (a prefix estimate, as before). */
 async function scanLineCount(absPath: string, size: number, maxBytes: number): Promise<{ added: number; binary: boolean; scanned: number }> {
   const handle = await open(absPath, 'r')
+  // Same TOCTOU re-check as readPrefix: only read opened regular files.
+  if (!(await handle.stat()).isFile()) { await handle.close(); throw new Error('not a regular file') }
   try {
     const buf = Buffer.alloc(PROBE_CHUNK)
     let pos = 0
@@ -367,6 +383,7 @@ async function probeUntracked(repoRoot: string, relPath: string, budget: { remai
  */
 async function untrackedPseudoDiff(repoRoot: string, relPath: string): Promise<GitFileDiffPayload | null> {
   const absPath = resolve(repoRoot, relPath)
+  if (!inside(repoRoot, absPath)) return null
   let size: number
   try {
     const stat = await lstat(absPath)
@@ -1232,7 +1249,8 @@ export async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<Git
  *  grep itself stays uncapped (its own process is timeout-killed). */
 export const SEARCH_REGEX_CAP = 100
 
-/** Count matches with the host-stall guard: overlong regex degrades to literal. */
+/** Count matches with the host-stall guard: overlong or nested-quantifier
+ *  regex degrades to literal (the nested check lives in countMatches). */
 function safeCount(haystack: string, needle: string, options: { caseSensitive: boolean; regex: boolean }): number {
   if (options.regex && needle.length > SEARCH_REGEX_CAP) {
     return countMatches(haystack, needle, { ...options, regex: false })

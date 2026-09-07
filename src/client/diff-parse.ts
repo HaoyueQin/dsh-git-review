@@ -11,6 +11,7 @@
  * Node's native TS type stripping (Node >= 23.6).
  */
 /** Pure diff parsing: no I/O, no React. */
+import { isPathologicalRegex } from '../git-parse.ts'
 
 /** Above this row count any pane renders a prefix (with a notice). */
 export const MAX_RENDER_ROWS = 20_000
@@ -39,6 +40,9 @@ export interface ParsedHunk {
   newCount: number
   /** Trailing section heading git appends after the @@ marker ('' when none). */
   section: string
+  /** True when the consumed rows disagree with the @@ counts (a cut or
+   *  corrupt hunk — the renderer says so instead of silently short-showing). */
+  damaged: boolean
   rows: PairRow[]
 }
 
@@ -84,22 +88,65 @@ export function buildHunkPatch(raw: string, hunkIndex: number): string | null {
   if (lines[lines.length - 1] === '') lines.pop()
   const hunkStarts: number[] = []
   let firstHunk = -1
+  let fileCount = 0
   for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.startsWith('diff --git ')) fileCount += 1
     if (HUNK_RE.test(lines[i]!)) {
       hunkStarts.push(i)
       if (firstHunk < 0) firstHunk = i
     }
   }
   if (hunkIndex >= hunkStarts.length) return null
+  // Multi-file raws would mix file1's header into file2's patch (git apply
+  // would mis-apply): the only caller serves single-file diffs, so fail.
+  if (fileCount > 1) return null
   const headEnd = firstHunk
   const bodyStart = hunkStarts[hunkIndex]!
   const bodyEnd = hunkIndex + 1 < hunkStarts.length ? hunkStarts[hunkIndex + 1]! : lines.length
   return [...lines.slice(0, headEnd), ...lines.slice(bodyStart, bodyEnd), ''].join('\n')
 }
 
-/** Strip the a/ b/ prefix git prepends to diff paths. Headers C-quote
- *  exotic names, so one layer of double quotes comes off first (a quoted
- *  'a/...' is a prefix, a literal leading quote is pathological input). */
+/** Undo git's header quoting for ---/+++ fields. A quoted field keeps its
+ *  inner spaces verbatim (verified against real git: space-padded names are
+ *  NOT quoted, so trimming them corrupts the path). C-quoted escapes are
+ *  restored at the BYTE level (git quotes raw bytes: an octal run may be
+ *  one UTF-8 sequence split across escapes). Unquoted fields keep the
+ *  historical trim (some drivers trail a tab after the path). */
+export function unquoteHeaderPath(field: string): string {
+  const trimmed = field.trim()
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed
+  const body = trimmed.slice(1, -1)
+  if (!body.includes('\\')) return body
+  const encoder = new TextEncoder()
+  const bytes: number[] = []
+  const pushUtf8 = (text: string): void => {
+    for (const byte of encoder.encode(text)) bytes.push(byte)
+  }
+  for (let i = 0; i < body.length;) {
+    if (body[i] !== '\\') {
+      pushUtf8(body[i]!)
+      i += 1
+      continue
+    }
+    const next = body[i + 1] ?? ''
+    if (next === 'n') { bytes.push(0x0a); i += 2; continue }
+    if (next === 't') { bytes.push(0x09); i += 2; continue }
+    if (next === '\\' || next === '"') { bytes.push(next.charCodeAt(0)); i += 2; continue }
+    const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1))
+    if (octal !== null) {
+      bytes.push(parseInt(octal[0], 8) & 0xff)
+      i += 1 + octal[0].length
+      continue
+    }
+    pushUtf8('\\')
+    i += 1
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes))
+}
+
+/** Strip the a/ b/ prefix git prepends to diff paths (runs after
+ *  unquoteHeaderPath: a quoted 'a/...' is a prefix, a literal leading
+ *  quote is pathological input). */
 function stripPrefix(field: string): string {
   const unquoted = field.length >= 2 && field.startsWith('"') && field.endsWith('"') ? field.slice(1, -1) : field
   return unquoted.startsWith('a/') || unquoted.startsWith('b/') ? unquoted.slice(2) : unquoted
@@ -130,6 +177,8 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
   const result: ParsedDiff = { ...EMPTY_DIFF, hunks: [] }
   let oldNo = 0
   let newNo = 0
+  let consumedOld = 0
+  let consumedNew = 0
   let runDels: DiffCell[] = []
   let runAdds: DiffCell[] = []
   let lastCell: DiffCell | null = null
@@ -143,19 +192,28 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     runDels = []
     runAdds = []
   }
-  const startHunk = (match: RegExpMatchArray, current: ParsedHunk | null): ParsedHunk => {
-    flushRun(current)
+  // Close the open hunk, flagging it when the consumed rows disagree with
+  // its @@ counts (a mid-hunk truncation or corrupt input).
+  const finishHunk = (): void => {
+    flushRun(hunk)
+    if (hunk !== null && (consumedOld !== hunk.oldCount || consumedNew !== hunk.newCount)) hunk.damaged = true
+    hunk = null
+  }
+  const startHunk = (match: RegExpMatchArray): ParsedHunk => {
     const created: ParsedHunk = {
       oldStart: Number(match[1]),
       oldCount: match[2] === undefined ? 1 : Number(match[2]),
       newStart: Number(match[3]),
       newCount: match[4] === undefined ? 1 : Number(match[4]),
       section: (match[5] ?? '').trim(),
+      damaged: false,
       rows: [],
     }
     result.hunks.push(created)
     oldNo = created.oldStart
     newNo = created.newStart
+    consumedOld = 0
+    consumedNew = 0
     // A new hunk owns its cells: a stale marker must not leak across.
     lastCell = null
     return created
@@ -163,8 +221,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
   let hunk: ParsedHunk | null = null
   for (const line of lines) {
     if (line.startsWith('diff --git ')) {
-      flushRun(hunk)
-      hunk = null
+      finishHunk()
       // A later '\ No newline' marker must not annotate the previous
       // file's last cell (multi-file texts share this walk).
       lastCell = null
@@ -173,13 +230,14 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     if (hunk === null) {
       const hunkMatch = HUNK_RE.exec(line)
       if (hunkMatch !== null) {
-        hunk = startHunk(hunkMatch, hunk)
+        finishHunk()
+        hunk = startHunk(hunkMatch)
       } else if (line.startsWith('--- ')) {
-        const field = line.slice(4).trim()
+        const field = unquoteHeaderPath(line.slice(4))
         if (field === '/dev/null') result.newFile = true
         else result.oldPath = stripPrefix(field)
       } else if (line.startsWith('+++ ')) {
-        const field = line.slice(4).trim()
+        const field = unquoteHeaderPath(line.slice(4))
         if (field === '/dev/null') result.deletedFile = true
         else result.newPath = stripPrefix(field)
       } else if (line.startsWith('rename from ') || line.startsWith('rename to ')) {
@@ -194,7 +252,12 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       // A non-hunk '@' line is malformed input: end the hunk (per the
       // docstring above), never silently continue it.
       const hunkMatch = HUNK_RE.exec(line)
-      hunk = hunkMatch !== null ? startHunk(hunkMatch, hunk) : (flushRun(hunk), null)
+      if (hunkMatch !== null) {
+        finishHunk()
+        hunk = startHunk(hunkMatch)
+      } else {
+        finishHunk()
+      }
       lastCell = null
       continue
     }
@@ -205,17 +268,24 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     }
     if (line.startsWith('-')) {
       lastCell = { no: oldNo++, text: line.slice(1) }
+      if (hunk !== null) consumedOld += 1
       runDels.push(lastCell)
       continue
     }
     if (line.startsWith('+')) {
       lastCell = { no: newNo++, text: line.slice(1) }
+      if (hunk !== null) consumedNew += 1
       runAdds.push(lastCell)
       continue
     }
     if (line.startsWith(' ') || line === '') {
       flushRun(hunk)
+      // A context-looking line outside any hunk is stray input, not a row:
+      // without this guard `hunk.rows` would throw on null.
+      if (hunk === null) continue
       const text = line === '' ? '' : line.slice(1)
+      consumedOld += 1
+      consumedNew += 1
       hunk.rows.push({ kind: 'ctx', left: { no: oldNo++, text }, right: { no: newNo++, text } })
       continue
     }
@@ -223,7 +293,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     flushRun(hunk)
     hunk = null
   }
-  flushRun(hunk)
+  finishHunk()
   return result
 }
 
@@ -302,7 +372,9 @@ export function makeSearchEngine(spec: SearchSpec): SearchEngine {
   }
   if (query.trim() === '') return empty
   const flags = (spec.caseSensitive ? '' : 'i') + 'g'
-  if (spec.regex === true) {
+  // A nested-quantifier pattern backtracks inside ONE exec call and would
+  // hang the tab on long lines: degrade to literal like the host matcher.
+  if (spec.regex === true && !isPathologicalRegex(query)) {
     let re: RegExp
     try {
       re = new RegExp(query, flags)
@@ -453,6 +525,24 @@ export const WORD_HIGHLIGHT_BUDGET = 2_000_000
  *  intra-line spans would render nearly everything as changed anyway. */
 const WORD_HIGHLIGHT_MIN_RATIO = 0.3
 
+/** Shared-character ratio over the multiset intersection, in O(n+m) time
+ *  (code-point aware). Must run BEFORE any DP: it is the cheap rejection. */
+function sharedCharRatio(a: string, b: string): number {
+  if (a.length === 0 || b.length === 0) return 0
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  const counts = new Map<string, number>()
+  for (const ch of short) counts.set(ch, (counts.get(ch) ?? 0) + 1)
+  let shared = 0
+  for (const ch of long) {
+    const left = counts.get(ch) ?? 0
+    if (left > 0) {
+      counts.set(ch, left - 1)
+      shared += 1
+    }
+  }
+  return shared / Math.max(a.length, b.length)
+}
+
 /** Dissolve trivial interior equalities in a changed-marks array, in place.
  *
  *  Borrowed from google/diff-match-patch `Diff_cleanupSemantic`: an equality
@@ -496,6 +586,7 @@ function lcsWordRegions(a: string, b: string): WordRegions | null {
   if (a.length === 0 || b.length === 0) return null
   if (a.length > WORD_HIGHLIGHT_MAX_LEN || b.length > WORD_HIGHLIGHT_MAX_LEN) return null
   if (a === b) return null
+  if (sharedCharRatio(a, b) < WORD_HIGHLIGHT_MIN_RATIO) return null
   const rows = a.length + 1
   const cols = b.length + 1
   const dp = new Uint16Array(rows * cols)
@@ -507,10 +598,9 @@ function lcsWordRegions(a: string, b: string): WordRegions | null {
         : Math.max(dp[(i - 1) * cols + j], dp[i * cols + j - 1])
     }
   }
-  const lcs = dp[rows * cols - 1]
-  if (lcs / Math.max(a.length, b.length) < WORD_HIGHLIGHT_MIN_RATIO) return null
   // Walk the DP backwards marking changed characters per side, then sweep
-  // the marks into ascending half-open spans.
+  // the marks into ascending half-open spans. (The similarity gate already
+  // ran up front as an O(n+m) precheck — an LCS ratio here could only agree.)
   const oldMarks = new Uint8Array(a.length)
   const newMarks = new Uint8Array(b.length)
   let i = a.length
@@ -588,13 +678,18 @@ export function makeWordHighlighter(budget: number = WORD_HIGHLIGHT_BUDGET): Wor
       const left = row.left.text
       const right = row.right.text
       // Cheap rejection before any DP: empty side, oversized side, or the
-      // quick shared-character ratio.
+      // quick shared-character ratio (inside lcsWordRegions). The budget
+      // pays only for pairs that actually render highlighted — a discarded
+      // pair must not starve the rows after it.
       if (left.length <= WORD_HIGHLIGHT_MAX_LEN && right.length <= WORD_HIGHLIGHT_MAX_LEN
         && left.length > 0 && right.length > 0 && left !== right) {
         const cost = left.length * right.length
         if (cost <= remaining) {
-          remaining -= cost
-          regions = lcsWordRegions(left, right)
+          const candidate = lcsWordRegions(left, right)
+          if (candidate !== null) {
+            remaining -= cost
+            regions = candidate
+          }
         }
       }
       memo.set(row, regions)

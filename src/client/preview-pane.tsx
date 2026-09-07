@@ -176,7 +176,7 @@ export function PreviewPane({ file, kind, text, textLoading, textTruncated = fal
             bytesFailed ? t('preview.loadFailed') : bytesTruncated ? t('preview.tooLarge') : t('preview.loading')}</div>)}
         {kind === 'html' && (textLoading
           ? <div className={css.paneNotice}>{t('file.loading')}</div>
-          : <iframe className={css.previewPdf} srcDoc={text} sandbox="" title={file.path} />)}
+          : <><iframe className={css.previewPdf} srcDoc={text} sandbox="" title={file.path} />{textTruncated && <div className={css.noticeRow}>{t('file.truncated')}</div>}</>)}
         <div className={css.diffBottomReserve} />
       </div>
     </div>

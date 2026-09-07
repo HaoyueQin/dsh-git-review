@@ -6,7 +6,8 @@
  */
 import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { makeSearchEngine, MAX_RENDER_ROWS, type SearchSpec } from './diff-parse.ts'
-import { makeLineHighlighter, sliceTokens, splitLineByTokens, type TokenSpan } from './highlight.ts'
+import { makeLineHighlighter, type TokenSpan } from './highlight.ts'
+import { renderMarkedText } from './marked-text.tsx'
 import { FileIcon, LineLeftIcon, LinesIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { FileCounts } from './file-counts.tsx'
@@ -22,30 +23,9 @@ type T = PropsLocale<typeof NS>['t']
 export type FileViewMode = 'split' | 'unified' | 'file'
 
 /** One line with content-search matches wrapped in <mark>, syntax tokens
- *  colored underneath (the token spans slice the same line). */
+ *  colored underneath (shared composition — see marked-text.tsx). */
 function highlightedLine(text: string, engine: ReturnType<typeof makeSearchEngine>, tokens: TokenSpan[] | null): ReactNode {
-  // Gap-preserving: tokens are line-level, so each search chunk re-slices
-  // them by its own offset before rendering every segment (plain gaps
-  // included) — mapping tokens alone drops identifiers/whitespace.
-  const render = (chunk: string, offset: number): ReactNode => {
-    if (tokens === null || tokens.length === 0) return chunk
-    return splitLineByTokens(chunk, sliceTokens(tokens, offset, offset + chunk.length)).map((seg, index) => {
-      const inner = chunk.slice(seg.start, seg.end)
-      if (seg.kind === null) return <span key={index}>{inner}</span>
-      const cls = seg.kind === 'kw' ? css.tokKw : seg.kind === 'str' ? css.tokStr : seg.kind === 'num' ? css.tokNum : css.tokCom
-      return <span key={index} className={cls}>{inner}</span>
-    })
-  }
-  const parts = engine.parts(text)
-  if (parts.length === 1) return render(parts[0]!, 0)
-  let offset = 0
-  return parts.map((part, index) => {
-    const at = offset
-    offset += part.length
-    return index % 2 === 1
-      ? <mark key={index} className={css.matchMark}>{part}</mark>
-      : render(part, at)
-  })
+  return renderMarkedText(text, engine, tokens)
 }
 
 /** The layout/view switch shared by both pane headers. */

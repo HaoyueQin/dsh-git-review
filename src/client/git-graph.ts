@@ -82,9 +82,11 @@ export function computeGraphLanes(commits: readonly GraphCommit[]): GraphLaneRow
     }
     // 3. Outgoing half-rows: first parent continues the line (a straight
     //    lower segment, or a sideways fold into the slot already waiting
-    //    for it — the fold keeps the node's own color: it is this branch's
-    //    line continuing), further parents merge in (target color: the
-    //    merged line continues through the node) or branch out (new color).
+    //    for it — the fold segment alone keeps the node's own color while
+    //    the surviving slot keeps the target's color, so the main line
+    //    below never changes hue at a merge), further parents merge in
+    //    (target color: the merged line continues through the node) or
+    //    branch out (new color).
     const outEdges: GraphEdge[] = []
     if (commit.parents.length === 0) {
       tips[lane] = { hash: null, color: 0 }
@@ -93,9 +95,9 @@ export function computeGraphLanes(commits: readonly GraphCommit[]): GraphLaneRow
       const firstTarget = tips.findIndex((tip, i) => i !== lane && tip.hash === first)
       if (firstTarget >= 0) {
         outEdges.push({ from: lane, to: firstTarget, color })
-        // Recolor the surviving slot: the fold continues this node's line,
-        // so the next row must not jump back to the target's old color.
-        tips[firstTarget] = { hash: first, color }
+        // The fold alone carries the node's color; the surviving slot keeps
+        // the target's color by design (gitk convention: the main line runs
+        // unbroken beneath the merge, only the diagonal fold is branch-hued).
         tips[lane] = { hash: null, color: 0 }
       } else {
         tips[lane] = { hash: first, color }

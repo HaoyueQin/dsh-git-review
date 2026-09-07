@@ -25,7 +25,7 @@ import { buildHunkPatch } from './diff-parse.ts'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { markdownRenderer, PreviewPane } from './preview-pane.tsx'
 import { previewKindForPath, type PreviewKind } from './preview-kind.ts'
-import { collectMdAssets, htmlFallbackForPreview, MD_ASSET_CAP, resolveMdAsset, rewriteMdAssets } from './md-preview.ts'
+import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, MD_ASSET_CAP, resolveMdAsset, rewriteMdAssets } from './md-preview.ts'
 import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
@@ -741,20 +741,23 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   const mdFallback = useMemo(() => (
     previewKind === 'markdown' && diff.kind === 'content' ? htmlFallbackForPreview(diff.content) : null
   ), [previewKind, diff])
-  /** Markdown text for the renderer: safe-HTML fallback first, then
-   *  repo-relative images rewritten to absolute same-origin asset URLs
-   *  (the shell renderer only paints absolute http(s) images — relative
-   *  links are banned and data: URLs degrade to alt text, so neither can
-   *  render there). Pure and synchronous: no fetch, nothing to stale. */
+  /** Markdown text for the renderer: safe-HTML fallback first, remote
+   *  images defanged to click-to-load links (the shell fetches absolute
+   *  http(s) images on sight), then repo-relative images rewritten to
+   *  absolute same-origin asset URLs (the shell renderer only paints
+   *  absolute http(s) images — relative links are banned and data: URLs
+   *  degrade to alt text, so neither can render there). Pure and
+   *  synchronous: no fetch, nothing to stale. */
   const mdText = useMemo(() => {
     if (previewKind !== 'markdown' || mdFallback === null || selected === null || cwd === undefined) return mdFallback ?? ''
     const ref = refsMode && targetRef !== null ? targetRef : null
+    const defanged = defangRemoteImages(mdFallback)
     const table = new Map<string, string>()
-    for (const url of collectMdAssets(mdFallback).slice(0, MD_ASSET_CAP)) {
+    for (const url of collectMdAssets(defanged).slice(0, MD_ASSET_CAP)) {
       const rel = resolveMdAsset(selected, url)
       if (rel !== null) table.set(url, assetUrl(cwd, rel, ref))
     }
-    return rewriteMdAssets(mdFallback, table)
+    return rewriteMdAssets(defanged, table)
   }, [previewKind, mdFallback, selected, cwd, refsMode, targetRef])
 
   // Diff/content lifecycle (worktree view): whenever the selected file, its

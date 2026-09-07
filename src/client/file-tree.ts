@@ -30,7 +30,8 @@ export interface TreeFile {
 
 export type TreeEntry = TreeDir | TreeFile
 
-/** Sort dirs first, then files, each by name (plain codepoint order). */
+/** Sort dirs first, then files, each by name (plain codepoint order).
+ *  Pure: returns a new array — callers assign the result back. */
 function sortChildren(children: TreeEntry[]): TreeEntry[] {
   return [...children].sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
@@ -72,7 +73,7 @@ export function buildFileTree(files: readonly ChangedFile[]): TreeDir {
   }
   countFiles(root)
   const sortDeep = (dir: TreeDir): void => {
-    sortChildren(dir.children)
+    dir.children = sortChildren(dir.children)
     for (const child of dir.children) {
       if (child.kind === 'dir') sortDeep(child)
     }

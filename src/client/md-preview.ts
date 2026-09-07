@@ -32,7 +32,15 @@ function attr(tag: string, name: string): string | null {
  * instead of escaped tags. `<img>` keeps its alt/src (the asset inliner
  * resolves relative src next); `<a>` keeps text + href; layout-only
  * wrappers (`<p>`, `<picture>`, `<source>`) dissolve into blank lines.
+ *
+ * Non-navigable link schemes (javascript:, data:, …) degrade to plain text:
+ * the shell renderer would unwrap them anyway, so the visible result is
+ * identical while the text never carries an executable scheme.
  */
+function safeLinkText(text: string, href: string): string {
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) && !/^(?:https?|mailto):/i.test(href)) return text
+  return '[' + text + '](' + href + ')'
+}
 export function htmlFallbackForPreview(text: string): string {
   // NOTE: block-level tags are anchored at line start WITH their leading
   // whitespace: README sources indent nested tags, and 4+ leading spaces
@@ -53,9 +61,9 @@ export function htmlFallbackForPreview(text: string): string {
       return src === '' ? '' : '![' + (attr(tag, 'alt') ?? '') + '](' + src + ')'
     })
     .replace(/^[ \t]*<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gim,
-      (_whole, dbl: string | undefined, sqt: string | undefined, text: string) => '[' + text + '](' + (dbl ?? sqt ?? '') + ')')
+      (_whole, dbl: string | undefined, sqt: string | undefined, text: string) => safeLinkText(text, dbl ?? sqt ?? ''))
     .replace(/<a\b[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a>/gi,
-      (_whole, dbl: string | undefined, sqt: string | undefined, text: string) => '[' + text + '](' + (dbl ?? sqt ?? '') + ')')
+      (_whole, dbl: string | undefined, sqt: string | undefined, text: string) => safeLinkText(text, dbl ?? sqt ?? ''))
     .replace(/<\/?p\b[^>]*>/gi, '\n\n')
 }
 
@@ -84,6 +92,28 @@ export function collectMdAssets(text: string): string[] {
     }
   }
   return out
+}
+
+/** Defang remote images into same-URL links (click-to-load): the shell
+ *  renderer fetches absolute http(s) image URLs on sight (tracking pixels,
+ *  IP/UA leak), so remote images become links with an external-image title
+ *  instead. Local URLs pass through for the asset pipeline, which runs
+ *  after this step (rewritten same-origin URLs never see it). */
+export function defangRemoteImages(text: string): string {
+  INLINE_IMG.lastIndex = 0
+  const inline = text.replace(INLINE_IMG,
+    (whole, alt: string, url: string, _title: string) => (/^https?:\/\//i.test(url)
+      ? '[' + (alt === '' ? url : alt) + '](' + url + ' "external image")'
+      : whole))
+  REF_DEF.lastIndex = 0
+  const remoteIds = new Set<string>()
+  for (let hit = REF_DEF.exec(inline); hit !== null; hit = REF_DEF.exec(inline)) {
+    const idHit = /^ {0,3}\[([^\]]+)\]/.exec(hit[0])
+    if (idHit !== null && /^https?:\/\//i.test(hit[2]!)) remoteIds.add(idHit[1]!.toUpperCase())
+  }
+  if (remoteIds.size === 0) return inline
+  REF_USE.lastIndex = 0
+  return inline.replace(REF_USE, (whole, id: string) => (remoteIds.has(id.toUpperCase()) ? whole.slice(1) : whole))
 }
 
 /** Rewrite collected URLs via `table` (raw -> absolute same-origin asset URL;

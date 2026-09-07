@@ -9,7 +9,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec, type WordHighlighter, type WordSpans } from './diff-parse.ts'
-import { makeLineHighlighter, sliceTokens, splitLineByTokens, type TokenSpan } from './highlight.ts'
+import { makeLineHighlighter, sliceTokens, type TokenSpan } from './highlight.ts'
+import { renderMarkedText, searchParts } from './marked-text.tsx'
 import { CommentIcon, ExpandIcon, CollapseIcon, HistoryIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { FileCounts } from './file-counts.tsx'
@@ -86,48 +87,26 @@ export interface DiffPaneProps {
   t: T
 }
 
-/** One cell's text with search matches wrapped in <mark> (odd split parts). */
-function searchParts(text: string, engine: SearchEngine): ReactNode {
-  const parts = engine.parts(text)
-  if (parts.length === 1) return parts[0]
-  return parts.map((part, index) =>
-    index % 2 === 1 ? <mark key={index} className={css.matchMark}>{part}</mark> : part,
-  )
-}
-
 /** One cell's text: word-level changed spans (when the row is a replacement
  *  pair the highlighter computed) wrapped in a tinted span, each span still
  *  searchable. `spans` null renders the plain (search-highlighted) text.
  *  `tokens` (the line's syntax spans) color the plain stretches; inside a
  *  changed-word span the strong tint wins, so syntax is skipped there. */
-function tokenClass(kind: TokenSpan['kind']): string {
-  return kind === 'kw' ? css.tokKw : kind === 'str' ? css.tokStr : kind === 'num' ? css.tokNum : css.tokCom
-}
-
-function renderTokens(text: string, engine: SearchEngine, tokens: TokenSpan[] | null): ReactNode {
-  if (tokens === null || tokens.length === 0) return searchParts(text, engine)
-  // Gap-preserving: tokens cover only kw/str/num/com, so every segment
-  // (plain gaps included) must render, or identifiers/whitespace vanish.
-  return splitLineByTokens(text, tokens).map((seg, index) => {
-    const inner = searchParts(text.slice(seg.start, seg.end), engine)
-    return seg.kind === null ? <span key={index}>{inner}</span> : <span key={index} className={tokenClass(seg.kind)}>{inner}</span>
-  })
-}
 
 function renderCellText(cell: DiffCell | null, engine: SearchEngine, spans: WordSpans | null, changedClass: string, tokens: TokenSpan[] | null): ReactNode {
   if (cell === null) return ''
   const text = cell.text
-  if (spans === null || spans.length === 0) return renderTokens(text, engine, tokens)
+  if (spans === null || spans.length === 0) return renderMarkedText(text, engine, tokens)
   const nodes: ReactNode[] = []
   let cursor = 0
   for (const [start, end] of spans) {
-    if (start > cursor) nodes.push(renderTokens(text.slice(cursor, start), engine, sliceTokens(tokens, cursor, start)))
+    if (start > cursor) nodes.push(renderMarkedText(text.slice(cursor, start), engine, sliceTokens(tokens, cursor, start)))
     if (end > start) {
       nodes.push(<span key={start} className={changedClass}>{searchParts(text.slice(start, end), engine)}</span>)
     }
     cursor = Math.max(cursor, end)
   }
-  if (cursor < text.length) nodes.push(renderTokens(text.slice(cursor), engine, sliceTokens(tokens, cursor, text.length)))
+  if (cursor < text.length) nodes.push(renderMarkedText(text.slice(cursor), engine, sliceTokens(tokens, cursor, text.length)))
   return nodes
 }
 
@@ -300,10 +279,9 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   // Word-level highlight: one budgeted pass per parse (re-renders never
   // recompute a row — the highlighter memoizes by row identity).
   const words = useMemo(() => makeWordHighlighter(), [parsed])
-  // Line syntax highlighter: one budgeted instance per file (a very large
-  // diff degrades to plain text mid-render, never stalls).
-  // One budgeted instance per parsed diff (a spent budget must not leak into
-  // the next file's diff on the same path).
+  // Line syntax highlighter: one budgeted instance per parsed diff (a very
+  // large diff degrades to plain text mid-render, never stalls; a spent
+  // budget must not leak into the next file's diff on the same path).
   const highlighter = useMemo(() => (syntaxHighlight ? makeLineHighlighter(file.path) : null), [file.path, syntaxHighlight, parsed])
   const unified = view === 'unified'
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -505,7 +483,7 @@ function renderHunks(
         )}
         <div className={css.hunkHeader}>
           <span className={css.hunkHeaderText}>
-            {'@@ -' + hunk.oldStart + ',' + hunk.oldCount + ' +' + hunk.newStart + ',' + hunk.newCount + ' @@' + (hunk.section === '' ? '' : ' ' + hunk.section)}
+            {'@@ -' + hunk.oldStart + ',' + hunk.oldCount + ' +' + hunk.newStart + ',' + hunk.newCount + ' @@' + (hunk.section === '' ? '' : ' ' + hunk.section) + (hunk.damaged ? ' \u00b7 ' + ui.t('diff.truncated') : '')}
           </span>
           {ui.hunkOps !== undefined && ui.onHunkOp !== undefined && (
             <span className={css.hunkActions}>

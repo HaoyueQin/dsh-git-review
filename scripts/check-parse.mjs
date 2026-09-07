@@ -6,14 +6,14 @@
 import assert from 'node:assert/strict'
 import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseBlamePorcelain, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, sniffPreviewMime, splitDiffSections } from '../src/git-parse.ts'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
-import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
+import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows, unquoteHeaderPath } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { langOf, makeLineHighlighter, sliceTokens, splitLineByTokens, tokenizeLine } from '../src/client/highlight.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, isUnmerged, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
 import { previewKindForPath } from '../src/client/preview-kind.ts'
-import { collectMdAssets, htmlFallbackForPreview, resolveMdAsset, rewriteMdAssets } from '../src/client/md-preview.ts'
+import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, resolveMdAsset, rewriteMdAssets } from '../src/client/md-preview.ts'
 import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
 import { createDraftBox, draftsKey, parseDrafts } from '../src/client/comment-drafts.ts'
 
@@ -223,14 +223,14 @@ assert.equal(badgeFor({ path: 'x', x: 'R', y: ' ', added: 0, deleted: 0, binary:
 assert.equal(badgeFor({ path: 'x', x: ' ', y: 'M', added: 1, deleted: 1, binary: false, untracked: false }).glyph, '\u00b1')
 
 // 17. badgesFor: staged (X) and unstaged (Y) halves render as ordered badges;
-//     untracked stays a single muted '?'; an inactive/inactive row falls back
-//     to one modified badge.
+//     untracked stays a single muted '?'; an inactive/inactive row renders
+//     no badge rather than a fake "modified" one.
 const dual = badgesFor({ path: 'x', x: 'M', y: 'M', added: 1, deleted: 1, binary: false, untracked: false })
 assert.deepEqual(dual.map(b => [b.glyph, b.staged]), [['\u00b1', true], ['\u00b1', false]])
 const addDelete = badgesFor({ path: 'x', x: 'A', y: 'D', added: 1, deleted: 1, binary: false, untracked: false })
 assert.deepEqual(addDelete.map(b => b.glyph), ['+', '\u2212'])
 assert.deepEqual(addDelete.map(b => b.staged), [true, false])
-assert.deepEqual(badgesFor({ path: 'x', x: ' ', y: ' ', added: 0, deleted: 0, binary: false, untracked: false }).map(b => b.key), ['modified'])
+assert.deepEqual(badgesFor({ path: 'x', x: ' ', y: ' ', added: 0, deleted: 0, binary: false, untracked: false }).map(b => b.key), [])
 assert.deepEqual(badgesFor({ ...treeFiles[2] }).map(b => [b.key, b.staged]), [['untracked', undefined]])
 // 17b. Unmerged states (both-sided DD included) collapse to one red conflict
 //      badge; staged-add + worktree-delete (A/D) stays two normal badges.
@@ -530,15 +530,17 @@ assert.deepEqual(parseViewed('not json'), [])
 assert.deepEqual(parseViewed('{"a":1}'), [])
 assert.deepEqual(parseViewed(JSON.stringify(['b1', 2, '', 'b2', 'b1'])), ['b1', 'b2'])
 const viewedStorage = memoryStorage()
-const viewed = createViewedStore(viewedStorage)
+const viewed = createViewedStore('D:\repo', viewedStorage)
 assert.equal(viewed.toggle('hash1'), true)
 assert.equal(viewed.toggle('hash2'), true)
 assert.ok(viewed.has('hash1'))
 assert.ok(viewed.has('hash2'))
 assert.equal(viewed.toggle('hash1'), false)
 assert.ok(!viewed.has('hash1'))
-assert.deepEqual(parseViewed(viewedStorage.getItem('dsh-git-review.viewed')), ['hash2'])
-const capped = createViewedStore(memoryStorage({ 'dsh-git-review.viewed': JSON.stringify(Array.from({ length: 2000 }, (_, i) => 'h' + i)) }))
+assert.deepEqual(parseViewed(viewedStorage.getItem('dsh-git-review.viewed:' + encodeURIComponent('D:\repo'))), ['hash2'])
+const cappedStorage = memoryStorage()
+cappedStorage.setItem('dsh-git-review.viewed:' + encodeURIComponent('D:\repo'), JSON.stringify(Array.from({ length: 2000 }, (_, i) => 'h' + i)))
+const capped = createViewedStore('D:\repo', cappedStorage)
 capped.toggle('newest')
 assert.ok(capped.has('newest'))
 assert.ok(!capped.has('h1999'))
@@ -832,5 +834,40 @@ assert.equal(resolveMdAsset('README.md', 'data:image/png;base64,xx'), null)
 assert.equal(resolveMdAsset('README.md', '#frag'), null)
 assert.equal(resolveMdAsset('docs/note.md', '../../escape.png'), null)
 assert.equal(resolveMdAsset('README.md', ''), null)
+
+// 48. Header quoting: quoted fields keep inner spaces (git never quotes
+//     space-padded names), C-quoted escapes decode at the byte level.
+assert.equal(unquoteHeaderPath('a/ leadtrail\t'), 'a/ leadtrail')
+assert.equal(unquoteHeaderPath('"a/ leadtrail "'), 'a/ leadtrail ')
+assert.equal(unquoteHeaderPath('"a/we\\"ird"'), 'a/we"ird')
+assert.equal(unquoteHeaderPath('"a/x\\303\\251"'), 'a/x\u00e9')
+assert.equal(unquoteHeaderPath('/dev/null'), '/dev/null')
+const spacedDiff = parseUnifiedDiff('--- "a/ leadtrail "\n+++ "b/ leadtrail "\n@@ -1 +1 @@\n-x\n+y\n')
+assert.equal(spacedDiff.oldPath, ' leadtrail ')
+assert.equal(spacedDiff.newPath, ' leadtrail ')
+assert.equal(spacedDiff.hunks[0].damaged, false)
+
+// 49. Hunk validation: short bodies flag damaged; multi-file raws refuse.
+const shortDiff = parseUnifiedDiff('--- a/f\n+++ b/f\n@@ -1,3 +1,3 @@\n-a\n+b\n')
+assert.equal(shortDiff.hunks[0].damaged, true)
+const multiRaw = 'diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-x\n+y\n' + 'diff --git a/c b/c\n--- a/c\n+++ b/c\n@@ -1 +1 @@\n-x\n+y\n'
+assert.equal(buildHunkPatch(multiRaw, 1), null)
+// Stray context outside any hunk is ignored, never a crash.
+parseUnifiedDiff('--- a/f\n+++ b/f\n stray ctx\n')
+
+// 50. Client regex guard: nested quantifiers degrade to literal, fast.
+const evilEngine = makeSearchEngine({ query: '(a+)+$', caseSensitive: false, regex: true })
+assert.equal(evilEngine.count('a'.repeat(50000)), 0)
+
+// 51. Single-line block comments color; line comments still win.
+assert.ok(tokenizeLine('const x = /* hi */ 1;', 'c').some(t => t.kind === 'com'))
+assert.deepEqual(tokenizeLine('// /* not a block */', 'c').map(t => t.kind), ['com'])
+
+// 52. Remote images defang to click-to-load links; local URLs pass through.
+assert.equal(defangRemoteImages('![a](https://e.com/y.png)'), '[a](https://e.com/y.png "external image")')
+assert.equal(defangRemoteImages('![a](docs/x.svg)'), '![a](docs/x.svg)')
+assert.equal(defangRemoteImages('![a][id]\n\n[id]: https://e.com/y.png'), '[a][id]\n\n[id]: https://e.com/y.png')
+assert.equal(htmlFallbackForPreview('<a href="javascript:alert(1)">x</a>'), 'x')
+assert.equal(htmlFallbackForPreview('<a href="https://e.com">x</a>'), '[x](https://e.com)')
 
 console.log('check-parse: all assertions passed')

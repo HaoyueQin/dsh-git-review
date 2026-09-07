@@ -63,6 +63,9 @@ const LINE_COMMENT: Record<string, readonly string[]> = {
   css: [],
 }
 
+/** Families with same-line block comments (no multi-line state). */
+const BLOCK_COMMENT_LANGS = new Set(['c', 'css', 'sql'])
+
 const STRING_QUOTES: Record<string, readonly string[]> = {
   sql: ["'", '"'],
   c: ['"', "'", '`'],
@@ -90,6 +93,17 @@ export function tokenizeLine(line: string, lang: string): TokenSpan[] {
     if (hit !== undefined) {
       push(at, line.length, 'com')
       break
+    }
+    // single-line block comment (an unterminated opener runs plain — no
+    // multi-line state by design); checked after line comments so a comment
+    // opener inside one stays a line comment.
+    if (BLOCK_COMMENT_LANGS.has(lang) && line.startsWith('/*', at)) {
+      const end = line.indexOf('*/', at + 2)
+      if (end !== -1) {
+        push(at, end + 2, 'com')
+        at = end + 2
+        continue
+      }
     }
     const ch = line[at]!
     // string literal: honor backslash escapes within the quote

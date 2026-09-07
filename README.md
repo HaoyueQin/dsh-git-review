@@ -17,6 +17,9 @@
   <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">
+  <a href="https://awesome-dsh-plugin.com"><img src="https://awesome-dsh-plugin.com/badge.svg" alt="Awesome DSH Plugin"></a>
+  <a href="https://github.com/HaoyueQin/dsh-git-review/graphs/commit-activity"><img src="https://img.shields.io/github/commit-activity/t/HaoyueQin/dsh-git-review?style=flat-square" alt="Commit activity"></a>
+  <a href="https://github.com/HaoyueQin/dsh-git-review/commits"><img src="https://img.shields.io/github/last-commit/HaoyueQin/dsh-git-review?style=flat-square" alt="Last commit"></a>
 </p>
 
 A **Review tab plus fenced git workbench** for DeepSeek Harness: everything an agent changed, laid out for a decision — file tree, diffs, commit graph — with guarded git operations in the same place.

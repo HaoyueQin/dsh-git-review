@@ -132,9 +132,11 @@ body[data-dsh-bg-glass] .root {
 
 
 /* Ref-range mode hosts TWO pickers (base … target); wider than the single
-   base picker. */
+   base picker. The cap fits two full buttons (2x220 + swap + gaps): below
+   its content the cluster would overflow instead of wrapping, and the
+   totals row would paint over the spilled pickers. */
 .rangeChip {
-  max-width: 430px;
+  max-width: 560px;
 }
 
 /* The worktree-mode compare row: [worktree chip] → [base picker]. */

@@ -85,6 +85,11 @@ export interface RefPickerProps {
    *  undefined = nothing excluded (that end is still unpicked); null or
    *  'HEAD' = the other end is HEAD, so the HEAD entry is disabled too. */
   exclude?: string | null
+  /** Commit hashes that would compare empty against the other end (its
+   *  history or itself): picked-end order guard, resolved by the owner. */
+  disabledHashes?: ReadonlySet<string> | null
+  /** The HEAD tip hash (null = unknown: the HEAD entry stays enabled). */
+  headHash?: string | null
   /** Placeholder shown when the value is null and headLabel is too. */
   placeholder: string
   onPick: (value: string | null) => void
@@ -97,7 +102,7 @@ export interface RefPickerProps {
  * A selectable ref picker: chip trigger + themed popup with search-filtered
  * groups (HEAD, local branches, remote branches, tags, recent commits).
  */
-export function RefPicker({ value, headLabel, refs, commits, exclude, placeholder, onPick, onOpen, t }: RefPickerProps) {
+export function RefPicker({ value, headLabel, refs, commits, exclude, disabledHashes, headHash, placeholder, onPick, onOpen, t }: RefPickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const rootRef = useRef<HTMLSpanElement | null>(null)
@@ -116,6 +121,18 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
     if (open) inputRef.current?.focus()
   }, [open])
 
+  /** Newest-first decoration name → commit hash (branch/tag/remote options
+   *  resolve through it for the range guard; unknown names stay enabled). */
+  const hashByName = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const commit of commits ?? []) {
+      for (const deco of commit.refs ?? []) {
+        if (!map.has(deco.name)) map.set(deco.name, commit.hash)
+      }
+    }
+    return map
+  }, [commits])
+  const hashDisabled = (hash: string | undefined): boolean => hash !== undefined && (disabledHashes?.has(hash) ?? false)
   const q = query.trim().toLowerCase()
   const branches = useMemo(() => (refs ?? []).filter(ref => ref.kind === 'branch' && (q === '' || ref.name.toLowerCase().includes(q))), [refs, q])
   const remotes = useMemo(() => (refs ?? []).filter(ref => ref.kind === 'remote' && (q === '' || ref.name.toLowerCase().includes(q))), [refs, q])
@@ -179,7 +196,7 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
                 <GroupLabel>{t('ref.current')}</GroupLabel>
                 <PickerItem
                   selected={value === null}
-                  disabled={exclude === null || exclude === 'HEAD'}
+                  disabled={exclude === null || exclude === 'HEAD' || hashDisabled(headHash ?? undefined)}
                   icon={<BranchIcon />}
                   name={headLabel}
                   meta="HEAD"
@@ -194,7 +211,7 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
                   <PickerItem
                     key={'b:' + ref.name}
                     selected={isCurrent(ref.name)}
-                    disabled={exclude === ref.name}
+                    disabled={exclude === ref.name || hashDisabled(hashByName.get(ref.name))}
                     icon={<BranchIcon />}
                     name={ref.name}
                     onPick={() => { pick(ref.name) }}
@@ -209,7 +226,7 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
                   <PickerItem
                     key={'r:' + ref.name}
                     selected={isCurrent(ref.name)}
-                    disabled={exclude === ref.name}
+                    disabled={exclude === ref.name || hashDisabled(hashByName.get(ref.name))}
                     icon={<BranchIcon />}
                     name={ref.name}
                     onPick={() => { pick(ref.name) }}
@@ -224,7 +241,7 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
                   <PickerItem
                     key={'t:' + ref.name}
                     selected={isCurrent(ref.name)}
-                    disabled={exclude === ref.name}
+                    disabled={exclude === ref.name || hashDisabled(hashByName.get(ref.name))}
                     icon={<TagIcon />}
                     name={ref.name}
                     onPick={() => { pick(ref.name) }}
@@ -239,7 +256,7 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
                   <PickerItem
                     key={'c:' + commit.hash}
                     selected={value === commit.hash}
-                    disabled={exclude === commit.hash}
+                    disabled={exclude === commit.hash || hashDisabled(commit.hash)}
                     icon={<CommitIcon />}
                     name={commit.subject}
                     meta={fmtGraphDate(commit.timestamp)}

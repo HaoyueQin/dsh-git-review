@@ -90,7 +90,6 @@ pnpm build          # lib/index.js (node) + lib/client.js (browser factory bundl
 - **Client half**: a conversation-view slot component; the host route is optional — without it the tab says so instead of erroring.
 - **Scale guards**: 20k-row render cap, 2 MiB per-file diff cap, 500-commit graph pages with load-more, an 8 MiB streaming byte cap on the largest git answers plus a separate 8 MiB preview cap (both truncate instead of buffering whole), and exact-count probing within a 32 MiB per-status budget.
 - Interface languages: Simplified Chinese and English, following the harness locale; dark and light themes via semantic tokens.
-- **Build artifacts**: `lib/` is committed so the tab runs without build rights; it ships without sourcemaps or `.d.ts` by design (only the host loads it — see `tsdown.config.ts`).
 
 ## Activity
 

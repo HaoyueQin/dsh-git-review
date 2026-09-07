@@ -26,6 +26,7 @@ import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { markdownRenderer, PreviewPane } from './preview-pane.tsx'
 import { previewKindForPath, type PreviewKind } from './preview-kind.ts'
 import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, MD_ASSET_CAP, resolveMdAsset, rewriteMdAssets } from './md-preview.ts'
+import { findBranchTip, isAncestorOrSelf, resolveRangeHash } from './range-guard.ts'
 import type { ReviewSettings } from './review-settings.ts'
 import { CommitGraph, fmtGraphDate } from './graph-view.tsx'
 import { computeGraphLanes } from './git-graph.ts'
@@ -1572,6 +1573,36 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   }
 
   const data = ready
+  // Ref-range order guard: base...target is empty exactly when the target
+  // adds nothing beyond the base. Both feeds combine for maximum ancestry
+  // coverage; anything outside the loaded window stays selectable and falls
+  // through to the empty-direction hint below.
+  const rangeCommits = useMemo(() => {
+    const out = new Map<string, GitCommitSummary>()
+    if (logState.kind === 'ready') for (const commit of logState.commits) out.set(commit.hash, commit)
+    for (const commit of (pickerCommits ?? [])) if (!out.has(commit.hash)) out.set(commit.hash, commit)
+    return [...out.values()]
+  }, [logState, pickerCommits])
+  const rangeParents = useMemo(() => new Map(rangeCommits.map(commit => [commit.hash, commit.parents] as const)), [rangeCommits])
+  const headTipHash = useMemo(() => findBranchTip(rangeCommits, data?.branch ?? null), [rangeCommits, data])
+  const baseHash = baseRef === null ? null : resolveRangeHash(baseRef, rangeCommits, headTipHash)
+  const targetHash = targetRef === null ? null : resolveRangeHash(targetRef, rangeCommits, headTipHash)
+  const invalidTargetHashes = useMemo(() => {
+    if (baseHash === null) return null
+    const out = new Set<string>()
+    for (const commit of rangeCommits) {
+      if (commit.hash === baseHash || isAncestorOrSelf(rangeParents, commit.hash, baseHash)) out.add(commit.hash)
+    }
+    return out
+  }, [rangeCommits, rangeParents, baseHash])
+  const invalidBaseHashes = useMemo(() => {
+    if (targetHash === null) return null
+    const out = new Set<string>()
+    for (const commit of rangeCommits) {
+      if (commit.hash === targetHash || isAncestorOrSelf(rangeParents, targetHash, commit.hash)) out.add(commit.hash)
+    }
+    return out
+  }, [rangeCommits, rangeParents, targetHash])
   return (
     <div ref={rootRef} tabIndex={-1} onKeyDown={onRootKeyDown} className={css.root} data-conversation-composer-overlay="">
       {/* One wrapping row, single-line-first: every control is flex:none
@@ -1652,6 +1683,8 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     refs={refs}
                     commits={pickerCommits}
                     exclude={targetRef ?? undefined}
+                    disabledHashes={invalidBaseHashes ?? undefined}
+                    headHash={headTipHash}
                     placeholder={t('compare.pickBase')}
                     // The HEAD entry picks null, but a null end means "not
                     // picked yet" (rangeReady) — in refs mode remap it to the
@@ -1675,6 +1708,8 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     refs={refs}
                     commits={pickerCommits}
                     exclude={baseRef ?? undefined}
+                    disabledHashes={invalidTargetHashes ?? undefined}
+                    headHash={headTipHash}
                     placeholder={t('compare.pickTarget')}
                     onPick={value => { changeTarget(value ?? 'HEAD') }}
                     onOpen={wantPickerFeed}
@@ -2335,6 +2370,13 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
       )}
       <div className={css.body}>
         {data?.truncated === true && viewTab === 'changes' && <div className={css.noticeRow}>{t('status.truncated')}</div>}
+        {refsMode && rangeReady && viewTab === 'changes' && data !== null && data.files.length === 0 && data.totals.added === 0 && data.totals.deleted === 0 && (
+          <div className={css.noticeRow}>
+            <span>{t('compare.emptyDirection')}</span>
+            {' '}
+            <button type="button" className={css.scopeBtn} title={t('compare.swap')} onClick={swapEnds}>{t('compare.swap')}</button>
+          </div>
+        )}
         {viewTab === 'graph' ? (
           <>
             <section

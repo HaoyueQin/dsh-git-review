@@ -16,6 +16,7 @@ import { previewKindForPath } from '../src/client/preview-kind.ts'
 import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, resolveMdAsset, rewriteMdAssets } from '../src/client/md-preview.ts'
 import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
 import { createDraftBox, draftsKey, parseDrafts } from '../src/client/comment-drafts.ts'
+import { findBranchTip, isAncestorOrSelf, resolveRangeHash } from '../src/client/range-guard.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
 
@@ -875,5 +876,30 @@ assert.equal(defangRemoteImages('![a](docs/x.svg)'), '![a](docs/x.svg)')
 assert.equal(defangRemoteImages('![a][id]\n\n[id]: https://e.com/y.png'), '[a][id]\n\n[id]: https://e.com/y.png')
 assert.equal(htmlFallbackForPreview('<a href="javascript:alert(1)">x</a>'), 'x')
 assert.equal(htmlFallbackForPreview('<a href="https://e.com">x</a>'), '[x](https://e.com)')
+
+// 53. Range guard: ancestry walks, name resolution, branch tips.
+const HA = 'a'.repeat(40)
+const HB = 'b'.repeat(40)
+const HC = 'c'.repeat(40)
+const HX = 'd'.repeat(40)
+const chainCommits = [
+  { hash: HC, parents: [HB], refs: [] },
+  { hash: HB, parents: [HA], refs: [{ name: 'main' }] },
+  { hash: HA, parents: [], refs: [] },
+]
+const chainParents = new Map(chainCommits.map(c => [c.hash, c.parents]))
+assert.equal(isAncestorOrSelf(chainParents, HA, HC), true)
+assert.equal(isAncestorOrSelf(chainParents, HC, HA), false)
+assert.equal(isAncestorOrSelf(chainParents, HB, HB), true)
+assert.equal(isAncestorOrSelf(chainParents, HX, HC), false)
+assert.equal(isAncestorOrSelf(chainParents, HA, 'e'.repeat(40)), false)
+assert.equal(resolveRangeHash('main', chainCommits, null), HB)
+assert.equal(resolveRangeHash('HEAD', chainCommits, HC), HC)
+assert.equal(resolveRangeHash(HC, chainCommits, null), HC)
+assert.equal(resolveRangeHash('nope', chainCommits, null), null)
+assert.equal(resolveRangeHash(null, chainCommits, HC), null)
+assert.equal(findBranchTip(chainCommits, 'main'), HB)
+assert.equal(findBranchTip(chainCommits, null), null)
+assert.equal(findBranchTip(chainCommits, 'ghost'), null)
 
 console.log('check-parse: all assertions passed')

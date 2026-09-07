@@ -88,7 +88,6 @@ pnpm build          # lib/index.js（node 端）+ lib/client.js（浏览器端 b
 - **浏览器半**：会话视图插槽组件；host 路由可选——缺席时标签页明示而不报错。
 - **规模护栏**：2 万行渲染帽、单文件 2 MiB 差异帽、图谱 500 提交分页加载、最大 git 输出 8 MiB 流式字节帽另加独立的 8 MiB 预览帽（均截断而非整体入内存），以及每次 status 32 MiB 预算内的精确计数。
 - 界面语言：简体中文与英文，随 harness 语言切换；深浅主题走语义 token。
-- **构建产物**：`lib/` 直接进仓，标签页无需构建权限即可运行；有意不带 sourcemap 与 `.d.ts`（仅宿主加载，见 `tsdown.config.ts`）。
 
 ## Activity
 

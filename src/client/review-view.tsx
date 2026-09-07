@@ -372,14 +372,20 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   const [graphListWidth, setGraphListWidth] = useState<number | null>(() => {
     try {
       const stored = Number(localStorage.getItem('dsh-git-review.graphWidth'))
-      return Number.isFinite(stored) && stored >= 180 && stored <= 900 ? stored : null
+      return Number.isFinite(stored) && stored >= GRAPH_WIDTH_MIN && stored <= GRAPH_WIDTH_MAX ? stored : null
     } catch {
       return null
     }
   })
+  /** Measured content fit (transient: never persisted, never stashed — the
+   *  toggle and graph-open paths share it, drags never see it). */
+  const [fitWidth, setFitWidth] = useState<number | null>(null)
+  /** Fit requests (toggle-expand and graph-open bump it; the layout effect
+   *  below consumes it back to zero). */
+  const [fitTick, setFitTick] = useState(0)
   const graphListRef = useRef<HTMLElement | null>(null)
   const graphResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
-  const effectiveGraphWidth = graphListWidth ?? (selectedCommit !== null ? GRAPH_READING_WIDTH : null)
+  const effectiveGraphWidth = graphListWidth ?? (selectedCommit !== null ? GRAPH_READING_WIDTH : fitWidth)
   /** Visible-column density from the rendered width (null = full info). */
   const graphDensity = effectiveGraphWidth === null ? 4 : effectiveGraphWidth < 280 ? 1 : effectiveGraphWidth < 390 ? 2 : effectiveGraphWidth < 540 ? 3 : 4
   /** Drag the divider right of the graph list: dragging RIGHT widens it. */
@@ -1376,26 +1382,23 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     if (inProgress === null) setConflictAbortArmed(false)
   }, [inProgress])
 
-  /** Armed by the toggle: the next committed expand fits the content width
-   *  (selection and drag-out expands keep their own widths). */
-  const fitOnExpandRef = useRef(false)
   const toggleGraphList = useCallback(() => {
     // One remembered open state shared by the toggle and the selection
     // paths below (no transient divergence to snap back from).
     if (graphListCollapsed) {
-      fitOnExpandRef.current = true
+      setFitTick(tick => tick + 1)
       expandGraphList()
     } else collapseGraphList()
   }, [graphListCollapsed, expandGraphList, collapseGraphList])
-  // Fit-to-content on toggle-expand: measure with an unconstrained width
-  // pre-paint (no flash), then pin the smallest width showing everything
-  // (capped like a drag). Consumed once; a not-ready feed keeps it armed.
+  // Fit-to-content: measure with an unconstrained width pre-paint (no
+  // flash), then pin the smallest width showing everything (capped like a
+  // drag). Requested by toggle-expand and graph-open; consumed once, never
+  // persisted; a not-ready feed keeps it armed until the feed lands.
   useLayoutEffect(() => {
-    if (!fitOnExpandRef.current || graphListCollapsed) return
+    if (fitTick === 0 || graphListCollapsed) return
     if (logState.kind !== 'ready' || logState.commits.length === 0) return
     const el = graphListRef.current
     if (el === null) return
-    fitOnExpandRef.current = false
     const prevWidth = el.style.width
     const prevMin = el.style.minWidth
     el.style.width = 'max-content'
@@ -1403,10 +1406,17 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     const need = Math.ceil(el.scrollWidth) + 2
     el.style.width = prevWidth
     el.style.minWidth = prevMin
-    const fit = Math.min(GRAPH_WIDTH_MAX, Math.max(GRAPH_WIDTH_MIN, need))
-    setGraphListWidth(fit)
-    try { localStorage.setItem('dsh-git-review.graphWidth', String(fit)) } catch { /* private mode — width just doesn't persist */ }
-  }, [graphListCollapsed, logState])
+    setFitTick(0)
+    setFitWidth(Math.min(GRAPH_WIDTH_MAX, Math.max(GRAPH_WIDTH_MIN, need)))
+  }, [fitTick, graphListCollapsed, logState])
+  // Opening the graph defaults to widest (unless the user set a width):
+  // request a fit; the layout effect above consumes it when ready.
+  useEffect(() => {
+    if (fitTick !== 0) return
+    if (viewTab === 'graph' && !graphListCollapsed && graphListWidth === null && fitWidth === null) {
+      setFitTick(1)
+    }
+  }, [fitTick, viewTab, graphListCollapsed, graphListWidth, fitWidth])
 
   const selectGraphFile = useCallback((path: string) => {
     setGraphFile(path)

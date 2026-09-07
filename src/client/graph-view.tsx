@@ -25,11 +25,13 @@ function laneColor(id: number): string {
   return 'hsl(' + String((id * 67) % 360) + ' 62% 52%)'
 }
 
-/** Short local timestamp, the reference graphs' MM/DD HH:mm. */
+/** Short local timestamp, the reference graphs' MM/DD HH:mm (with the
+ *  year once the commit leaves the current calendar year). */
 export function fmtGraphDate(timestamp: number): string {
   const date = new Date(timestamp * 1000)
   const pad = (value: number): string => String(value).padStart(2, '0')
-  return pad(date.getMonth() + 1) + '/' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
+  const year = date.getFullYear() === new Date().getFullYear() ? '' : date.getFullYear() + '/'
+  return year + pad(date.getMonth() + 1) + '/' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
 }
 
 /** One row's SVG topology cell (pass lines, half-row arcs, node dot). The
@@ -176,7 +178,7 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
     const top = Math.min(rect.top, window.innerHeight - 90)
     // Clamp horizontally: the card is ~320px wide and the rail hugs the
     // view's right edge in narrow layouts.
-    setTip({ x: Math.min(rect.right, window.innerWidth - 330), y: Math.max(8, top), commit })
+    setTip({ x: Math.max(8, Math.min(rect.right, window.innerWidth - 330)), y: Math.max(8, top), commit })
   }
   // Branch-line highlight on hover: dim every SVG element whose color id is
   // not the hovered row's, via native style toggling on the list container —

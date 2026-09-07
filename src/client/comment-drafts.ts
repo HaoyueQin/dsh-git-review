@@ -9,6 +9,7 @@
  * script imports it directly under Node's native TS stripping.
  */
 import type { PrefsStorage } from './prefs.ts'
+import { normalizeWorkspaceKey } from './prefs.ts'
 
 /** One pending comment. */
 export interface CommentDraft {
@@ -23,7 +24,7 @@ export interface CommentDraft {
 /** localStorage key suffix for one workspace (encodeURIComponent keeps it a
  *  single key segment for any path shape/drive letter). */
 export function draftsKey(cwd: string): string {
-  return 'dsh-git-review.drafts:' + encodeURIComponent(cwd)
+  return 'dsh-git-review.drafts:' + encodeURIComponent(normalizeWorkspaceKey(cwd))
 }
 
 /** Stored drafts cap (a review tab is not a notebook; the box is a

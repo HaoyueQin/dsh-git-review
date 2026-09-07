@@ -39,6 +39,8 @@
   --dsw-alias-border-primary: var(--dsw-alias-border-l3);
   --dsw-alias-fill-hover: var(--dsw-alias-interactive-bg-hover);
   --dsw-alias-fill-active: var(--dsw-alias-interactive-bg-active);
+  --dsw-alias-border: var(--dsw-alias-border-l2);
+  --dsw-alias-fill-selected: var(--dsw-alias-interactive-bg-hover);
 
   /* Floating-composer clearance (the screenshot bug: tab content scrolled
    * under the floating input card + task strip, neither visible nor
@@ -550,7 +552,6 @@ body[data-dsh-bg-glass] .root {
   color: var(--dsw-alias-label-secondary);
   font-size: 12px;
   cursor: pointer;
-  white-space: nowrap;
   white-space: nowrap;
 }
 

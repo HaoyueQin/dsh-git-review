@@ -7,15 +7,17 @@
  *
  * lib/ is committed (pack/git installs), so artifacts must be byte-stable
  * across machines: comments: false plus the region-label normalizer below.
+ * Platform note: the normalizer covers region labels and pnpm store names
+ * only. If lightningcss ever serializes differently per OS, CI's ubuntu
+ * `git diff -- lib/` is the arbiter — a locally green build that CI flags
+ * means rebuilding where CI runs.
  */
 import { readFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { basename, dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { transform } from 'lightningcss'
 import type { UserConfig } from 'tsdown'
 
-const require = createRequire(import.meta.url)
 const PROJECT_ROOT = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ID = 'dsh-git-review'
 

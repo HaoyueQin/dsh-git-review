@@ -187,6 +187,10 @@ function runGit(root: string, args: readonly string[]): Promise<string> {
 }
 
 /** Path containment: candidate is root itself or below it (no .. escape). */
+/** Lexical inside-root check. Spelling is consistent by construction (repoRoot
+ *  comes from rev-parse, candidates resolve under it; short-name/UNC input
+ *  is realpath-normalized in resolveRepository first). Case-insensitive
+ *  filesystems: same-spelling compare is exact there by the same token. */
 function inside(root: string, candidate: string): boolean {
   const child = relative(root, candidate)
   // '..foo' is a legal file name: only '..' itself or a parent-qualified
@@ -2084,7 +2088,9 @@ export async function gitFileOp(cwd: unknown, path: unknown, action: unknown, ne
  *  and spaces need no escaping). The app id is a fixed whitelist — anything
  *  else fails closed, and every launch needs the explicit confirm flag like
  *  the other write-adjacent endpoints. */
-async function gitOpenWith(cwd: unknown, path: unknown, app: unknown, confirm: unknown): Promise<GitWritePayload> {
+/** Exported for the check-git negative-path coverage (never spawns a GUI:
+ *  unknown apps, missing paths and directories fail before any spawn). */
+export async function gitOpenWith(cwd: unknown, path: unknown, app: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (confirm !== true) return { ok: false, error: 'open-with requires confirm: true' }
   if (app !== undefined && app !== 'default' && app !== 'explorer' && app !== 'notepad' && app !== 'code' && app !== 'code-insiders') {
@@ -2133,7 +2139,7 @@ async function gitOpenWith(cwd: unknown, path: unknown, app: unknown, confirm: u
 
 /** The open-with app list: fixed candidates, availability probed per request
  *  via where/which (a missing editor stays listed but marked unavailable). */
-async function gitOpenApps(): Promise<OpenAppsPayload> {
+export async function gitOpenApps(): Promise<OpenAppsPayload> {
   const available = async (name: string): Promise<boolean> => {
     try {
       await new Promise<void>((resolvePromise, rejectPromise) => {

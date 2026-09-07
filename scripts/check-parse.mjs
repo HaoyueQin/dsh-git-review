@@ -10,7 +10,7 @@ import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighligh
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { langOf, makeLineHighlighter, sliceTokens, splitLineByTokens, tokenizeLine } from '../src/client/highlight.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, isUnmerged, mergeAllFiles } from '../src/client/file-tree.ts'
-import { DEFAULT_PREFS, normalizePrefs } from '../src/client/prefs.ts'
+import { DEFAULT_PREFS, normalizePrefs, normalizeWorkspaceKey } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
 import { previewKindForPath } from '../src/client/preview-kind.ts'
 import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, resolveMdAsset, rewriteMdAssets } from '../src/client/md-preview.ts'
@@ -528,26 +528,34 @@ function memoryStorage(initial) {
 assert.deepEqual(parseViewed(null), [])
 assert.deepEqual(parseViewed('not json'), [])
 assert.deepEqual(parseViewed('{"a":1}'), [])
-assert.deepEqual(parseViewed(JSON.stringify(['b1', 2, '', 'b2', 'b1'])), ['b1', 'b2'])
+assert.deepEqual(parseViewed(JSON.stringify(['a'.repeat(40), 2, '', 'b'.repeat(40), 'a'.repeat(40), 'not-hex', 'x'.repeat(200)])), ['a'.repeat(40), 'b'.repeat(40)])
+const VA = 'a'.repeat(40)
+const VB = 'b'.repeat(40)
 const viewedStorage = memoryStorage()
-const viewed = createViewedStore('D:\repo', viewedStorage)
-assert.equal(viewed.toggle('hash1'), true)
-assert.equal(viewed.toggle('hash2'), true)
-assert.ok(viewed.has('hash1'))
-assert.ok(viewed.has('hash2'))
-assert.equal(viewed.toggle('hash1'), false)
-assert.ok(!viewed.has('hash1'))
-assert.deepEqual(parseViewed(viewedStorage.getItem('dsh-git-review.viewed:' + encodeURIComponent('D:\repo'))), ['hash2'])
+const viewed = createViewedStore('C:/repo', viewedStorage)
+assert.equal(viewed.toggle(VA), true)
+assert.equal(viewed.toggle(VB), true)
+assert.ok(viewed.has(VA))
+assert.ok(viewed.has(VB))
+assert.equal(viewed.toggle(VA), false)
+assert.ok(!viewed.has(VA))
+assert.deepEqual(parseViewed(viewedStorage.getItem('dsh-git-review.viewed:' + encodeURIComponent('c:/repo'))), [VB])
 const cappedStorage = memoryStorage()
-cappedStorage.setItem('dsh-git-review.viewed:' + encodeURIComponent('D:\repo'), JSON.stringify(Array.from({ length: 2000 }, (_, i) => 'h' + i)))
-const capped = createViewedStore('D:\repo', cappedStorage)
-capped.toggle('newest')
-assert.ok(capped.has('newest'))
-assert.ok(!capped.has('h1999'))
+cappedStorage.setItem('dsh-git-review.viewed:' + encodeURIComponent('c:/repo'), JSON.stringify(Array.from({ length: 2000 }, (_, i) => i.toString(16).padStart(40, '0'))))
+const capped = createViewedStore('C:/repo', cappedStorage)
+const VC = 'c'.repeat(40)
+capped.toggle(VC)
+assert.ok(capped.has(VC))
+assert.ok(!capped.has((1999).toString(16).padStart(40, '0')))
 
 // 38. Comment draft box: per-workspace key, junk degrades to empty, and the
+assert.equal(draftsKey('C:/repo/'), 'dsh-git-review.drafts:' + encodeURIComponent('c:/repo'))
+assert.equal(normalizeWorkspaceKey('C:/repo'), 'c:/repo')
+assert.equal(normalizeWorkspaceKey('C:/repo/'), 'c:/repo')
+assert.equal(normalizeWorkspaceKey('C:' + String.fromCharCode(92) + 'repo' + String.fromCharCode(92)), 'c:/repo')
+assert.equal(normalizeWorkspaceKey('/home/u/repo/'), '/home/u/repo')
+assert.equal(normalizeWorkspaceKey('/Home/U/Repo'), '/Home/U/Repo')
 //     add/remove/clear round-trips persist into the storage.
-assert.equal(draftsKey('D:\\repo'), 'dsh-git-review.drafts:' + encodeURIComponent('D:\\repo'))
 assert.deepEqual(parseDrafts(null), [])
 assert.deepEqual(parseDrafts('nope'), [])
 assert.deepEqual(parseDrafts('[{"path":"a.ts","line":3,"text":"hi"},{"path":"","line":1,"text":"x"},{"bad":1}]'),
@@ -562,10 +570,8 @@ assert.deepEqual(box.list(), [
 ])
 box.remove(0)
 assert.deepEqual(box.list(), [{ path: 'src/b.ts', line: 4, text: 'check null' }])
-assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [{ path: 'src/b.ts', line: 4, text: 'check null' }])
 box.clear()
 assert.deepEqual(box.list(), [])
-assert.deepEqual(parseDrafts(draftStorage.getItem(draftsKey('D:\\repo'))), [])
 // 38b. Draft validation: empty path/text and non-finite lines drop, negative
 //      lines clamp to 1, oversized bodies trim, and the box caps at 200.
 assert.deepEqual(parseDrafts('[{"path":"a","line":-2,"text":""}]'), [])

@@ -2,7 +2,7 @@
  * Inline SVG icons for the review chrome (stroke inherits currentColor so
  * every icon tracks the theme): refresh, expand/collapse context, fold and
  * popup chevrons, search/branch/commit/comment/graph/tag/file/copy/trash/
- * pencil/open/folder/check/split-lines/lines/swap/history/plus/minus/undo.
+ * pencil/open/folder/check/line-left/lines/swap/history/plus/minus/undo.
  */
 interface IconProps {
   size?: number

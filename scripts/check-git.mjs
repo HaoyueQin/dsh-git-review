@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
-import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileBytes, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitFsList, gitHunkOp, gitInit, gitLastCommit, gitLog, gitMerge, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
+import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitCommitFiles, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileBytes, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitFsList, gitHunkOp, gitInit, gitLastCommit, gitListFiles, gitLog, gitMerge, gitOpenApps, gitOpenWith, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
 function sh(cwd, ...args) {
@@ -581,6 +581,32 @@ try {
   writeFileSync(join(big, 'big.txt'), ('x'.repeat(99) + '\n').repeat(lines))
   const st = await gitStatus(big, null, null, false)
   assert.equal(st.files.find(file => file.path === 'big.txt')?.added, lines)
+}
+
+// 23. Commit-files, list-files and open-with guards (no GUI ever spawns:
+//     unknown apps, missing paths and directories fail before any spawn).
+{
+  const cov = fixture()
+  writeFileSync(join(cov, 'a.txt'), 'one\n')
+  sh(cov, 'add', '-A')
+  sh(cov, 'commit', '-m', 'init')
+  const sha = sh(cov, 'rev-parse', 'HEAD').trim()
+  const cf = await gitCommitFiles(cov, sha)
+  assert.equal(cf.ok, true)
+  assert.ok(cf.files.length > 0)
+  assert.ok(cf.files.some(file => file.path === 'a.txt'))
+  const lf = await gitListFiles(cov)
+  assert.equal(lf.ok, true)
+  assert.ok(Array.isArray(lf.files))
+  assert.ok(lf.files.includes('a.txt'))
+  assert.equal(typeof lf.truncated, 'boolean')
+  assert.equal((await gitOpenWith(cov, 'nope.txt', 'default', true)).ok, false)
+  assert.equal((await gitOpenWith(cov, 'a.txt', 'evil-app', true)).ok, false)
+  assert.equal((await gitOpenWith(cov, '.git', 'default', true)).ok, false)
+  const apps = await gitOpenApps()
+  assert.equal(apps.ok, true)
+  assert.ok(apps.apps.length > 0)
+  assert.ok(apps.apps.some(app => app.id === 'default' && app.available))
 }
 
 try {

@@ -139,9 +139,10 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
   }, [mode, onClose])
 
   // The tree lives on the view's RIGHT side, so a menu anchored at the raw
-  // cursor position overflows the viewport's right edge. After every mount
-  // and mode switch (the popover's size changes), pull the popover back
-  // inside with an 8px margin — a poor man's flip-constraint.
+  // cursor position overflows the viewport's right edge. After every render
+  // with no deps array (mount, mode switches AND position corrections —
+  // the popover's size changes), pull the popover back inside with an 8px
+  // margin — a poor man's flip-constraint.
   const [pos, setPos] = useState({ left: state.x, top: state.y })
   useLayoutEffect(() => {
     const el = rootRef.current

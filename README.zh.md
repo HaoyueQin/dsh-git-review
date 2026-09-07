@@ -67,7 +67,7 @@ dsh web
 pnpm install
 pnpm build
 pnpm pack
-dsh plugin --profile web add ./dsh-git-review-0.1.0.tgz
+dsh plugin --profile web add ./dsh-git-review-<version>.tgz  # 以 pnpm pack 实际打出的文件名为准
 dsh web
 ```
 
@@ -86,8 +86,9 @@ pnpm build          # lib/index.js（node 端）+ lib/client.js（浏览器端 b
 
 - **Host 半**：宿主进程内的 cordis 插件，经围栏前缀路由提供 JSON 动作接口（非 JSON 请求体直接 415，顺带关掉经典 no-cors 写向量）。所有路径围栏在会话工作区的仓库内，所有 ref 服务端复核，commit id 只收 40-hex，并清洗 GIT_DIR 一类环境劫持。
 - **浏览器半**：会话视图插槽组件；host 路由可选——缺席时标签页明示而不报错。
-- **规模护栏**：2 万行渲染帽、单文件 2 MiB 差异帽、图谱 500 提交分页加载、最大 git 输出 8 MiB 流式字节帽（超限杀进程）。
+- **规模护栏**：2 万行渲染帽、单文件 2 MiB 差异帽、图谱 500 提交分页加载、最大 git 输出 8 MiB 流式字节帽另加独立的 8 MiB 预览帽（均截断而非整体入内存），以及每次 status 32 MiB 预算内的精确计数。
 - 界面语言：简体中文与英文，随 harness 语言切换；深浅主题走语义 token。
+- **构建产物**：`lib/` 直接进仓，标签页无需构建权限即可运行；有意不带 sourcemap 与 `.d.ts`（仅宿主加载，见 `tsdown.config.ts`）。
 
 ## Activity
 

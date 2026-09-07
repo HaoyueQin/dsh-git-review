@@ -25,6 +25,15 @@ export type ReviewPrefs = {
 
 export const PREFS_KEY = 'dsh-git-review.prefs'
 
+/** Normalize a workspace path for localStorage key sharding: unify slashes,
+ *  drop trailing separators and fold Windows drive-letter case, so D:/repo,
+ *  d:/repo/ and D:\\repo share one key. POSIX case is preserved. */
+export function normalizeWorkspaceKey(cwd: string): string {
+  const slashed = cwd.replaceAll('\\', '/').replace(/\/+$/, '')
+  const drive = /^[a-zA-Z]:\//.test(slashed) ? slashed.charAt(0).toLowerCase() + slashed.slice(1) : slashed
+  return drive
+}
+
 export const DEFAULT_PREFS: ReviewPrefs = {
   viewMode: 'split',
   searchScope: 'diff',
@@ -87,6 +96,3 @@ export function savePrefs(storage: PrefsStorage | undefined, prefs: ReviewPrefs)
   }
 }
 
-export function readPrefs(): ReviewPrefs {
-  return loadPrefs(typeof localStorage === 'undefined' ? undefined : localStorage)
-}

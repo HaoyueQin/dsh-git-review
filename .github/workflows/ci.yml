@@ -14,7 +14,9 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'lib/**'
+      - 'cordis.patch.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
   pull_request:
     branches:
       - main
@@ -26,7 +28,9 @@ on:
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'lib/**'
+      - 'cordis.patch.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
 
 # Cancel a superseded run when a newer push lands on the same branch.
 concurrency:

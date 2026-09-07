@@ -171,11 +171,11 @@ export function createReviewSettings(storage: PrefsStorage | undefined = typeof 
               // Read-only ready with a legacy store: keep both the copy and
               // the one migration chance — a later writable ready migrates.
             } else {
-              // Nothing to carry, or the scope already holds user choices
-              // (legacy superseded): drop the legacy copy. A read-only
-              // scope keeps it — deleting would strand the user's prefs
-              // with nowhere to live.
-              if (fields === null || sectionIsDefault(snap.value)) removeLegacyStore(storage)
+              // The scope is the source of truth after the first ready
+              // section: a superseded legacy copy goes away, and so does
+              // junk. A read-only scope keeps its copy — deleting would
+              // strand the user's prefs with nowhere to live.
+              if (fields === null || snap.writable) removeLegacyStore(storage)
               migrated = true
             }
           }

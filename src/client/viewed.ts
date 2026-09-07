@@ -10,6 +10,7 @@
  * grow without bound across long-lived repositories.
  */
 import type { PrefsStorage } from './prefs.ts'
+import { normalizeWorkspaceKey } from './prefs.ts'
 
 export const VIEWED_KEY = 'dsh-git-review.viewed'
 
@@ -18,14 +19,15 @@ export const VIEWED_KEY = 'dsh-git-review.viewed'
  *  pre-scoping global key is left unread: its mixed-workspace data cannot
  *  be attributed safely.) */
 export function viewedKey(cwd: string): string {
-  return VIEWED_KEY + ':' + encodeURIComponent(cwd)
+  return VIEWED_KEY + ':' + encodeURIComponent(normalizeWorkspaceKey(cwd))
 }
 
 /** Oldest-dropped cap on remembered blob hashes. */
 export const VIEWED_CAP = 2000
 
 /** Parse a stored raw value into a bounded array of blob hashes; anything
- *  unexpected (junk, non-strings, oversize) degrades rather than crashes. */
+ *  unexpected (junk, non-strings, non-hex, oversize) degrades rather than
+ *  crashes. Hashes are 40/64-hex; anything else cannot be a blob mark. */
 export function parseViewed(raw: string | null): string[] {
   if (raw === null) return []
   let parsed: unknown
@@ -37,7 +39,7 @@ export function parseViewed(raw: string | null): string[] {
   if (!Array.isArray(parsed)) return []
   const seen = new Set<string>()
   for (const item of parsed) {
-    if (typeof item === 'string' && item !== '') seen.add(item)
+    if (typeof item === 'string' && /^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(item)) seen.add(item)
     if (seen.size >= VIEWED_CAP) break
   }
   return [...seen]

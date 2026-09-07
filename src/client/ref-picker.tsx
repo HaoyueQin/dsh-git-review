@@ -258,6 +258,9 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
             {q !== '' && branches.length === 0 && remotes.length === 0 && tags.length === 0 && commitsMatch.length === 0 && (
               <div className={css.pickerEmpty}>{t('picker.empty')}</div>
             )}
+            {q === '' && commits !== null && branches.length === 0 && remotes.length === 0 && tags.length === 0 && commitsMatch.length === 0 && (
+              <div className={css.pickerEmpty}>{t('picker.emptyAll')}</div>
+            )}
           </div>
         </div>
       )}

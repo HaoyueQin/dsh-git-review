@@ -1,3 +1,5 @@
+# Pinned-rc peers exempted from the minimum-release-age delay (all other
+# deps inherit the default age gate; extend this list when pinning more).
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-api-session-controller@0.1.2-rc.1'
   - '@deepseek-ai/dsh-client-locale@0.1.2-rc.1'

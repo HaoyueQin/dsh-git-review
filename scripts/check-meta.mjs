@@ -15,8 +15,12 @@ const read = (rel) => readFileSync(join(ROOT, rel), 'utf8')
 // 1. css.* references in TSX/TS must all be defined in review.module.css.
 // Any class occurrence in a selector counts (child/descendant combinators
 // like `.rowDel > .cellText` never sit directly before the brace).
+// Comments lie about classes (file names like review.module.css in prose),
+// so they are stripped before matching; the strict head ([A-Za-z_]) keeps
+// numeric fragments (.5px, .04em) out of the definition set.
+const cssText = read('src/client/review.module.css').replace(/\/\*[\s\S]*?\*\//g, '')
 const cssDef = new Set(
-  [...read('src/client/review.module.css').matchAll(/\.([A-Za-z0-9_-]+)(?![A-Za-z0-9_-])/g)]
+  [...cssText.matchAll(/\.([A-Za-z_][A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g)]
     .map(m => m[1]),
 )
 const refs = new Set()
@@ -31,6 +35,9 @@ const walk = (dir) => {
 walk(join(ROOT, 'src'))
 const undefinedRefs = [...refs].filter(name => !cssDef.has(name))
 assert.deepEqual(undefinedRefs, [], 'undefined css.* references: ' + undefinedRefs.join(', '))
+// Dead classes (defined but never referenced) only grow: fail on them too.
+const deadClasses = [...cssDef].filter(name => !refs.has(name))
+assert.deepEqual(deadClasses, [], 'dead css classes: ' + deadClasses.join(', '))
 
 // 2. Dynamic t() keys (built by concatenation, invisible to the ReviewKey
 //    union) must exist in the zh dictionary.
@@ -72,9 +79,16 @@ assert.deepEqual([...Object.keys(DEFAULT_PREFS)].sort(), [...REVIEW_SETTINGS_FIE
 const contract = read('src/contract.ts')
 const mapBody = contract.slice(contract.indexOf('export interface GitActionArgs {'), contract.indexOf('\n}', contract.indexOf('export interface GitActionArgs {')))
 const argKeys = [...mapBody.matchAll(/^\s{2}'?([\w-]+)'?:/gm)].map(m => m[1])
-assert.ok(argKeys.length >= 30, 'expected the full action map, got ' + argKeys.length)
+// Pinned at 40 with the contract's own count comment (contract.ts): adding
+// or removing an action updates both places deliberately.
+assert.equal(argKeys.length, 40, 'expected the full action map, got ' + argKeys.length)
 const dispatch = read('src/index.ts')
-const missingBranches = argKeys.filter(key => !dispatch.includes("if (action === '" + key + "')"))
+// Top-level dispatch only (exactly 8 spaces): stash/file-op sub-actions live
+// at 2/4 spaces and are covered by check-git's negative paths instead.
+const branchHits = [...dispatch.matchAll(/^ {8}if \(action === '([\w-]+)'\)/gm)].map(m => m[1])
+const missingBranches = argKeys.filter(key => !branchHits.includes(key))
 assert.deepEqual(missingBranches, [], 'actions without dispatch: ' + missingBranches.join(', '))
+const extraBranches = [...new Set(branchHits)].filter(key => !argKeys.includes(key))
+assert.deepEqual(extraBranches, [], 'dispatch branches without contract: ' + extraBranches.join(', '))
 
-console.log('check-meta: all assertions passed (' + refs.size + ' css refs, ' + dynamicKeys.length + ' locale keys, ' + argKeys.length + ' actions)')
+console.log('check-meta: all assertions passed (' + refs.size + ' css refs, ' + cssDef.size + ' css defs, ' + dynamicKeys.length + ' locale keys, ' + argKeys.length + ' actions)')

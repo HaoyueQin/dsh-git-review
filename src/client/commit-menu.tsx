@@ -36,6 +36,10 @@ export interface CommitMenuProps {
 export function CommitMenu({ state, running, onClose, run, t }: CommitMenuProps) {
   const [mode, setMode] = useState<'menu' | 'reset' | 'busy'>('menu')
   const [note, setNote] = useState<string | null>(null)
+  /** What the busy row is waiting on (action + reset mode, if any). */
+  const [busyWhat, setBusyWhat] = useState<string | null>(null)
+  /** Hard reset needs a second click (armed red like the tab's writes). */
+  const [hardArmed, setHardArmed] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [pos, setPos] = useState({ left: state.x, top: state.y })
 
@@ -78,9 +82,12 @@ export function CommitMenu({ state, running, onClose, run, t }: CommitMenuProps)
   })
 
   const exec = async (action: 'reset' | 'revert' | 'cherry-pick', graphMode?: 'soft' | 'mixed' | 'hard'): Promise<void> => {
+    setHardArmed(false)
     setMode('busy')
     setNote(null)
+    setBusyWhat(action + (graphMode !== undefined ? ' ' + graphMode : ''))
     const error = await run(action, state.hash, graphMode)
+    setBusyWhat(null)
     if (error === null) {
       onClose()
       return
@@ -94,7 +101,7 @@ export function CommitMenu({ state, running, onClose, run, t }: CommitMenuProps)
     return (
       <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 320 }}>
         <div className={css.fileMenuTitle}>{t('history.resetTitle')}</div>
-        <div className={css.fileMenuDeletePath}>{state.hash.slice(0, 10) + ' \u00b7 ' + state.subject}</div>
+        <div className={css.fileMenuDeletePath}>{state.hash.slice(0, 7) + ' \u00b7 ' + state.subject}</div>
         <div className={css.fileMenuApps}>
           <button type="button" className={css.stashRowText + ' ' + itemClass} disabled={running} onClick={() => { void exec('reset', 'soft') }}>
             <span className={css.pickerItemName}>{t('history.resetSoft')}</span>
@@ -104,13 +111,17 @@ export function CommitMenu({ state, running, onClose, run, t }: CommitMenuProps)
             <span className={css.pickerItemName}>{t('history.resetMixed')}</span>
             <span className={css.pickerItemMeta}>{t('history.resetMixedHint')}</span>
           </button>
-          <button type="button" className={css.stashRowText + ' ' + itemClass + ' ' + css.fileMenuDanger} disabled={running} onClick={() => { void exec('reset', 'hard') }}>
-            <span className={css.pickerItemName}>{t('history.resetHard')}</span>
+          <button type="button" className={css.stashRowText + ' ' + itemClass + ' ' + css.fileMenuDanger} disabled={running} onClick={() => {
+            if (!hardArmed) { setHardArmed(true); setNote(t('history.resetHardArm')); return }
+            setHardArmed(false)
+            void exec('reset', 'hard')
+          }}>
+            <span className={css.pickerItemName}>{hardArmed ? t('history.resetHardArm') : t('history.resetHard')}</span>
             <span className={css.pickerItemMeta}>{t('history.resetHardHint')}</span>
           </button>
         </div>
         <div className={css.fileMenuActions}>
-          <button type="button" className={css.commitBtn} onClick={() => { setMode('menu'); setNote(null) }}>
+          <button type="button" className={css.commitBtn} onClick={() => { setMode('menu'); setNote(null); setHardArmed(false) }}>
             {t('menu.cancel')}
           </button>
         </div>
@@ -121,7 +132,7 @@ export function CommitMenu({ state, running, onClose, run, t }: CommitMenuProps)
 
   return (
     <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 250 }}>
-      <div className={css.fileMenuTitle} title={state.hash}>{state.hash.slice(0, 10) + ' \u00b7 ' + state.subject}</div>
+      <div className={css.fileMenuTitle} title={state.hash}>{state.hash.slice(0, 7) + ' \u00b7 ' + state.subject}</div>
       <button type="button" className={itemClass} disabled={running} onClick={() => { setNote(null); setMode('reset') }}>
         <span className={css.fileMenuItemIcon}><UndoIcon /></span>
         <span className={css.pickerItemName}>{t('history.reset')}</span>
@@ -133,7 +144,7 @@ export function CommitMenu({ state, running, onClose, run, t }: CommitMenuProps)
         <span className={css.pickerItemName}>{t('history.cherryPick')}</span>
       </button>
       {note !== null && mode !== 'busy' && <div className={css.commitNote + ' ' + css.errorText}>{note}</div>}
-      {mode === 'busy' && <div className={css.commitNote}>{t('menu.busy')}</div>}
+      {mode === 'busy' && <div className={css.commitNote}>{t('menu.busy') + (busyWhat !== null ? ': ' + busyWhat : '')}</div>}
     </div>
   )
 }

@@ -1,4 +1,6 @@
 # dsh bundle patch: inserts this plugin into a profile's layer stack.
+# Minimal schema the host requires: an `insert` list of entries with `id`
+# (loader entry id, must equal the package name) and `name`.
 - insert:
     - id: dsh-git-review
       name: 'dsh-git-review'

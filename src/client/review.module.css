@@ -2059,9 +2059,13 @@ body[data-dsh-bg-glass] .root {
    hash — a blind 64px dot rail told nobody which commit a node was, so the
    rail keeps enough width for titles while the detail pane still gets the
    rest. Hover shows a rich commit card (see .railTip). */
+/* Collapsed rail hugs the dots: the column fits its content (never wider
+   than the old fixed rail), and the triangle sits above the dots at the
+   left instead of reserving right-side space. */
 .graphListNarrow {
-  width: 76px;
-  min-width: 76px;
+  width: max-content;
+  min-width: 0;
+  max-width: 76px;
 }
 
 /* Graph-list drag handle: the divider right of the commit list. */
@@ -2089,8 +2093,9 @@ body[data-dsh-bg-glass] .root {
 }
 
 .graphListNarrow .graphToggleRow {
-  justify-content: flex-end;
-  padding-right: 6px;
+  justify-content: flex-start;
+  padding-left: 6px;
+  padding-right: 0;
 }
 
 /* ── folded rail rows ─────────────────────────────────────────────────── */

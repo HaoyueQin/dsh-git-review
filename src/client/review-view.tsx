@@ -66,11 +66,18 @@ type ViewTab = 'changes' | 'graph'
 
 /** Shared empty feed: a fresh [] per render would defeat the lanes memo. */
 const NO_COMMITS: GitCommitSummary[] = []
-/** List width applied on commit selection when nothing was ever dragged
- *  (about the file tree default: titles readable, detail keeps the room). */
+/** Rendered list width: the user's dragged width, else the reading default
+ *  while a commit is selected, else the CSS default. Auto-narrowing never
+ *  writes the user width, so the toggle cycle restores the user's own
+ *  width (or the default) — never the imposed default. */
+/** Reading default while a commit is selected (≈ the file tree default). */
 const GRAPH_READING_WIDTH = 300
-/** Drag release below this width snaps the list shut (titles live on). */
-const GRAPH_COLLAPSE_SNAP = 140
+/** Drag floor; reaching it folds into the rail (no release jump). */
+const GRAPH_WIDTH_MIN = 120
+const GRAPH_WIDTH_MAX = 900
+/** Dragged at/above this while railed reopens the list (hysteresis against
+ *  the enter floor, so one drag never oscillates). */
+const GRAPH_RAIL_EXIT = 170
 
 /** The commit-graph feed's load state. */
 type LogState =
@@ -372,21 +379,38 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   })
   const graphListRef = useRef<HTMLElement | null>(null)
   const graphResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
-  /** Visible-column density from the dragged width (null = full info). */
-  const graphDensity = graphListWidth === null ? 4 : graphListWidth < 280 ? 1 : graphListWidth < 390 ? 2 : graphListWidth < 540 ? 3 : 4
+  const effectiveGraphWidth = graphListWidth ?? (selectedCommit !== null ? GRAPH_READING_WIDTH : null)
+  /** Visible-column density from the rendered width (null = full info). */
+  const graphDensity = effectiveGraphWidth === null ? 4 : effectiveGraphWidth < 280 ? 1 : effectiveGraphWidth < 390 ? 2 : effectiveGraphWidth < 540 ? 3 : 4
   /** Drag the divider right of the graph list: dragging RIGHT widens it. */
   const startGraphResize = useCallback((event: React.MouseEvent) => {
     event.preventDefault()
     const section = graphListRef.current
-    const startWidth = graphListWidth ?? section?.getBoundingClientRect().width ?? 480
+    const startWidth = graphListCollapsed
+      ? (section?.getBoundingClientRect().width ?? GRAPH_WIDTH_MIN)
+      : (graphListWidth ?? section?.getBoundingClientRect().width ?? 480)
     graphResizeRef.current = { startX: event.clientX, startWidth }
-    const clamp = (value: number): number => Math.min(900, Math.max(120, value))
+    const clamp = (value: number): number => Math.min(GRAPH_WIDTH_MAX, Math.max(GRAPH_WIDTH_MIN, value))
     let raf = 0
     let latest = 0
+    // Live mode mirror: mousedown closures go stale mid-drag, but crossing
+    // decisions need the current mode — a plain local shared with onUp.
+    let collapsedNow = graphListCollapsed
     const onMove = (move: MouseEvent): void => {
       const state = graphResizeRef.current
       if (state === null) return
-      latest = clamp(state.startWidth + (move.clientX - state.startX))
+      const next = clamp(state.startWidth + (move.clientX - state.startX))
+      if (!collapsedNow && next <= GRAPH_WIDTH_MIN) {
+        collapsedNow = true
+        collapseGraphList()
+        return
+      }
+      if (collapsedNow && next >= GRAPH_RAIL_EXIT) {
+        collapsedNow = false
+        expandGraphList()
+      }
+      if (collapsedNow) return
+      latest = next
       if (raf !== 0) return
       raf = requestAnimationFrame(() => {
         raf = 0
@@ -405,15 +429,13 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
       graphResizeRef.current = null
       done()
       if (state === null) return
-      const final = clamp(state.startWidth + (up.clientX - state.startX))
-      if (final < GRAPH_COLLAPSE_SNAP) {
-        // Dragged into the snap zone: collapse instead of squeezing (the
-        // pre-drag width is stashed for the expand trip back).
-        lastExpandedWidthRef.current = state.startWidth
-        setGraphListCollapsed(true)
-        settings.set('graphCollapsed', true)
+      if (collapsedNow) {
+        // Released while railed: the user width sat untouched all drag —
+        // persist it as-is so it stays the restore value.
+        try { localStorage.setItem('dsh-git-review.graphWidth', String(Math.round(graphListWidth ?? state.startWidth))) } catch { /* private mode — width just doesn't persist */ }
         return
       }
+      const final = clamp(state.startWidth + (up.clientX - state.startX))
       setGraphListWidth(final)
       try { localStorage.setItem('dsh-git-review.graphWidth', String(Math.round(final))) } catch { /* private mode — width just doesn't persist */ }
     }
@@ -421,7 +443,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     dragCleanupRef.current = done
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [graphListWidth, settings])
+  }, [graphListWidth, graphListCollapsed, settings])
   /** Double-click the divider restores the default list width. */
   const resetGraphWidth = useCallback(() => {
     setGraphListWidth(null)
@@ -432,8 +454,8 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     event.preventDefault()
     const step = event.shiftKey ? 100 : 20
-    const base = graphListWidth ?? graphListRef.current?.getBoundingClientRect().width ?? 480
-    const next = Math.min(900, Math.max(120, Math.round(base + (event.key === 'ArrowRight' ? step : -step))))
+    const base = effectiveGraphWidth ?? graphListRef.current?.getBoundingClientRect().width ?? 480
+    const next = Math.min(GRAPH_WIDTH_MAX, Math.max(GRAPH_WIDTH_MIN, Math.round(base + (event.key === 'ArrowRight' ? step : -step))))
     setGraphListWidth(next)
     try { localStorage.setItem('dsh-git-review.graphWidth', String(next)) } catch { /* private mode — width just doesn't persist */ }
   }, [graphListWidth])
@@ -1160,17 +1182,14 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     setGraphListCollapsed(false)
     settings.set('graphCollapsed', false)
   }, [settings])
-  /** Commit selection keeps titles visible: expand a collapsed list (last
-   *  width wins, else the reading default) and narrow an untouched default
-   *  once — but never shrink the user's own dragged width. */
+  /** Commit selection keeps titles visible by expanding a collapsed list;
+   *  the reading width itself is derived (see effectiveGraphWidth), never
+   *  written into the user width. */
   const expandForReading = useCallback(() => {
     if (graphListCollapsed) {
       expandGraphList()
     }
-    if (graphListWidth === null && lastExpandedWidthRef.current === undefined) {
-      setGraphListWidth(GRAPH_READING_WIDTH)
-    }
-  }, [graphListCollapsed, expandGraphList, graphListWidth])
+  }, [graphListCollapsed, expandGraphList])
   /** Select a graph commit; the list opens at a title-readable width so the
    *  detail gets room without losing the titles. Clicking the selected
    *  commit again deselects and unfolds the list. */
@@ -2467,7 +2486,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
             <section
               ref={graphListRef as React.Ref<HTMLElement>}
               className={css.graphList + (graphListCollapsed ? ' ' + css.graphListNarrow : '')}
-              style={!graphListCollapsed && graphListWidth !== null ? { width: graphListWidth, minWidth: graphListWidth } : undefined}
+              style={!graphListCollapsed && effectiveGraphWidth !== null ? { width: effectiveGraphWidth, minWidth: effectiveGraphWidth } : undefined}
               data-git-review-graph=""
             >
               <div className={css.graphToggleRow}>
@@ -2512,7 +2531,6 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                 </>
               )}
             </section>
-            {!graphListCollapsed && (
               <div
                 className={css.graphResizeHandle}
                 role="separator"
@@ -2520,14 +2538,13 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                 aria-label={t('graph.resizeHint')}
                 aria-valuemin={120}
                 aria-valuemax={900}
-                aria-valuenow={graphListWidth === null ? undefined : graphListWidth}
+                aria-valuenow={effectiveGraphWidth === null ? undefined : effectiveGraphWidth}
                 tabIndex={0}
                 title={t('graph.resizeHint')}
                 onMouseDown={startGraphResize}
                 onDoubleClick={resetGraphWidth}
                 onKeyDown={onGraphResizeKey}
               />
-            )}
             <main className={css.mainPane}>
               {graphWorktree ? (
                 <div className={css.commitDetail} data-git-review-diff="">

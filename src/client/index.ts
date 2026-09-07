@@ -108,6 +108,11 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
     label: () => t('tab'),
     inject: (sessionId: string): ReviewInjected => ({
       cwd: ctx.sessions.list.getSnapshot().byId[sessionId as SessionId]?.cwd,
+      // The snapshot above is shell-cached per session and can stick at
+      // undefined when the list arrives late — the view subscribes to this
+      // source and re-resolves instead of going blind forever.
+      sessionId,
+      sessionsList: ctx.sessions.list,
       settings,
     }),
   }, ReviewView))

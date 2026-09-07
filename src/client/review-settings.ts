@@ -152,23 +152,31 @@ export function createReviewSettings(storage: PrefsStorage | undefined = typeof 
         // into a still-default section, then the legacy store goes away —
         // the scope is the only source after the first ready section.
         if (!migrated) {
-          migrated = true
           const raw = readLegacyRaw(storage)
-          if (raw !== null) {
+          if (raw === null) {
+            migrated = true
+          } else {
             const fields = migrationFields(raw)
             if (fields !== null && snap.writable && sectionIsDefault(snap.value)) {
-              // The legacy store goes away only after every field lands: a
-              // failed write must keep the old copy for the next attempt.
+              // Migrating: block re-entry while the writes land (each publish
+              // would otherwise re-trigger this branch). The legacy store
+              // goes away only after every field lands: a failed write must
+              // keep the old copy for the next attempt.
+              migrated = true
               const pending = Object.entries(fields).map(([field, value]) => bound.set(field, value))
               void Promise.allSettled(pending).then(results => {
                 if (results.every(result => result.status === 'fulfilled')) removeLegacyStore(storage)
               })
-            } else if (fields === null || (snap.writable && sectionIsDefault(snap.value))) {
+            } else if (fields !== null && !snap.writable) {
+              // Read-only ready with a legacy store: keep both the copy and
+              // the one migration chance — a later writable ready migrates.
+            } else {
               // Nothing to carry, or the scope already holds user choices
               // (legacy superseded): drop the legacy copy. A read-only
               // scope keeps it — deleting would strand the user's prefs
               // with nowhere to live.
-              removeLegacyStore(storage)
+              if (fields === null || sectionIsDefault(snap.value)) removeLegacyStore(storage)
+              migrated = true
             }
           }
         }

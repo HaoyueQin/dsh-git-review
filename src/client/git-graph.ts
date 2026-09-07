@@ -93,6 +93,9 @@ export function computeGraphLanes(commits: readonly GraphCommit[]): GraphLaneRow
       const firstTarget = tips.findIndex((tip, i) => i !== lane && tip.hash === first)
       if (firstTarget >= 0) {
         outEdges.push({ from: lane, to: firstTarget, color })
+        // Recolor the surviving slot: the fold continues this node's line,
+        // so the next row must not jump back to the target's old color.
+        tips[firstTarget] = { hash: first, color }
         tips[lane] = { hash: null, color: 0 }
       } else {
         tips[lane] = { hash: first, color }

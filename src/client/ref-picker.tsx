@@ -81,9 +81,9 @@ export interface RefPickerProps {
   headLabel: string | null
   refs: GitRefEntry[] | null
   commits: GitCommitSummary[] | null
-  /** Ref names that must not be picked here (e.g. the other range end).
-   *  undefined = nothing excluded; null = the other end is HEAD, so the
-   *  HEAD entry is disabled too (the value protocol for HEAD is null). */
+  /** Ref names that must not be picked here (the other range end).
+   *  undefined = nothing excluded (that end is still unpicked); null or
+   *  'HEAD' = the other end is HEAD, so the HEAD entry is disabled too. */
   exclude?: string | null
   /** Placeholder shown when the value is null and headLabel is too. */
   placeholder: string
@@ -179,7 +179,7 @@ export function RefPicker({ value, headLabel, refs, commits, exclude, placeholde
                 <GroupLabel>{t('ref.current')}</GroupLabel>
                 <PickerItem
                   selected={value === null}
-                  disabled={exclude === null}
+                  disabled={exclude === null || exclude === 'HEAD'}
                   icon={<BranchIcon />}
                   name={headLabel}
                   meta="HEAD"

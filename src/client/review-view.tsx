@@ -8,7 +8,7 @@
  * fixes the view's height and floats the input card over its bottom, so the
  * review→agent feedback loop stays one keystroke away.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import type { RefObject } from 'react'
 import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -40,6 +40,16 @@ import css from './review.module.css'
 export interface ReviewInjected {
   /** The session workspace path; undefined when the session has none. */
   cwd: string | undefined
+  /** The session this tab renders (indexes sessionsList). */
+  sessionId: string
+  /** Reactive session-directory source (structural: the shell's session
+   *  list face). The `cwd` snapshot above is shell-cached per session and
+   *  can stick at undefined when the list arrives late — the view
+   *  re-resolves through this source instead. */
+  sessionsList: {
+    subscribe(listener: () => void): () => void
+    getSnapshot(): { byId: Record<string, { cwd?: string } | undefined> }
+  }
   /** The plugin-level preference store (also edits the settings card). */
   settings: ReviewSettings
 }
@@ -130,7 +140,15 @@ function fmtCount(value: number): string {
  * typed optional so a kit change degrades instead of crashing.
  * @param props - injected cwd, locale dictionary and the session standard kit.
  */
-export function ReviewView({ cwd, settings, t, useSession, useInput, inputActions }: InjectFace<ReviewInjected> & PropsLocale<typeof NS> & Partial<SessionStandardProps>) {
+export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings, t, useSession, useInput, inputActions }: InjectFace<ReviewInjected> & PropsLocale<typeof NS> & Partial<SessionStandardProps>) {
+  // The shell caches injected props per session, so the `cwd` snapshot can
+  // stick at undefined when the session list arrives late — re-resolve it
+  // reactively; the injected value is only the first paint. (String compare
+  // keeps the snapshot stable: no resubscribe loop.)
+  const cwd = useSyncExternalStore(
+    useCallback((notify: () => void) => sessionsList.subscribe(notify), [sessionsList]),
+    () => sessionsList.getSnapshot().byId[sessionId]?.cwd ?? injectedCwd,
+  )
   // Agent-running gate for the write actions (commit/push) — a boolean
   // selector keeps re-renders to the running flip only.
   const running = useSession !== undefined ? (useSession((s: SessionSnapshot) => s.running) ?? false) : false
@@ -389,13 +407,16 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // never re-publishes itself.
   useEffect(() => settings.store.subscribe(() => {
     const prefs = settings.store.getSnapshot().prefs
-    setViewMode(prefs.viewMode)
-    setSearchScope(prefs.searchScope)
-    setGraphListCollapsed(prefs.graphCollapsed)
-    setSearchCS(prefs.searchCS)
-    setSearchRegex(prefs.searchRegex)
-    setWsIgnore(prefs.wsIgnore)
-    setSyntaxHighlight(prefs.syntaxHighlight)
+    // Compare-before-set: the store publishes on every sync, and blind sets
+    // re-render the whole tab for unchanged values (updaters stay pure —
+    // returning the previous value bails out via Object.is).
+    setViewMode(previous => (previous === prefs.viewMode ? previous : prefs.viewMode))
+    setSearchScope(previous => (previous === prefs.searchScope ? previous : prefs.searchScope))
+    setGraphListCollapsed(previous => (previous === prefs.graphCollapsed ? previous : prefs.graphCollapsed))
+    setSearchCS(previous => (previous === prefs.searchCS ? previous : prefs.searchCS))
+    setSearchRegex(previous => (previous === prefs.searchRegex ? previous : prefs.searchRegex))
+    setWsIgnore(previous => (previous === prefs.wsIgnore ? previous : prefs.wsIgnore))
+    setSyntaxHighlight(previous => (previous === prefs.syntaxHighlight ? previous : prefs.syntaxHighlight))
   }), [settings])
   const [branchName, setBranchName] = useState('')
   const [branchStart, setBranchStart] = useState('')
@@ -714,7 +735,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // markdown reuse the loaded text). SVG never reaches this effect — its
   // data: URL is encoded from the text content at render time.
   useEffect(() => {
-    if (viewTab !== 'changes' || previewSource || cwd === undefined || selected === null) return
+    if (viewTab !== 'changes' || cwd === undefined || selected === null) {
+      setPreviewBytes({ kind: 'idle' })
+      return
+    }
+    if (previewSource) return
     const kind = previewKindForPath(selected)
     if (kind !== 'image' && kind !== 'pdf') return
     if (kind === 'image' && selected.toLowerCase().endsWith('.svg')) return
@@ -793,6 +818,10 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // refresh shows the final state without a manual click. No competitor can
   // do this — none of them can read the session state.
   const runningPrevRef = useRef(false)
+  /** Call-time workspace ticket: async callbacks compare the cwd they were
+   *  launched with against this ref and drop stale responses. */
+  const cwdRef = useRef(cwd)
+  cwdRef.current = cwd
   useEffect(() => {
     if (runningPrevRef.current && !running) refresh()
     runningPrevRef.current = running
@@ -801,6 +830,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   /** Select a tree file; the staged/unstaged scope resets per selection. */
   const selectFile = useCallback((path: string) => {
     setSelected(path)
+    setFileView(false)
     setDiffScope('all')
     setHunkNotice(null)
     setBlameOn(false)
@@ -925,10 +955,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     settings.set('wsIgnore', next)
   }, [settings, wsIgnore])
 
-  /** Per-file transient states (blame gutter, hunk arms, preview, history):
-   *  they belong to one file+range, so every range/selection switch clears
-   *  them together with the selection. */
+  /** Per-file transient states (blame gutter, hunk arms, preview, history,
+   *  whole-file toggle): they belong to one file+range, so every
+   *  range/selection switch clears them together with the selection. */
   const resetFileTransient = useCallback(() => {
+    setFileView(false)
     setBlameOn(false)
     setHunkNotice(null)
     setPreviewSource(false)
@@ -1007,6 +1038,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setGraphFile(null)
     setDiffScope('all')
     setGraphListCollapsed(true)
+    setInfoOpenHash(null)
   }, [selectedCommit])
 
   /** Select a graph commit unconditionally (jumps never toggle: re-jumping
@@ -1018,6 +1050,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setGraphFile(null)
     setDiffScope('all')
     setGraphListCollapsed(true)
+    setInfoOpenHash(null)
   }, [])
 
   /** Jump from the history popover to the graph: switch tabs and select the
@@ -1065,8 +1098,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
     setPluginOpenReturn(origin)
     if (refsMode) changeCompareMode('worktree')
     changeTreeMode('all')
-    setFileView(true)
+    // selectFile resets the whole-file toggle — set it after selecting.
     selectFile(path)
+    setFileView(true)
   }, [selectedCommit, graphFile, refsMode, changeViewTab, changeCompareMode, changeTreeMode, selectFile])
 
   /** Return from a plugin-opened file to the graph commit it came from. */
@@ -1092,9 +1126,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
    *  order, so appended rows never shift the ones already drawn. */
   const loadGraphMore = useCallback(() => {
     if (cwd === undefined || logState.kind !== 'ready' || graphLoadingMore) return
+    const cwdAtCall = cwd
     setGraphLoadingMore(true)
     void hostCall<GitLogPayload>('log', { cwd, skip: logState.commits.length }).then(payload => {
       setGraphLoadingMore(false)
+      if (cwdAtCall !== cwdRef.current) return
       if (payload === null || !payload.ok) return
       setLogState(previous => {
         if (previous.kind !== 'ready') return previous
@@ -1418,7 +1454,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
    *  and after every stash mutation). */
   const loadStashes = useCallback(() => {
     if (cwd === undefined) return
+    const cwdAtCall = cwd
     void hostCall<GitStashPayload>('stash', { cwd, action: 'list' }).then(payload => {
+      if (cwdAtCall !== cwdRef.current) return
       setStashList(payload !== null && payload.ok ? payload.stashes : [])
     })
   }, [cwd])
@@ -1463,7 +1501,9 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   const toggleAmend = useCallback((next: boolean) => {
     setAmend(next)
     if (next && cwd !== undefined && commitMessage.trim() === '') {
+      const cwdAtCall = cwd
       void hostCall<GitLastCommitPayload>('last-commit', { cwd }).then(payload => {
+        if (cwdAtCall !== cwdRef.current) return
         if (payload !== null && payload.ok && payload.message !== '') {
           setCommitMessage(previous => (previous.trim() === '' ? payload.message : previous))
         }
@@ -1558,7 +1598,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                     headLabel={data?.branch ?? 'HEAD'}
                     refs={refs}
                     commits={pickerCommits}
-                    exclude={targetRef}
+                    exclude={targetRef ?? undefined}
                     placeholder={t('compare.pickBase')}
                     // The HEAD entry picks null, but a null end means "not
                     // picked yet" (rangeReady) — in refs mode remap it to the
@@ -1580,7 +1620,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
                     headLabel={data?.branch ?? 'HEAD'}
                     refs={refs}
                     commits={pickerCommits}
-                    exclude={baseRef}
+                    exclude={baseRef ?? undefined}
                     placeholder={t('compare.pickTarget')}
                     onPick={value => { changeTarget(value ?? 'HEAD') }}
                     t={t}
@@ -2218,6 +2258,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
           className={css.historyPop}
           style={{ top: historyState.y, left: Math.max(8, historyState.x - 340) }}
           onClick={event => { event.stopPropagation() }}
+          onKeyDown={event => { if (event.key === 'Escape') setHistoryState({ kind: 'closed' }) }}
         >
           <div className={css.pickerGroupLabel}>{t('history.title')}</div>
           <div className={css.historyScroll}>
@@ -2236,6 +2277,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         </div>
       )}
       <div className={css.body}>
+        {data?.truncated === true && viewTab === 'changes' && <div className={css.noticeRow}>{t('status.truncated')}</div>}
         {viewTab === 'graph' ? (
           <>
             <section
@@ -2741,11 +2783,14 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
     if (segments.length === 0) return
     setDir(segments.slice(0, -1).join('/') || '.')
   }
+  const mountedRef = useRef(true)
+  useEffect(() => () => { mountedRef.current = false }, [])
   const init = (): void => {
     if (!initArmed) { setInitArmed(true); return }
     setInitBusy(true)
     setInitError(null)
     void hostCall<GitWritePayload>('git-init', { cwd, confirm: true }).then(payload => {
+      if (!mountedRef.current) return
       setInitBusy(false)
       if (payload === null || !payload.ok) { setInitError(payload === null ? t('state.hostUnavailable') : (payload.error ?? t('state.error'))); return }
       setInitArmed(false)

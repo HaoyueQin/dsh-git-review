@@ -2055,8 +2055,14 @@ body[data-dsh-bg-glass] .root {
   scroll-padding-bottom: var(--dsh-review-bottom-clearance, 140px);
 }
 
-/* Collapse hides the list outright (no narrow rail column): the expand
-   triangle floats top-left of the detail pane instead. */
+/* Folded rail: the topology column plus each commit's subject + short
+   hash — a blind 64px dot rail told nobody which commit a node was, so the
+   rail keeps enough width for titles while the detail pane still gets the
+   rest. Hover shows a rich commit card (see .railTip). */
+.graphListNarrow {
+  width: 76px;
+  min-width: 76px;
+}
 
 /* Graph-list drag handle: the divider right of the commit list. */
 .graphResizeHandle {
@@ -2082,11 +2088,81 @@ body[data-dsh-bg-glass] .root {
   border-bottom: 1px solid var(--dsw-alias-border-secondary);
 }
 
-.expandFab {
-  top: 12px;
-  left: 12px;
-  right: auto;
-  bottom: auto;
+.graphListNarrow .graphToggleRow {
+  justify-content: flex-end;
+  padding-right: 6px;
+}
+
+/* ── folded rail rows ─────────────────────────────────────────────────── */
+
+.railList {
+  padding-top: 2px;
+}
+
+.railRow {
+  position: relative;
+  display: grid;
+  /* Columns arrive inline per row (dots-only rail today); no static template. */
+  gap: 7px;
+  align-items: center;
+  width: 100%;
+  height: 27px;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.railRow:hover {
+  background: var(--dsw-alias-fill-hover);
+}
+
+/* The hover card: fixed so the rail list's overflow can't clip it; left/top
+   are set inline from the hovered row's rect. */
+.railTip {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 320px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 16%, transparent);
+  pointer-events: none;
+}
+
+.railTipSubject {
+  color: var(--dsw-alias-label-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.railTipHash {
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code, ui-monospace, monospace);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.railTipMeta {
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.railTipRefs {
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 11px;
+  word-break: break-word;
 }
 
 .graphToggle {

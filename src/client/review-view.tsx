@@ -66,8 +66,9 @@ type ViewTab = 'changes' | 'graph'
 
 /** Shared empty feed: a fresh [] per render would defeat the lanes memo. */
 const NO_COMMITS: GitCommitSummary[] = []
-/** List width applied on commit selection when nothing was ever dragged. */
-const GRAPH_READING_WIDTH = 340
+/** List width applied on commit selection when nothing was ever dragged
+ *  (about the file tree default: titles readable, detail keeps the room). */
+const GRAPH_READING_WIDTH = 300
 /** Drag release below this width snaps the list shut (titles live on). */
 const GRAPH_COLLAPSE_SNAP = 140
 
@@ -2463,11 +2464,10 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
         )}
         {viewTab === 'graph' ? (
           <>
-            {!graphListCollapsed && (
             <section
               ref={graphListRef as React.Ref<HTMLElement>}
-              className={css.graphList}
-              style={graphListWidth !== null ? { width: graphListWidth, minWidth: graphListWidth } : undefined}
+              className={css.graphList + (graphListCollapsed ? ' ' + css.graphListNarrow : '')}
+              style={!graphListCollapsed && graphListWidth !== null ? { width: graphListWidth, minWidth: graphListWidth } : undefined}
               data-git-review-graph=""
             >
               <div className={css.graphToggleRow}>
@@ -2500,6 +2500,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                         lanes={visibleGraph.map(row => row.lane)}
                         selected={selectedCommit}
                         onSelect={selectCommit}
+                                  collapsed={graphListCollapsed}
                                   density={graphDensity}
                         worktree={refsMode === false && ready !== null && ready.files.length > 0 ? { files: ready.files.length } : null}
                         worktreeSelected={graphWorktree}
@@ -2511,7 +2512,6 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                 </>
               )}
             </section>
-            )}
             {!graphListCollapsed && (
               <div
                 className={css.graphResizeHandle}
@@ -2529,17 +2529,6 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
               />
             )}
             <main className={css.mainPane}>
-              {graphListCollapsed && (
-                <button
-                  type="button"
-                  className={css.returnFab + ' ' + css.expandFab}
-                  title={t('graph.expandList')}
-                  aria-label={t('graph.expandList')}
-                  onClick={expandGraphList}
-                >
-                  {'\u25b8'}
-                </button>
-              )}
               {graphWorktree ? (
                 <div className={css.commitDetail} data-git-review-diff="">
                   <div className={css.commitInfo}>

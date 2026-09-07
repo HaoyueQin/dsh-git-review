@@ -5,7 +5,7 @@
  * layout). The lane layout itself lives in git-graph.ts (pure, check-script
  * tested); this file only draws it.
  */
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { GitCommitSummary } from '../contract.ts'
 import type { GraphLaneRow } from './git-graph.ts'
@@ -92,9 +92,9 @@ function RefBadge({ decoration }: { decoration: { name: string; kind: 'head' | '
   return <span className={className}>{decoration.name}</span>
 }
 
-/** Visible-column density of the full list.
+/** Visible-column density of the full list (0 = topology dots only).
  *  From narrow to wide the list gains subject → date → hash → author. */
-export type GraphDensity = 1 | 2 | 3 | 4
+export type GraphDensity = 0 | 1 | 2 | 3 | 4
 
 /** Props of the commit list. */
 export interface CommitGraphProps {
@@ -103,7 +103,9 @@ export interface CommitGraphProps {
   lanes: ReadonlyArray<GraphLaneRow | undefined>
   selected: string | null
   onSelect: (hash: string) => void
-    /** Visible-column density of the full list. */
+  /** Narrow rail: topology column only, still clickable per commit. */
+  collapsed?: boolean
+  /** Visible-column density of the full list (ignored when collapsed). */
   density?: GraphDensity
   /** Uncommitted worktree changes (the virtual row above the tip); absent
    *  when the worktree is clean or the status is not loaded. */
@@ -128,6 +130,7 @@ function WorktreeRow({ width, label, selected, onSelect, columns, density }: { w
       className={css.commitRow + (selected ? ' ' + css.commitRowActive : '')}
       style={{ gridTemplateColumns: columns }}
       onClick={onSelect}
+      title={density === 0 ? label : undefined}
     >
       <svg className={css.graphCell} width={width} height={ROW_H} aria-hidden="true">
         <circle cx={cx} cy={mid} r={3.5} fill="none" stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.5} strokeDasharray="2 2" />
@@ -147,23 +150,36 @@ function WorktreeRow({ width, label, selected, onSelect, columns, density }: { w
 
 /** The scrollable commit list: a header row, then one grid row per commit
  *  (topology | badges+subject | date | author | hash), all columns aligned
- *  via the shared --graph-w variable (the widest lane canvas). */
+ *  via the shared --graph-w variable (the widest lane canvas). Collapsed, it
+ *  degrades to the topology rail so the detail pane gets the width while
+ *  commits stay one click away. */
 /** Full-list grid columns (topology | subject | date | hash | author) — one
  *  shared template so header, rows and the worktree row never drift apart.
  *  Densities 1-3 are leading prefixes of the full template, so narrowing
  *  the list drops author, then hash, then date, in that order. */
 const GRAPH_COLUMNS = 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px 64px minmax(76px, 110px)'
 const GRAPH_DENSITY_COLUMNS: Record<GraphDensity, string> = {
+  0: 'var(--graph-w)',
   1: 'calc(var(--graph-w) + 6px) minmax(0, 1fr)',
   2: 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px',
   3: 'calc(var(--graph-w) + 6px) minmax(0, 1fr) 86px 64px',
   4: GRAPH_COLUMNS,
 }
 
-export function CommitGraph({ commits, lanes, selected, onSelect, density = 4, worktree, worktreeSelected = false, onSelectWorktree, onCommitMenu, t }: CommitGraphProps) {
+export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = false, density = 4, worktree, worktreeSelected = false, onSelectWorktree, onCommitMenu, t }: CommitGraphProps) {
   const maxLanes = lanes.reduce((width, row) => Math.max(width, row !== undefined ? row.laneCount : 1), 1)
   const graphWidth = Math.max(maxLanes * LANE_W, LANE_W * 2)
-  const columns = GRAPH_DENSITY_COLUMNS[density]
+  const columns = collapsed ? GRAPH_DENSITY_COLUMNS[0] : GRAPH_DENSITY_COLUMNS[density]
+  // Hover-card state for the folded rail (kept at the top: hooks never go
+  // below an early return).
+  const [tip, setTip] = useState<{ x: number; y: number; commit: GitCommitSummary } | null>(null)
+  const showTip = (node: Element, commit: GitCommitSummary): void => {
+    const rect = node.getBoundingClientRect()
+    const top = Math.min(rect.top, window.innerHeight - 90)
+    // Clamp horizontally: the card is ~320px wide and the rail hugs the
+    // view's right edge in narrow layouts.
+    setTip({ x: Math.max(8, Math.min(rect.right, window.innerWidth - 330)), y: Math.max(8, top), commit })
+  }
   // Branch-line highlight on hover: dim every SVG element whose color id is
   // not the hovered row's, via native style toggling on the list container —
   // a React state re-render of 500 SVG rows per mouse move would stutter,
@@ -185,6 +201,62 @@ export function CommitGraph({ commits, lanes, selected, onSelect, density = 4, w
     const rootEl = listRef.current
     if (rootEl === null) return
     rootEl.querySelectorAll<SVGElement>('[data-color]').forEach(el => { el.style.opacity = '1' })
+  }
+  if (collapsed) {
+    // Dots-only rail: one topology column per commit, still clickable, with
+    // the rich hover card (subject, hash, author, date, refs) so switching
+    // commits is never blind. The card is one conditionally-rendered
+    // fixed-position node: absolute inside the rail would be clipped by the
+    // list's overflow (the Menu portal lesson).
+    return (
+      <div ref={listRef} className={css.commitList + ' ' + css.railList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
+        {worktree !== null && worktree !== undefined && (
+          <button
+            type="button"
+            className={css.railRow + (worktreeSelected ? ' ' + css.commitRowActive : '')}
+            style={{ gridTemplateColumns: 'var(--graph-w)' }}
+            aria-label={t('graph.worktree', { count: worktree.files })}
+            title={t('graph.worktree', { count: worktree.files })}
+            onClick={() => { onSelectWorktree?.() }}
+          >
+            <svg className={css.graphCell} width={graphWidth} height={ROW_H} aria-hidden="true">
+              <circle cx={LANE_W / 2} cy={ROW_H / 2} r={3.5} fill="none" stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.5} strokeDasharray="2 2" />
+              <line x1={LANE_W / 2} y1={ROW_H / 2 + 4} x2={LANE_W / 2} y2={ROW_H} stroke="var(--dsw-alias-label-tertiary)" strokeWidth={1.2} strokeDasharray="2 3" />
+            </svg>
+          </button>
+        )}
+        {commits.map((commit, index) => (
+          <button
+            key={commit.hash}
+            type="button"
+            className={css.railRow + (selected === commit.hash ? ' ' + css.commitRowActive : '')}
+            style={{ gridTemplateColumns: 'var(--graph-w)' }}
+            aria-label={commit.subject + ' \u00b7 ' + commit.hash.slice(0, 7)}
+            onClick={() => { onSelect(commit.hash) }}
+            onContextMenu={onCommitMenu === undefined ? undefined : event => {
+              event.preventDefault()
+              onCommitMenu(commit.hash, commit.subject, event.clientX, event.clientY)
+            }}
+            onMouseEnter={event => { showTip(event.currentTarget, commit); const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
+            onMouseLeave={() => { setTip(null); unlitLine() }}
+            onFocus={event => { showTip(event.currentTarget, commit); const row = lanes[index]; if (row !== undefined) litLine(row.color) }}
+            onBlur={() => { setTip(null); unlitLine() }}
+          >
+            <GraphCell row={lanes[index]} width={graphWidth} />
+          </button>
+        ))}
+        {tip !== null && (
+          <div className={css.railTip} role="tooltip" style={{ left: tip.x + 10, top: tip.y }}>
+            <span className={css.railTipSubject}>{tip.commit.subject}</span>
+            <span className={css.railTipHash}>{tip.commit.hash}</span>
+            <span className={css.railTipMeta}>{tip.commit.authorName + ' \u00b7 ' + fmtGraphDate(tip.commit.timestamp)}</span>
+            {tip.commit.refs.length > 0 && (
+              <span className={css.railTipRefs}>{tip.commit.refs.map(item => item.name).join(', ')}</span>
+            )}
+          </div>
+        )}
+      </div>
+    )
   }
   return (
     <div ref={listRef} className={css.commitList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>

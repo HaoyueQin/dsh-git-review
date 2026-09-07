@@ -39,7 +39,15 @@
  *   POST /dsh-git-review/api/tag-create     { cwd, name, target?, confirm: true }
  *   POST /dsh-git-review/api/tag-delete     { cwd, name, confirm: true }
  *   POST /dsh-git-review/api/tag-push       { cwd, name, confirm: true }
+ *   POST /dsh-git-review/api/log            { cwd, skip? }
+ *   POST /dsh-git-review/api/commit-files   { cwd, commit }
+ *   POST /dsh-git-review/api/fs-list        { cwd, … }   (non-repository browsing)
+ *   POST /dsh-git-review/api/git-init       { cwd, … }
+ *   POST /dsh-git-review/api/file-op        { cwd, path, action, newPath?, confirm: true }   (action rename|delete)
+ *   POST /dsh-git-review/api/open-with      { cwd, path, app?, confirm: true }
+ *   POST /dsh-git-review/api/apps           { cwd }
  *   GET  /dsh-git-review/api/ping
+ *   GET  /dsh-git-review/api/asset           (versioned preview image bytes)
  *
  * `status`/`file-diff` accept an optional `base` ref name (validated by
  * normalizeBaseRef, re-verified via `rev-parse --verify --end-of-options`):
@@ -170,7 +178,9 @@ function runGit(root: string, args: readonly string[]): Promise<string> {
 /** Path containment: candidate is root itself or below it (no .. escape). */
 function inside(root: string, candidate: string): boolean {
   const child = relative(root, candidate)
-  return child === '' || (!child.startsWith('..') && !isAbsolute(child))
+  // '..foo' is a legal file name: only '..' itself or a parent-qualified
+  // prefix ('../', '..\') escapes.
+  return child === '' || (child !== '..' && !child.startsWith('../') && !child.startsWith('..\\') && !isAbsolute(child))
 }
 
 /** The repository serving `cwd`, or null when cwd is not inside a worktree. */
@@ -394,11 +404,13 @@ function diffSaysBinary(diffText: string): boolean {
 }
 
 /** Cut oversized diff text at a line boundary (a mid-line cut would render a
- *  phantom partial line). */
+ *  phantom partial line). A window with no newline at all (one minified
+ *  line) returns an honest byte prefix: '' plus truncated would read as
+ *  "no changes". */
 function capDiff(diffText: string): { diff: string; truncated: boolean } {
   if (diffText.length <= DIFF_CAP) return { diff: diffText, truncated: false }
   const cut = diffText.lastIndexOf('\n', DIFF_CAP)
-  return { diff: cut === -1 ? '' : diffText.slice(0, cut), truncated: true }
+  return { diff: cut === -1 ? diffText.slice(0, DIFF_CAP) : diffText.slice(0, cut), truncated: true }
 }
 
 /** The kinds of in-progress history operations the tab can surface. */
@@ -687,8 +699,10 @@ export async function gitFileDiff(cwd: unknown, path: unknown, untracked: unknow
     streamedCut = first.streamedCut
   } catch (error) {
     if (!usesRange) throw error
-    // A diff against the empty tree literal is the one sha256-incompatible
-    // path; surface git's own words rather than a generic failure.
+    // The empty-tree literal is the one sha256-incompatible path: only it
+    // falls back to HEAD. Any other failure must surface — otherwise the tab
+    // would silently review the wrong baseline.
+    if (typeof rangeArg !== 'string' || !rangeArg.includes(EMPTY_TREE_ID)) throw error
     const fallback = await attempt('HEAD')
     diffText = fallback.text
     streamedCut = fallback.streamedCut
@@ -793,9 +807,10 @@ function runGitBytes(root: string, args: readonly string[], byteCap: number = PR
     const err: Buffer[] = []
     let size = 0
     let truncated = false
+    let timedOut = false
     let settled = false
     const timer = setTimeout(() => {
-      if (!settled) { truncated = true; try { child.kill() } catch { /* already gone */ } }
+      if (!settled) { timedOut = true; truncated = true; try { child.kill() } catch { /* already gone */ } }
     }, timeoutMs)
     child.stdout?.on('data', (chunk: Buffer) => {
       size += chunk.length
@@ -817,7 +832,8 @@ function runGitBytes(root: string, args: readonly string[], byteCap: number = PR
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolvePromise({ code: code ?? 1, data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
+      // Cap kill is truncated success; timeout/crash stays an error.
+      resolvePromise({ code: (truncated && !timedOut) ? 0 : (code ?? 1), data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
     })
   })
 }
@@ -997,7 +1013,7 @@ export async function gitFileHistory(cwd: unknown, path: unknown): Promise<GitFi
   // terminator rather than parsing a phantom partial commit.
   const raw = streamed.truncated ? streamed.stdout.slice(0, streamed.stdout.lastIndexOf('\x1e') + 1) : streamed.stdout
   const commits = parseLogLines(raw)
-  return { ok: true, commits, truncated: streamed.truncated || commits.length >= FILE_HISTORY_CAP }
+  return { ok: true, commits, truncated: streamed.truncated || commits.length > FILE_HISTORY_CAP }
 }
 
 /** Entry cap for the all-files tree (a review tab is not a file manager). */
@@ -1172,7 +1188,7 @@ export async function gitLog(cwd: unknown, limit: unknown, skip: unknown): Promi
     }
     raw = streamed.stdout
     const commits = parseLogLines(raw)
-    return { ok: true, commits, truncated: streamed.truncated || commits.length >= maxCount }
+    return { ok: true, commits, truncated: streamed.truncated || commits.length > maxCount }
   }
 }
 
@@ -1316,9 +1332,11 @@ export async function gitSearch(cwd: unknown, query: unknown, base: unknown, tar
     const { base } = await diffBase(repoRoot)
     try {
       diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', ...wsFlags, base])
-    } catch {
-      // The empty-tree literal is the one sha256-incompatible path; git's own
+    } catch (error) {
+      // Empty-tree literal only (see file-diff): any other failure surfaces
+      // so search never silently runs against the wrong baseline. Git's own
       // words surface if the retry fails too.
+      if (typeof base !== 'string' || !base.includes(EMPTY_TREE_ID)) throw error
       diffText = await streamDiff(['diff', '--no-color', '-M', '--no-ext-diff', ...wsFlags, 'HEAD'])
     }
   }
@@ -1401,9 +1419,10 @@ function runGitStreamed(root: string, args: readonly string[], timeoutMs: number
     const err: Buffer[] = []
     let size = 0
     let truncated = false
+    let timedOut = false
     let settled = false
     const timer = setTimeout(() => {
-      if (!settled) { truncated = true; try { child.kill() } catch { /* already gone */ } }
+      if (!settled) { timedOut = true; truncated = true; try { child.kill() } catch { /* already gone */ } }
     }, timeoutMs)
     const onChunk = (chunk: Buffer): void => {
       size += chunk.length
@@ -1426,7 +1445,10 @@ function runGitStreamed(root: string, args: readonly string[], timeoutMs: number
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolvePromise({ code: code ?? 1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
+      // A cap kill is truncated success (partial stdout + truncated flag);
+      // a timeout or crash stays an error so callers throw instead of
+      // parsing a prefix as a whole answer.
+      resolvePromise({ code: (truncated && !timedOut) ? 0 : (code ?? 1), stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
     })
   })
 }
@@ -1711,8 +1733,9 @@ export async function gitReset(cwd: unknown, commit: unknown, mode: unknown, con
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
   const hash = historyTarget(commit)
-  if (mode !== 'soft' && mode !== 'mixed' && mode !== 'hard') return { ok: false, error: 'reset mode must be soft, mixed or hard' }
-  const flag = mode === 'soft' ? '--soft' : mode === 'hard' ? '--hard' : '--mixed'
+  const resolvedMode = mode === undefined ? 'mixed' : mode
+  if (resolvedMode !== 'soft' && resolvedMode !== 'mixed' && resolvedMode !== 'hard') return { ok: false, error: 'reset mode must be soft, mixed or hard' }
+  const flag = resolvedMode === 'soft' ? '--soft' : resolvedMode === 'hard' ? '--hard' : '--mixed'
   return writeAnswer(await runGitCapture(repoRoot, ['reset', flag, hash]), 'reset --' + (flag.slice(2)))
 }
 
@@ -1968,6 +1991,9 @@ export async function gitFileOp(cwd: unknown, path: unknown, action: unknown, ne
   }
   if (stat === null || !stat.isFile()) return { ok: false, error: 'not a regular file' }
   if (action === 'rename') {
+    // Only the user-typed target is trimmed: the source path is tree-exact
+    // (trailing spaces are legal in file names). Existence check plus rename
+    // is check-then-act — adequate for this single-user local workbench.
     if (typeof newPath !== 'string' || newPath.trim() === '') return { ok: false, error: 'new path is required' }
     const absTarget = fenceRepoPath(repoRoot, newPath.trim())
     if (absTarget === absPath) return { ok: true, output: '' }

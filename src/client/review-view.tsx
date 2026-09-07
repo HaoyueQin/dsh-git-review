@@ -1713,14 +1713,6 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     }
   }, [cwd, commitMessage])
 
-  if (status.kind === 'notRepo') {
-    if (cwd === undefined) return <CenteredState t={t} status={{ kind: 'noWorkspace' }} onRetry={refresh} />
-    return <NotRepoView cwd={cwd} root={status.root} t={t} onDidInit={refresh} />
-  }
-  if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'error') {
-    return <CenteredState t={t} status={status} onRetry={refresh} />
-  }
-
   const data = ready
   // Ref-range order guard: base...target is empty exactly when the target
   // adds nothing beyond the base. Both feeds combine for maximum ancestry
@@ -1752,6 +1744,19 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     }
     return out
   }, [rangeCommits, rangeParents, targetHash])
+  // Non-ready states render after every hook above: an early return before
+  // the range memos changed the hook count between loading/ready and
+  // notRepo/noWorkspace/error, so opening a non-repository workspace threw
+  // "rendered fewer hooks than expected", blanked this tab, and kept it
+  // blank when switching back to a repository session in the same mount
+  // (only a page refresh remounted clean).
+  if (status.kind === 'notRepo') {
+    if (cwd === undefined) return <CenteredState t={t} status={{ kind: 'noWorkspace' }} onRetry={refresh} />
+    return <NotRepoView cwd={cwd} root={status.root} t={t} onDidInit={refresh} />
+  }
+  if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'error') {
+    return <CenteredState t={t} status={status} onRetry={refresh} />
+  }
   return (
     <div ref={rootRef} tabIndex={-1} onKeyDown={onRootKeyDown} className={css.root} data-conversation-composer-overlay="">
       {/* One wrapping row, single-line-first: every control is flex:none

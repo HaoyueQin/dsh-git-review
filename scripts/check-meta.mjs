@@ -2,7 +2,8 @@
 // CSS class references vs definitions (css-modules.d.ts is Record<string,
 // string, so tsc is blind to typos), dynamic locale keys vs dictionaries,
 // the cordis manifest vs package.json, the client inject list vs the build's
-// platform table, and the prefs/schema field lock. Requires Node >= 23.6.
+// platform table, the prefs/schema field lock, and the ReviewView hook order
+// (no hooks past the non-ready early return). Requires Node >= 23.6.
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -90,5 +91,17 @@ const missingBranches = argKeys.filter(key => !branchHits.includes(key))
 assert.deepEqual(missingBranches, [], 'actions without dispatch: ' + missingBranches.join(', '))
 const extraBranches = [...new Set(branchHits)].filter(key => !argKeys.includes(key))
 assert.deepEqual(extraBranches, [], 'dispatch branches without contract: ' + extraBranches.join(', '))
+
+// 7. Hook order: ReviewView's non-ready early returns must sit after every
+//    hook (2026-09-07: returns before the range memos threw 'rendered fewer
+//    hooks', blanking non-repository tabs and contaminating repository tabs
+//    in the same mount until a page refresh).
+const reviewView = read('src/client/review-view.tsx')
+const earlyReturnAt = reviewView.indexOf("if (status.kind === 'notRepo')")
+assert.ok(earlyReturnAt !== -1, 'ReviewView non-ready early return exists')
+const notRepoViewAt = reviewView.indexOf('function NotRepoView')
+assert.ok(notRepoViewAt > earlyReturnAt, 'NotRepoView follows ReviewView')
+const lateHooks = [...reviewView.slice(earlyReturnAt, notRepoViewAt).matchAll(/\buse[A-Z][A-Za-z]*\s*\(/g)].map(m => m[0])
+assert.deepEqual(lateHooks, [], 'hooks after the non-ready early return: ' + lateHooks.join(', '))
 
 console.log('check-meta: all assertions passed (' + refs.size + ' css refs, ' + cssDef.size + ' css defs, ' + dynamicKeys.length + ' locale keys, ' + argKeys.length + ' actions)')

@@ -2434,8 +2434,14 @@ body[data-dsh-bg-glass] .commitHeader {
 }
 
 /* The tree panel inside commitSplit owns its border; the shared .treePanel
-   keeps its left border for the worktree layout, neutralize it here. */
+   keeps its left border for the worktree layout, neutralize it here. The
+   shared panel is flex:none (right in a row layout), but this column must
+   fill the available height so its .treeScroll can scroll: without flex:1
+   the panel grows to its content height and the bottom files are cut off
+   with no way to reach them. */
 .commitTreePanel .treePanel {
+  flex: 1;
+  min-height: 0;
   width: 100%;
   border-left: none;
 }

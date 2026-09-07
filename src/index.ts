@@ -424,10 +424,37 @@ function diffSaysBinary(diffText: string): boolean {
  *  phantom partial line). A window with no newline at all (one minified
  *  line) returns an honest byte prefix: '' plus truncated would read as
  *  "no changes". */
+/** Cut a `-z` (NUL-separated) feed at its last record boundary when the
+ *  stream was truncated: the unterminated tail would otherwise parse as a
+ *  phantom partial record. (A rename record straddling the cut loses one
+ *  row of a best-effort truncated answer — accepted, and flagged.) */
+function cutZ(out: string, cut: boolean): string {
+  if (!cut) return out
+  const at = out.lastIndexOf('\0')
+  return at === -1 ? '' : out.slice(0, at + 1)
+}
+
 function capDiff(diffText: string): { diff: string; truncated: boolean } {
   if (diffText.length <= DIFF_CAP) return { diff: diffText, truncated: false }
   const cut = diffText.lastIndexOf('\n', DIFF_CAP)
   return { diff: cut === -1 ? diffText.slice(0, DIFF_CAP) : diffText.slice(0, cut), truncated: true }
+}
+
+/** Bounded parallel map: at most `limit` in flight (git spawns are cheap
+ *  but not free — an unbounded Promise.all over thousands of files is
+ *  not). Results keep input order. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const workers = new Array(Math.min(Math.max(limit, 1), items.length)).fill(null).map(async () => {
+    for (;;) {
+      const i = next++
+      if (i >= items.length) return
+      out[i] = await fn(items[i]!, i)
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 /** The kinds of in-progress history operations the tab can surface. */
@@ -442,14 +469,17 @@ async function detectInProgress(repoRoot: string): Promise<OperationKind | null>
     ['cherry-pick', 'CHERRY_PICK_HEAD'],
     ['revert', 'REVERT_HEAD'],
   ]
-  for (const [kind, marker] of probes) {
+  // Parallel: the probes are independent; find() keeps the priority order
+  // (merge > rebase > cherry-pick > revert) identical to the old sequence.
+  const results = await Promise.all(probes.map(async ([kind, marker]) => {
     try {
       await runGit(repoRoot, ['rev-parse', '-q', '--verify', marker])
       return kind
-    } catch { // marker absent — next probe
+    } catch { // marker absent
+      return null
     }
-  }
-  return null
+  }))
+  return results.find((kind): kind is OperationKind => kind !== null) ?? null
 }
 
 /** One `status` answer: repo detection, porcelain + numstat in one shot.
@@ -513,17 +543,25 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
     ? null
     : await resolveRangeRef(repoRoot, baseRef).then(commit => (commit !== null && commit !== headCommit && commit !== EMPTY_TREE_ID ? commit : null))
   const wsFlags = ws === true ? WS_FLAG : []
-  const [branchRaw, porcelainRaw, numstatRaw, nameStatusRaw, inProgress] = await Promise.all([
+  // The two full-tree feeds stream under the shared byte cap instead of
+  // execFile's 64MB whole-buffer backstop: a cut feed still parses its
+  // record prefix, flagged via `truncated` on the payload.
+  const [branchRaw, porcelainOut, numstatOut, nameStatusRaw, inProgress] = await Promise.all([
     runGit(repoRoot, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => ''),
-    runGit(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+    runGitStreamed(repoRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']),
     overrideCommit !== null
-      ? runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...wsFlags, overrideCommit])
-      : runGit(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...wsFlags, unbornHead ? EMPTY_TREE_ID : 'HEAD']),
+      ? runGitStreamed(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...wsFlags, overrideCommit])
+      : runGitStreamed(repoRoot, ['diff', '--numstat', '-z', '--no-color', '-M', ...wsFlags, unbornHead ? EMPTY_TREE_ID : 'HEAD']),
     overrideCommit !== null
       ? runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...wsFlags, overrideCommit])
       : Promise.resolve(''),
     detectInProgress(repoRoot),
   ])
+  if (porcelainOut.code !== 0) throw new Error('git status failed: ' + (porcelainOut.stderr.trim() || porcelainOut.stdout.trim()))
+  if (numstatOut.code !== 0) throw new Error('git diff --numstat failed: ' + (numstatOut.stderr.trim() || numstatOut.stdout.trim()))
+  const statusCut = porcelainOut.truncated || numstatOut.truncated
+  const porcelainRaw = cutZ(porcelainOut.stdout, porcelainOut.truncated)
+  const numstatRaw = cutZ(numstatOut.stdout, numstatOut.truncated)
   const porcelainEntries = parsePorcelainV1(porcelainRaw)
   const numstat = numstatIndex(parseNumstatZ(numstatRaw))
   // Tracked rows: name-status vs base when overridden, porcelain otherwise —
@@ -544,11 +582,14 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
   // exact within the shared per-status budget, prefix estimates past it).
   const untrackedCounts = new Map<string, { added: number; binary: boolean }>()
   const untrackedBudget = { remaining: PROBE_BUDGET_CAP }
-  for (const entry of finalEntries) {
-    if (entry.x !== '?') continue
-    const probe = await probeUntracked(repoRoot, entry.path, untrackedBudget)
-    if (probe !== null) untrackedCounts.set(entry.path, probe)
-  }
+  // Bounded parallelism: sequential probing makes status latency linear in
+  // the untracked count. The shared budget stays advisory under concurrency
+  // (overshoot only scans slightly more, never less safely).
+  const untrackedPaths = finalEntries.filter(entry => entry.x === '?').map(entry => entry.path)
+  await mapLimit(untrackedPaths, 8, async relPath => {
+    const probe = await probeUntracked(repoRoot, relPath, untrackedBudget)
+    if (probe !== null) untrackedCounts.set(relPath, probe)
+  })
   const files: ChangedFile[] = mergeStatus(finalEntries, numstat, untrackedCounts)
   // Worktree blob hashes (the reviewed marker rides them): one hash-object
   // process covers every existing worktree file; deleted rows have no file
@@ -616,6 +657,7 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
     ahead,
     behind,
     inProgress,
+    truncated: statusCut,
   }
 }
 
@@ -1268,21 +1310,21 @@ async function scanUntrackedMatches(repoRoot: string, counts: Map<string, number
     untracked = parsePorcelainV1(porcelain).filter(entry => entry.x === '?').map(entry => entry.path)
   } catch { /* no untracked scan on status failure */ }
   let partial = untracked.length > SEARCH_UNTRACKED_CAP
-  for (const relPath of untracked.slice(0, SEARCH_UNTRACKED_CAP)) {
+  await mapLimit(untracked.slice(0, SEARCH_UNTRACKED_CAP), 8, async relPath => {
     const absPath = resolve(repoRoot, relPath)
-    if (!inside(repoRoot, absPath)) continue
+    if (!inside(repoRoot, absPath)) return
     try {
       // Regular files only: a FIFO here would block open() forever.
       const stat = await lstat(absPath)
-      if (!stat.isFile()) continue
+      if (!stat.isFile()) return
       const { bytes } = await readPrefix(absPath, SEARCH_READ_CAP)
-      if (bytes.includes(0)) continue
+      if (bytes.includes(0)) return
       const count = safeCount(bytes.toString('utf8'), needle, options)
       if (count > 0) counts.set(relPath, (counts.get(relPath) ?? 0) + count)
     } catch {
       partial = true
     }
-  }
+  })
   return partial
 }
 

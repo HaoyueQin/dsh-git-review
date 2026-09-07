@@ -47,6 +47,8 @@ export interface GitStatusPayload {
   baseRef?: string | null
   files: ChangedFile[]
   totals: { added: number; deleted: number }
+  /** True when the file list was cut at the host's streaming byte cap. */
+  truncated?: boolean
   /** Local commits the upstream lacks (worktree mode only; absent = no upstream). */
   ahead?: number
   /** Upstream commits the local branch lacks (worktree mode only). */

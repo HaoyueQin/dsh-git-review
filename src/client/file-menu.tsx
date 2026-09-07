@@ -73,6 +73,8 @@ interface LineItem {
   icon: React.ReactNode
   label: string
   onClick: () => void
+  /** True greys the row out (availability still unknown). */
+  disabled?: boolean
 }
 
 /** Add-to-chat row: owns the composer-draft subscription, so the menu
@@ -113,11 +115,12 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
   const canChat = useInput !== undefined && inputActions !== undefined
 
   useEffect(() => {
-    // Escape always dismisses (even mid-flight — the op continues in the
-    // background and its completion handler is idempotent); outside-click
-    // stays disabled while busy so a stray click can't drop the error row.
+    // Escape dismisses, but not mid-flight: the completion note must land on
+    // an open menu instead of being lost (completion itself stays idempotent).
+    // Outside-click stays disabled while busy so a stray click can't drop
+    // the error row.
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape' && mode !== 'busy') onClose()
     }
     document.addEventListener('keydown', onKey)
     if (mode === 'busy') {
@@ -191,7 +194,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
             if (event.key === 'Enter' && renameValue.trim() !== '' && renameValue.trim() !== state.path) {
               void run('rename', () => rename(state.path, renameValue.trim()))
             }
-            if (event.key === 'Escape') setMode('menu')
+            if (event.key === 'Escape') { event.stopPropagation(); setMode('menu') }
           }}
           autoFocus
           spellCheck={false}
@@ -263,6 +266,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
       <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 240 }}>
         <div className={css.fileMenuTitle} title={state.path}>{state.path}</div>
         <div className={css.fileMenuApps}>
+          {apps === null && <div className={css.pickerEmpty}>{t('menu.loadingApps')}</div>}
           {(apps ?? []).map(app => (
             <button
               key={app.id}
@@ -287,16 +291,16 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
   const pluginOpener = state.from === 'commit' ? openInPlugin : undefined
   const items: LineItem[] = [
     ...(pluginOpener === undefined ? [] : [{ key: 'open-in-plugin', icon: <FileIcon />, label: t('menu.openInPlugin'), onClick: () => { pluginOpener(state.path); onClose() } }]),
-    { key: 'open', icon: <OpenIcon />, label: t('menu.openDefault'), onClick: () => { void run('open', () => openApp(state.path, 'default')) } },
-    { key: 'reveal', icon: <FolderIcon />, label: t('menu.reveal'), onClick: () => { void run('open', () => openApp(state.path, 'explorer')) } },
-    { key: 'open-with', icon: <FileIcon />, label: t('menu.openWith'), onClick: () => { setNote(null); setMode('apps') } },
+    { key: 'open', icon: <OpenIcon />, label: t('menu.openDefault'), onClick: () => { void run('open', () => openApp(state.path, 'default')) }, disabled: apps === null },
+    { key: 'reveal', icon: <FolderIcon />, label: t('menu.reveal'), onClick: () => { void run('open', () => openApp(state.path, 'explorer')) }, disabled: apps === null },
+    { key: 'open-with', icon: <FileIcon />, label: t('menu.openWith'), onClick: () => { setNote(null); setMode('apps') }, disabled: apps === null },
   ]
   return (
     <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 240 }}>
       <div className={css.fileMenuTitle} title={state.path}>{state.path}</div>
       <>
         {items.map(item => (
-          <button key={item.key} type="button" className={css.fileMenuItem} onClick={item.onClick}>
+          <button key={item.key} type="button" className={css.fileMenuItem + (item.disabled === true ? ' ' + css.pickerItemDisabled : '')} disabled={item.disabled} onClick={item.onClick}>
             <span className={css.fileMenuItemIcon}>{item.icon}</span>
             <span className={css.pickerItemName}>{item.label}</span>
           </button>

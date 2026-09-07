@@ -91,8 +91,14 @@ export function createDraftBox(
   return {
     list: () => [...items],
     add(draft) {
-      const clean = normalizeDraft({ path: draft.path, line: draft.line, text: draft.text })
+      // Blank text never enters (whitespace-only would evict real drafts at
+      // the cap), and an identical draft moves to the top instead of doubling.
+      const text = draft.text.trim()
+      if (text === '') return
+      const clean = normalizeDraft({ path: draft.path, line: draft.line, text })
       if (clean === null) return
+      const at = items.findIndex(item => item.path === clean.path && item.line === clean.line && item.text === clean.text)
+      if (at !== -1) items.splice(at, 1)
       items.push(clean)
       while (items.length > DRAFTS_CAP) items.shift()
       persist()

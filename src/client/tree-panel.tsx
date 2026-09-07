@@ -5,7 +5,7 @@
  * matching list, like Codex's file panel. Collapse state is owned by the
  * review view so a status refresh preserves it.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ChangedFile } from '../contract.ts'
 import { badgesFor, buildFileTree, filterFiles, type TreeEntry } from './file-tree.ts'
 import { ChevronIcon, SearchIcon } from './icons.tsx'
@@ -14,6 +14,9 @@ import { FileCounts } from './file-counts.tsx'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS, ReviewKey } from './locales.ts'
 import css from './review.module.css'
+
+/** Flat-list page size: bounds the mounted rows in all-files mode. */
+const TREE_PAGE = 300
 
 type T = PropsLocale<typeof NS>['t']
 
@@ -188,8 +191,12 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
  */
 export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, width, showModeRow = true, showFilter = true, listFailed, matchCounts, viewedHas, onToggleViewed, pendingCount, onFileMenu, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
-  const tree = useMemo(() => buildFileTree(visible), [visible])
   const flat = filter.trim() !== ''
+  // The filtered flat list never needs the tree: skip the O(n log n)
+  // rebuild while typing (all-files mode makes this a keystroke cost).
+  const tree = useMemo(() => (flat ? null : buildFileTree(visible)), [flat, visible])
+  const [shown, setShown] = useState(TREE_PAGE)
+  useEffect(() => { setShown(TREE_PAGE) }, [filter, files])
   return (
     <div className={css.treePanel} data-git-review-tree="" style={width !== undefined ? { width } : undefined}>
       {pendingCount !== undefined && pendingCount > 0 && (
@@ -227,7 +234,8 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
         {visible.length === 0
           ? <div className={css.treeEmpty}>{t(listFailed ? 'tree.listFailed' : mode === 'all' ? 'tree.empty' : files.length === 0 ? 'tree.noChanges' : 'tree.empty')}</div>
           : flat
-            ? visible.map(file => (
+            ? <>
+              {visible.slice(0, shown).map(file => (
               <FileRow
                 key={file.path}
                 entry={{ kind: 'file', name: file.path, path: file.path, file }}
@@ -240,8 +248,14 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
                 onFileMenu={onFileMenu}
                 t={t}
               />
-            ))
-            : tree.children.map(child => (
+            ))}
+              {visible.length > shown && (
+                <button type="button" className={css.scopeBtn} onClick={() => { setShown(value => value + TREE_PAGE) }}>
+                  {t('tree.showMore', { count: visible.length - shown })}
+                </button>
+              )}
+            </>
+            : (tree?.children ?? []).map(child => (
               <Node
                 key={child.kind + ':' + child.path}
                 entry={child}

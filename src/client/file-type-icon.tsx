@@ -75,7 +75,7 @@ const EXT_ICONS: Record<string, string> = {
 /** Lowercased extension of a path ('' when none); Dockerfile maps to its own key. */
 function extOf(path: string): string {
   const base = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
-  if (/^dockerfile(\.\w+)?$/i.test(base)) return '@dockerfile'
+  if (/^dockerfile(\.[\w-]+)?$/i.test(base)) return '@dockerfile'
   const dot = base.lastIndexOf('.')
   return dot === -1 ? '' : base.slice(dot + 1).toLowerCase()
 }

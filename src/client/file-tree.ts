@@ -32,7 +32,7 @@ export type TreeEntry = TreeDir | TreeFile
 
 /** Sort dirs first, then files, each by name (plain codepoint order). */
 function sortChildren(children: TreeEntry[]): TreeEntry[] {
-  return children.sort((a, b) => {
+  return [...children].sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
   })
@@ -95,7 +95,7 @@ export function isUnmerged(x: string, y: string): boolean {
 export function filterFiles(files: readonly ChangedFile[], query: string): ChangedFile[] {
   const q = query.trim().toLowerCase()
   if (q === '') return [...files]
-  return files.filter(file => file.path.toLowerCase().includes(q))
+  return files.filter(file => file.path.toLowerCase().includes(q) || (file.origPath ?? '').toLowerCase().includes(q))
 }
 
 /**
@@ -159,7 +159,9 @@ export function badgesFor(file: ChangedFile): FileBadge[] {
   if (x !== null) out.push({ ...x, staged: true })
   const y = badgeForCode(file.y)
   if (y !== null) out.push({ ...y, staged: false })
-  return out.length > 0 ? out : [{ glyph: '\u00b1', key: 'modified', tone: 'Business' }]
+  // No active half on a changed row is inconsistent data — render no badge
+  // rather than a fake "modified" one (the row itself still lists).
+  return out
 }
 
 /** The loudest single badge (first of {@link badgesFor}). */

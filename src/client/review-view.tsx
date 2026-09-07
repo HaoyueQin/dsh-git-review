@@ -63,6 +63,9 @@ type CompareMode = 'worktree' | 'refs'
 /** The tab's main view: workspace changes or the commit graph. */
 type ViewTab = 'changes' | 'graph'
 
+/** Shared empty feed: a fresh [] per render would defeat the lanes memo. */
+const NO_COMMITS: GitCommitSummary[] = []
+
 /** The commit-graph feed's load state. */
 type LogState =
   | { kind: 'idle' | 'loading' }
@@ -179,26 +182,49 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     }
   })
   const treeResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  /** Document-level drag listeners must not leak on a mid-drag unmount (the
+   *  mouseup that removes them would never arrive). Both resizers register
+   *  their teardown here. */
+  const dragCleanupRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => {
+    dragCleanupRef.current?.()
+    dragCleanupRef.current = null
+  }, [])
   /** Drag the divider between the diff pane and the tree: the tree sits on
    *  the right, so dragging LEFT widens it; clamped, persisted on release. */
   const startTreeResize = useCallback((event: React.MouseEvent) => {
     event.preventDefault()
     treeResizeRef.current = { startX: event.clientX, startWidth: treeWidth ?? 260 }
+    let raf = 0
+    let latest = 0
     const onMove = (move: MouseEvent): void => {
       const state = treeResizeRef.current
       if (state === null) return
-      setTreeWidth(Math.min(460, Math.max(200, state.startWidth + (state.startX - move.clientX))))
+      latest = Math.min(460, Math.max(200, state.startWidth + (state.startX - move.clientX)))
+      if (raf !== 0) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        setTreeWidth(latest)
+      })
+    }
+    const done = (): void => {
+      if (raf !== 0) cancelAnimationFrame(raf)
+      raf = 0
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (dragCleanupRef.current === done) dragCleanupRef.current = null
     }
     const onUp = (move: MouseEvent): void => {
       const state = treeResizeRef.current
       treeResizeRef.current = null
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
+      done()
       if (state === null) return
       void move
       const final = Math.min(460, Math.max(200, state.startWidth + (state.startX - move.clientX)))
       try { localStorage.setItem('dsh-git-review.treeWidth', String(final)) } catch { /* private mode — width just doesn't persist */ }
     }
+    dragCleanupRef.current?.()
+    dragCleanupRef.current = done
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }, [treeWidth])
@@ -257,6 +283,9 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   // The ref picker's commit section: recent commits, fetched once per
   // refresh alongside the refs list (capped — a picker is not a browser).
   const [pickerCommits, setPickerCommits] = useState<GitCommitSummary[] | null>(null)
+  /** The 120-commit picker feed loads on the first picker open, not on refresh. */
+  const [pickerFeedWanted, setPickerFeedWanted] = useState(false)
+  const wantPickerFeed = useCallback(() => { setPickerFeedWanted(true) }, [])
   const refsMode = compareMode === 'refs'
   const rangeReady = !refsMode || (baseRef !== null && targetRef !== null)
   // Graph view: the log feed, the selected commit, and its file list/diff.
@@ -267,7 +296,6 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
    *  folds again, so the detail always opens on its compact summary row. */
   const [infoOpenHash, setInfoOpenHash] = useState<string | null>(null)
   const [graphFile, setGraphFile] = useState<string | null>(null)
-  const [graphFilter, setGraphFilter] = useState('')
   const [graphCollapsed, setGraphCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [graphListCollapsed, setGraphListCollapsed] = useState(initialPrefs.graphCollapsed)
   /** Graph-list dragged width in px (null = the CSS default; persists like the tree width). */
@@ -290,19 +318,34 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     const startWidth = graphListWidth ?? section?.getBoundingClientRect().width ?? 480
     graphResizeRef.current = { startX: event.clientX, startWidth }
     const clamp = (value: number): number => Math.min(900, Math.max(180, value))
+    let raf = 0
+    let latest = 0
     const onMove = (move: MouseEvent): void => {
       const state = graphResizeRef.current
       if (state === null) return
-      setGraphListWidth(clamp(state.startWidth + (move.clientX - state.startX)))
+      latest = clamp(state.startWidth + (move.clientX - state.startX))
+      if (raf !== 0) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        setGraphListWidth(latest)
+      })
+    }
+    const done = (): void => {
+      if (raf !== 0) cancelAnimationFrame(raf)
+      raf = 0
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      if (dragCleanupRef.current === done) dragCleanupRef.current = null
     }
     const onUp = (up: MouseEvent): void => {
       const state = graphResizeRef.current
       graphResizeRef.current = null
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
+      done()
       if (state === null) return
       try { localStorage.setItem('dsh-git-review.graphWidth', String(Math.round(clamp(state.startWidth + (up.clientX - state.startX)))) ) } catch { /* private mode — width just doesn't persist */ }
     }
+    dragCleanupRef.current?.()
+    dragCleanupRef.current = done
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }, [graphListWidth])
@@ -327,6 +370,8 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   const [graphWorktreeFile, setGraphWorktreeFile] = useState<string | null>(null)
   const [graphLoadingMore, setGraphLoadingMore] = useState(false)
   const [commitFiles, setCommitFiles] = useState<ChangedFile[] | null>(null)
+  /** Commit-detail file filter (local: the shared graphFilter drives the feed). */
+  const [commitFilesFilter, setCommitFilesFilter] = useState('')
   const [commitTotals, setCommitTotals] = useState<{ added: number; deleted: number } | null>(null)
   const [copiedHash, setCopiedHash] = useState(false)
   /** Blame-jump return: the file view (path + line) a graph commit was opened from. */
@@ -486,23 +531,30 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     return () => { alive = false }
   }, [cwd, reloadTick, baseRef, targetRef, compareMode, wsIgnore])
 
-  // Selectable diff-base refs (branches, remotes, tags) and the picker's
-  // recent-commit feed (a capped log — the picker is not a history browser).
+  // Selectable diff-base refs (branches, remotes, tags) ride every refresh.
+  // The picker's recent-commit feed (a capped log — the picker is not a
+  // history browser) loads lazily on the first picker open instead: a write
+  // must not re-pull 120 commits for a picker that may never open.
   useEffect(() => {
     if (cwd === undefined) {
       setRefs(null)
       setPickerCommits(null)
+      setPickerFeedWanted(false)
       return
     }
     let alive = true
     void hostCall<GitRefsPayload>('refs', { cwd }).then(payload => {
       if (alive) setRefs(payload !== null && payload.ok ? payload.refs : null)
     })
-    void hostCall<GitLogPayload>('log', { cwd, limit: 120 }).then(payload => {
-      if (alive) setPickerCommits(payload !== null && payload.ok ? payload.commits : null)
-    })
+    if (pickerFeedWanted) {
+      void hostCall<GitLogPayload>('log', { cwd, limit: 120 }).then(payload => {
+        if (alive) setPickerCommits(payload !== null && payload.ok ? payload.commits : null)
+      })
+    } else {
+      setPickerCommits(null)
+    }
     return () => { alive = false }
-  }, [cwd, reloadTick])
+  }, [cwd, reloadTick, pickerFeedWanted])
 
   // Open-with app availability: probed once (the app list has no repo
   // dependency; the menu just needs it before the first open-with click).
@@ -633,17 +685,14 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     () => ({ query: search, caseSensitive: searchCS, regex: searchRegex }),
     [search, searchCS, searchRegex],
   )
-  /** Graph feed with the local search filter applied (topology rows kept). */
-  const graphCommits = logState.kind === 'ready' ? logState.commits : []
+  const graphCommits = logState.kind === 'ready' ? logState.commits : NO_COMMITS
   const graphLanes = useMemo(() => computeGraphLanes(graphCommits), [graphCommits])
-  const visibleGraph = useMemo(() => {
-    const query = graphFilter.trim().toLowerCase()
-    const rows = graphCommits.map((commit, index) => ({ commit, lane: graphLanes[index] }))
-    if (query === '') return rows
-    return rows.filter(({ commit }) => commit.subject.toLowerCase().includes(query)
-      || commit.authorName.toLowerCase().includes(query)
-      || commit.hash.startsWith(query))
-  }, [graphCommits, graphLanes, graphFilter])
+  // The feed has no filter input of its own (the commit-detail tree owns its
+  // local filter): rows pass through with their topology lanes attached.
+  const visibleGraph = useMemo(
+    () => graphCommits.map((commit, index) => ({ commit, lane: graphLanes[index] })),
+    [graphCommits, graphLanes],
+  )
   /** Every repository row in all-files mode (changed rows merged in); null in changes mode. */
   const allRows = useMemo(
     () => (treeMode === 'all' && !refsMode && allFiles !== null ? mergeAllFiles(allFiles, ready?.files ?? []) : null),
@@ -1583,6 +1632,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     commits={pickerCommits}
                     placeholder={t('compare.pickBase')}
                     onPick={changeBase}
+                    onOpen={wantPickerFeed}
                     t={t}
                   />
                   <span className={css.compareArrow}>{'\u2192'}</span>
@@ -1604,6 +1654,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     // picked yet" (rangeReady) — in refs mode remap it to the
                     // literal HEAD ref, which resolves like any other ref.
                     onPick={value => { changeBase(refsMode ? (value ?? 'HEAD') : value) }}
+                    onOpen={wantPickerFeed}
                     t={t}
                   />
                   <button
@@ -1623,6 +1674,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     exclude={baseRef ?? undefined}
                     placeholder={t('compare.pickTarget')}
                     onPick={value => { changeTarget(value ?? 'HEAD') }}
+                    onOpen={wantPickerFeed}
                     t={t}
                   />
                 </span>
@@ -1894,6 +1946,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
               commits={pickerCommits}
               placeholder={t('branch.fromHead')}
               onPick={value => { setBranchStart(value ?? '') }}
+              onOpen={wantPickerFeed}
               t={t}
             />
             <button
@@ -2039,6 +2092,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                 commits={pickerCommits}
                 placeholder={t('tag.fromTarget')}
                 onPick={value => { setTagTarget(value ?? '') }}
+              onOpen={wantPickerFeed}
                 t={t}
               />
               <button
@@ -2229,7 +2283,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
       )}
       {fileMenu !== null && (
         <FileMenu
-          key={fileMenu.path}
+          key={fileMenu.path + '@' + fileMenu.x + ':' + fileMenu.y}
           state={fileMenu}
           apps={openApps}
           // Graph-mode rows are historical files, not worktree files: no
@@ -2529,8 +2583,8 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                               files={commitFiles}
                               selected={graphFile}
                               onSelect={selectGraphFile}
-                              filter={graphFilter}
-                              onFilterChange={setGraphFilter}
+                              filter={commitFilesFilter}
+                              onFilterChange={setCommitFilesFilter}
                               collapsed={graphCollapsed}
                               onToggleDir={toggleGraphDir}
                               mode="changes"

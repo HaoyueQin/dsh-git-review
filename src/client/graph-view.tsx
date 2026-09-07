@@ -183,14 +183,19 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
   // a React state re-render of 500 SVG rows per mouse move would stutter,
   // and the DOM sweep is one querySelectorAll.
   const listRef = useRef<HTMLDivElement | null>(null)
+  /** Lane currently lit (skips the O(N) DOM sweep on same-lane moves). */
+  const litColorRef = useRef<number | null>(null)
   const litLine = (color: number): void => {
+    if (litColorRef.current === color) return
     const rootEl = listRef.current
     if (rootEl === null) return
+    litColorRef.current = color
     rootEl.querySelectorAll<SVGElement>('[data-color]').forEach(el => {
       el.style.opacity = el.dataset.color === String(color) ? '1' : '0.22'
     })
   }
   const unlitLine = (): void => {
+    litColorRef.current = null
     const rootEl = listRef.current
     if (rootEl === null) return
     rootEl.querySelectorAll<SVGElement>('[data-color]').forEach(el => { el.style.opacity = '1' })

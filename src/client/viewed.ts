@@ -13,6 +13,14 @@ import type { PrefsStorage } from './prefs.ts'
 
 export const VIEWED_KEY = 'dsh-git-review.viewed'
 
+/** Per-workspace store key: blob hashes are content-derived, so one global
+ *  key leaks reviewed marks across repositories that share content. (The
+ *  pre-scoping global key is left unread: its mixed-workspace data cannot
+ *  be attributed safely.) */
+export function viewedKey(cwd: string): string {
+  return VIEWED_KEY + ':' + encodeURIComponent(cwd)
+}
+
 /** Oldest-dropped cap on remembered blob hashes. */
 export const VIEWED_CAP = 2000
 
@@ -44,13 +52,15 @@ export interface ViewedStore {
 }
 
 export function createViewedStore(
+  cwd: string | undefined,
   storage: PrefsStorage | undefined = typeof localStorage === 'undefined' ? undefined : localStorage,
 ): ViewedStore {
   // `set` is the fast membership face; `order` (newest first) is the
   // persisted form and the eviction queue.
+  const key = cwd === undefined ? VIEWED_KEY : viewedKey(cwd)
   let order: string[]
   try {
-    order = parseViewed(storage?.getItem(VIEWED_KEY) ?? null)
+    order = parseViewed(storage?.getItem(key) ?? null)
   } catch {
     order = []
   }
@@ -58,7 +68,7 @@ export function createViewedStore(
   const persist = (): void => {
     if (storage === undefined) return
     try {
-      storage.setItem(VIEWED_KEY, JSON.stringify(order))
+      storage.setItem(key, JSON.stringify(order))
     } catch {
       // Private-mode quota errors keep the in-memory state authoritative.
     }

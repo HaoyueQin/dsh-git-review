@@ -75,15 +75,16 @@ export async function hostCall<T>(action: string, body: unknown): Promise<T | nu
 let probe: Promise<boolean> | null = null
 
 /**
- * Whether the host half is serving (probed once, cached).
- * A failed probe is retried on the NEXT CALL only: the host route appears
- * late (hot reload), so keeping the failed promise would hide the tab for
- * the whole page lifetime.
+ * Whether the host half is serving (cached while healthy). Any failure —
+ * a throw OR a non-ok status — clears the cache so the next call
+ * re-probes: the host route appears late (hot reload) and can flap, so a
+ * stale answer must never hide the tab for the whole page lifetime.
  */
 export function hostAvailable(): Promise<boolean> {
   probe ??= (async () => {
     try {
       const res = await fetchWithTimeout(BASE + '/ping')
+      if (!res.ok) probe = null
       return res.ok
     } catch {
       // Allow a later call to probe again (the promise this call returned

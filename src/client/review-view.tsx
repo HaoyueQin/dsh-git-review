@@ -436,7 +436,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   // Per-workspace reviewed markers: blob hashes are content-derived, but the
   // store instance is still session-scoped so a workspace switch never leaks
   // another repo's marks into this tab.
-  const viewedStore = useMemo(() => createViewedStore(), [cwd])
+  const viewedStore = useMemo(() => createViewedStore(cwd), [cwd])
   const [viewedTick, bumpViewed] = useReducer(count => count + 1, 0)
   const viewedHas = useCallback((blob: string) => viewedStore.has(blob), [viewedStore])
   const toggleViewed = useCallback((blob: string) => {
@@ -855,14 +855,17 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
   /** Sync hunk-op gate: state alone still sees a stale false on rapid double
    *  clicks (the re-render hasn't landed), so the ref closes the race. */
   const hunkBusyRef = useRef(false)
+  /** Sync commit/push gate: the same double-click race as the hunk gate. */
+  const writeBusyRef = useRef(false)
   const executeHunkOp = useCallback(async (action: 'stage' | 'unstage' | 'revert', hunkIndex: number, path: string, rawDiff: string) => {
     if (cwd === undefined || running || refsMode || hunkBusyRef.current) return
-    hunkBusyRef.current = true
+    // Cut BEFORE arming the gate: a null patch must never lock the tab.
     const patch = buildHunkPatch(rawDiff, hunkIndex)
     if (patch === null) {
       setHunkNotice('internal error: failed to cut the hunk patch')
       return
     }
+    hunkBusyRef.current = true
     setHunkBusy(true)
     const payload = await hostCall<GitWritePayload>('hunk-op', { cwd, path, patch, action, confirm: true })
     hunkBusyRef.current = false
@@ -1348,7 +1351,11 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
 
   /** Execute one armed write (commit / commit+push / push) against the host. */
   const executeWrite = useCallback(async (kind: 'commit' | 'commitPush' | 'push') => {
-    if (cwd === undefined) return
+    // Button `disabled` is async rendering: re-check the running gate and the
+    // sync ref here so an agent start (or a double click) cannot slip a write
+    // through between arming and dispatch.
+    if (cwd === undefined || running || writeBusyRef.current) return
+    writeBusyRef.current = true
     setWriteState({ kind: 'busy' })
     const pushBody = { cwd, confirm: true }
     const pushCall = async (): Promise<{ ok: boolean; text: string }> => {
@@ -1372,6 +1379,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
         outcome = pushed.ok ? { ok: true, text: (commitResult.output ?? '') + '\n' + pushed.text } : pushed
       }
     }
+    writeBusyRef.current = false
     setWriteState({ kind: 'result', ok: outcome.ok, text: outcome.text })
     setArmed(null)
     if (outcome.ok) {
@@ -1379,7 +1387,7 @@ export function ReviewView({ cwd, settings, t, useSession, useInput, inputAction
       setAmend(false)
       refresh()
     }
-  }, [cwd, commitMessage, stageAll, amend, refresh, t])
+  }, [cwd, running, commitMessage, stageAll, amend, refresh, t])
 
   /** One SCM row action from the file menu (stage/unstage/discard): the
    *  error text to show, or null on success (the menu closes and the

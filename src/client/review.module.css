@@ -977,11 +977,39 @@ body[data-dsh-bg-glass] .root {
 /* ── diff pane ───────────────────────────────────────────────────────── */
 
 .mainPane {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+}
+
+/* Floating return buttons (graph→file and file→graph crossings): absolute
+   bottom-right of the content pane, above the composer clearance so the
+   floating input never covers them. Below popovers (z 40+), above content. */
+.returnFab {
+  position: absolute;
+  right: 16px;
+  bottom: calc(var(--dsh-review-bottom-clearance, 140px) + 12px);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
+}
+
+.returnFab:hover {
+  background: var(--dsw-alias-fill-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
 .diffPane {
@@ -2287,6 +2315,7 @@ body[data-dsh-bg-glass] .commitHeader {
 
 /* Right: the selected commit's detail — info bar, then file tree | diff. */
 .commitDetail {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;

@@ -1742,16 +1742,6 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
               </button>
             ))}
           </span>
-          {pluginOpenReturn !== null && viewTab === 'changes' && (
-            <button
-              type="button"
-              className={css.toolBtn}
-              title={t('graph.backToGraph') + ': ' + pluginOpenReturn.commit.slice(0, 7)}
-              onClick={backToGraphCommit}
-            >
-              {'← ' + t('graph.backToGraph')}
-            </button>
-          )}
           <span className={css.searchWrap}>
             <label className={css.searchBox}>
               {viewTab === 'changes' && (
@@ -2568,16 +2558,6 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                       <div className={css.commitBody}>{commitInfo.body}</div>
                     )}
                     <div className={css.commitActions}>
-                      {blameReturn !== null && (
-                        <button
-                          type="button"
-                          className={css.toolBtn}
-                          title={t('blame.backToFile') + ': ' + blameReturn.path + ':' + blameReturn.line}
-                          onClick={backToBlameFile}
-                        >
-                          {'← ' + t('blame.backToFile')}
-                        </button>
-                      )}
                       <button
                         type="button"
                         className={css.toolBtn}
@@ -2673,6 +2653,16 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                       )}
                     </div>
                   </div>
+                  {blameReturn !== null && (
+                    <button
+                      type="button"
+                      className={css.returnFab}
+                      title={t('blame.backToFile') + ': ' + blameReturn.path + ':' + blameReturn.line}
+                      onClick={backToBlameFile}
+                    >
+                      {'← ' + t('blame.backToFile')}
+                    </button>
+                  )}
                 </div>
               )}
             </main>
@@ -2765,6 +2755,16 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     onDraftAdd={addDraft}
                     t={t}
                   />
+                )}
+                {pluginOpenReturn !== null && (
+                  <button
+                    type="button"
+                    className={css.returnFab}
+                    title={t('graph.backToGraph') + ': ' + pluginOpenReturn.commit.slice(0, 7)}
+                    onClick={backToGraphCommit}
+                  >
+                    {'← ' + t('graph.backToGraph')}
+                  </button>
                 )}
         </main>
         {data !== null && (

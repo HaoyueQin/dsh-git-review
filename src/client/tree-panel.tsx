@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ChangedFile } from '../contract.ts'
-import { badgesFor, buildFileTree, filterFiles, type TreeEntry } from './file-tree.ts'
+import { badgesFor, buildFileTree, collectDirFiles, filterFiles, type TreeDir, type TreeEntry } from './file-tree.ts'
 import { ChevronIcon, SearchIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { FileCounts } from './file-counts.tsx'
@@ -51,6 +51,10 @@ export interface TreePanelProps {
   /** Right-click one file row: called with the path + viewport coords and
    *  the row's file record (the menu derives the SCM actions from it). */
   onFileMenu?: (path: string, x: number, y: number, file: ChangedFile) => void
+  /** Right-click one directory row: called with the dir path + viewport
+   *  coords and every changed file beneath it (the menu aggregates the SCM
+   *  actions from those rows; absent = directories have no menu). */
+  onDirMenu?: (path: string, x: number, y: number, files: ChangedFile[]) => void
   /** Dragged width override in px (absent = the CSS clamp default). */
   width?: number
   t: T
@@ -135,7 +139,7 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, viewedHas, onTo
 }
 
 /** Render one tree node (dir or file) at its depth. */
-function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchCounts, viewedHas, onToggleViewed, onFileMenu, t }: {
+function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchCounts, viewedHas, onToggleViewed, onFileMenu, onDirMenu, t }: {
   entry: TreeEntry
   depth: number
   selected: string | null
@@ -146,26 +150,33 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
   viewedHas?: (blob: string) => boolean
   onToggleViewed?: (blob: string) => void
   onFileMenu?: (path: string, x: number, y: number, file: ChangedFile) => void
+  onDirMenu?: (path: string, x: number, y: number, files: ChangedFile[]) => void
   t: T
 }) {
   if (entry.kind === 'file') {
     return <FileRow entry={entry} depth={depth} selected={selected} onSelect={onSelect} matchCount={matchCounts?.get(entry.path)} viewedHas={viewedHas} onToggleViewed={onToggleViewed} onFileMenu={onFileMenu} t={t} />
   }
-  const isCollapsed = collapsed.has(entry.path)
+  const dir: TreeDir = entry
+  const isCollapsed = collapsed.has(dir.path)
   return (
     <div>
       <button
         type="button"
         className={css.dirRow}
         style={{ paddingLeft: 6 + depth * 12 }}
-        onClick={() => { onToggleDir(entry.path) }}
-        title={entry.path === '' ? undefined : entry.path}
+        onClick={() => { onToggleDir(dir.path) }}
+        onContextMenu={onDirMenu === undefined || dir.path === '' ? undefined : (event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onDirMenu(dir.path, event.clientX, event.clientY, collectDirFiles(dir))
+        }}
+        title={dir.path === '' ? undefined : dir.path}
       >
         <ChevronIcon rotated={!isCollapsed} />
-        <span className={css.dirName}>{entry.name}</span>
-        <span className={css.dirCount}>{entry.fileCount}</span>
+        <span className={css.dirName}>{dir.name}</span>
+        <span className={css.dirCount}>{dir.fileCount}</span>
       </button>
-      {!isCollapsed && entry.children.map(child => (
+      {!isCollapsed && dir.children.map(child => (
         <Node
           key={child.kind + ':' + child.path}
           entry={child}
@@ -178,6 +189,7 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
           viewedHas={viewedHas}
           onToggleViewed={onToggleViewed}
           onFileMenu={onFileMenu}
+          onDirMenu={onDirMenu}
           t={t}
         />
       ))}
@@ -189,7 +201,7 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
  * The panel body: filter box above, tree (or flat filtered list) below.
  * @param props - files, selection, filter/collapse state and callbacks, locale.
  */
-export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, width, showModeRow = true, showFilter = true, listFailed, matchCounts, viewedHas, onToggleViewed, pendingCount, onFileMenu, t }: TreePanelProps) {
+export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, width, showModeRow = true, showFilter = true, listFailed, matchCounts, viewedHas, onToggleViewed, pendingCount, onFileMenu, onDirMenu, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
   const flat = filter.trim() !== ''
   // The filtered flat list never needs the tree: skip the O(n log n)
@@ -268,6 +280,7 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
                 viewedHas={viewedHas}
                 onToggleViewed={onToggleViewed}
                 onFileMenu={onFileMenu}
+                onDirMenu={onDirMenu}
                 t={t}
               />
             ))}

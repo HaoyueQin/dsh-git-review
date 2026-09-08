@@ -1752,7 +1752,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   // (only a page refresh remounted clean).
   if (status.kind === 'notRepo') {
     if (cwd === undefined) return <CenteredState t={t} status={{ kind: 'noWorkspace' }} onRetry={refresh} />
-    return <NotRepoView cwd={cwd} root={status.root} t={t} onDidInit={refresh} />
+    return <NotRepoView cwd={cwd} root={status.root} t={t} onDidInit={refresh} openApps={openApps} useInput={useInput} inputActions={inputActions} writable={!running} />
   }
   if (status.kind === 'noWorkspace' || status.kind === 'hostUnavailable' || status.kind === 'error') {
     return <CenteredState t={t} status={status} onRetry={refresh} />
@@ -2465,7 +2465,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
       )}
       {fileMenu !== null && (
         <FileMenu
-          key={fileMenu.path + '@' + fileMenu.x + ':' + fileMenu.y}
+          key={(fileMenu.kind ?? 'file') + ':' + fileMenu.path + '@' + fileMenu.x + ':' + fileMenu.y}
           state={fileMenu}
           apps={openApps}
           // Graph-mode rows are historical files, not worktree files: no
@@ -2621,6 +2621,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                             showFilter={false}
                             listFailed={false}
                             onFileMenu={(path, x, y) => { setFileMenu({ path, x, y }) }}
+                            onDirMenu={(path, x, y) => { setFileMenu({ path, x, y, kind: 'dir' }) }}
                             t={t}
                           />
                         )}
@@ -2783,6 +2784,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                               showModeRow={false}
                               listFailed={false}
                               onFileMenu={(path, x, y) => { setFileMenu({ path, x, y, from: 'commit' }) }}
+                              onDirMenu={(path, x, y) => { setFileMenu({ path, x, y, kind: 'dir', from: 'commit' }) }}
                               t={t}
                             />
                           )}
@@ -2992,6 +2994,17 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                 },
               })
             }}
+            onDirMenu={(path, x, y, files) => {
+              setFileMenu({
+                path, x, y, kind: 'dir',
+                git: {
+                  staged: files.some(file => !file.untracked && file.x !== ' '),
+                  unstaged: files.some(file => file.y !== ' '),
+                  untracked: files.some(file => file.untracked),
+                  conflicted: files.some(file => isUnmerged(file.x, file.y)),
+                },
+              })
+            }}
             t={t}
             />
             </>
@@ -3005,9 +3018,21 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
 
 /** Non-repository workspace: file browsing + preview with git disabled,
  *  plus a confirm-gated `git init` that hands back to the review tab. */
-function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t: T; onDidInit: () => void }) {
+function NotRepoView({ cwd, root, t, onDidInit, openApps, useInput, inputActions, writable }: {
+  cwd: string; root: string; t: T; onDidInit: () => void
+  openApps: OpenApp[] | null
+  useInput: Partial<SessionStandardProps>['useInput']
+  inputActions: Partial<SessionStandardProps>['inputActions']
+  /** False while an agent is running (rename/delete hide, like the tree menu). */
+  writable: boolean
+}) {
   const [dir, setDir] = useState('.')
   const [entries, setEntries] = useState<GitFsEntry[] | null>(null)
+  /** File/dir context menu (the same popover the change tree uses, without
+   *  the git groups — a non-repository has no worktree state). listTick
+   *  re-lists the directory after a rename/delete lands. */
+  const [menu, setMenu] = useState<FileMenuState | null>(null)
+  const [listTick, setListTick] = useState(0)
   const [listFailed, setListFailed] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [content, setContent] = useState<DiffState>({ kind: 'idle' })
@@ -3029,7 +3054,52 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
       setEntries(payload.entries)
     })
     return () => { alive = false }
-  }, [cwd, dir])
+  }, [cwd, dir, listTick])
+  /** The non-repository menu's host actions: open/rename/delete run against
+   *  the workspace root (the host fences there when no repository claims
+   *  the cwd); copy stays client-local. Every one returns the error text to
+   *  show in the popover, or null on success (the menu closes). */
+  const openEntry = useCallback(async (path: string, app: OpenApp['id']): Promise<string | null> => {
+    const payload = await hostCall<GitWritePayload>('open-with', { cwd, path, app, confirm: true })
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
+    return null
+  }, [cwd, t])
+  const copyEntryPath = useCallback(async (path: string): Promise<string | null> => {
+    try {
+      await navigator.clipboard.writeText(path)
+      return null
+    } catch {
+      return t('menu.clipboardFailed')
+    }
+  }, [t])
+  const copyEntryName = useCallback(async (path: string): Promise<string | null> => {
+    const name = path.split('/').pop() ?? path
+    try {
+      await navigator.clipboard.writeText(name)
+      return null
+    } catch {
+      return t('menu.clipboardFailed')
+    }
+  }, [t])
+  const mutateEntry = useCallback(async (path: string, newPath?: string): Promise<string | null> => {
+    if (!writable) return t('commit.running')
+    const payload = await hostCall<GitWritePayload>(
+      'file-op',
+      newPath !== undefined
+        ? { cwd, path, action: 'rename', newPath, confirm: true }
+        : { cwd, path, action: 'delete', confirm: true },
+    )
+    if (payload === null) return t('state.hostUnavailable')
+    if (!payload.ok) return payload.error ?? 'unknown error'
+    setSelected(previous => (previous === path || (previous !== null && previous.startsWith(path + '/')) ? null : previous))
+    setListTick(tick => tick + 1)
+    return null
+  }, [cwd, writable, t])
+  const renameEntry = useCallback(async (path: string, newPath: string): Promise<string | null> =>
+    mutateEntry(path, newPath), [mutateEntry])
+  const removeEntry = useCallback(async (path: string): Promise<string | null> =>
+    mutateEntry(path), [mutateEntry])
   useEffect(() => {
     if (selected === null) { setContent({ kind: 'idle' }); return }
     let alive = true
@@ -3135,6 +3205,10 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
               type="button"
               onClick={() => { if (entry.kind === 'dir') setDir(entry.path); else setSelected(entry.path) }}
               onDoubleClick={() => { if (entry.kind === 'dir') setDir(entry.path) }}
+              onContextMenu={event => {
+                event.preventDefault()
+                setMenu({ path: entry.path, x: event.clientX, y: event.clientY, kind: entry.kind })
+              }}
               style={{ display: 'flex', width: '100%', textAlign: 'left', padding: '4px 6px', borderRadius: 6, background: selected === entry.path ? 'var(--dsw-alias-fill-selected, #e8eefc)' : 'transparent', border: 'none', cursor: 'pointer', fontSize: 13 }}
               title={entry.path}
             >
@@ -3233,6 +3307,25 @@ function NotRepoView({ cwd, root, t, onDidInit }: { cwd: string; root: string; t
           )}
         </div>
       </div>
+      {menu !== null && (
+        <FileMenu
+          key={(menu.kind ?? 'file') + ':' + menu.path + '@' + menu.x + ':' + menu.y}
+          state={menu}
+          apps={openApps}
+          writable={writable}
+          refsMode
+          allowFsOps
+          useInput={useInput}
+          inputActions={inputActions}
+          onClose={() => { setMenu(null) }}
+          openApp={openEntry}
+          copyPath={copyEntryPath}
+          copyName={copyEntryName}
+          rename={renameEntry}
+          remove={removeEntry}
+          t={t}
+        />
+      )}
     </div>
   )
 }

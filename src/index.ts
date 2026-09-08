@@ -43,8 +43,7 @@
  *   POST /dsh-git-review/api/commit-files   { cwd, commit }
  *   POST /dsh-git-review/api/fs-list        { cwd, … }   (non-repository browsing)
  *   POST /dsh-git-review/api/git-init       { cwd, … }
- *   POST /dsh-git-review/api/file-op        { cwd, path, action, newPath?, confirm: true }   (action rename|delete)
- *   POST /dsh-git-review/api/open-with      { cwd, path, app?, confirm: true }
+ *   POST /dsh-git-review/api/file-op        { cwd, path, action, newPath?, confirm: true }   (action rename|delete; files and dirs)
  *   POST /dsh-git-review/api/apps           { cwd }
  *   GET  /dsh-git-review/api/ping
  *   GET  /dsh-git-review/api/asset           (versioned preview image bytes)
@@ -1609,17 +1608,40 @@ export async function gitUnstage(cwd: unknown, paths: unknown, confirm: unknown)
 }
 
 /** One `discard` answer: destroy a file's uncommitted changes, restoring it
- *  to HEAD (tracked) or deleting it outright (untracked, `git clean -f`).
+ *  to HEAD (tracked) or deleting it outright (untracked, `git clean -fd`).
  *  IRREVERSIBLE — the client's two-step confirmation gates it, and the
  *  agent-running gate disables it in the first place. Tracked/untracked is
- *  decided by `git ls-files` at call time, never by the request. */
+ *  decided by `git ls-files` at call time, never by the request. A directory
+ *  pathspec (the folder menu's discard) splits across both halves: tracked
+ *  children restore to HEAD while untracked children are cleaned — `ls-files`
+ *  lists a directory's children, never the directory itself, so the dir
+ *  would otherwise fall wholly into the clean half and tracked edits
+ *  beneath it would silently survive. */
 export async function gitDiscard(cwd: unknown, paths: unknown, confirm: unknown): Promise<GitWritePayload> {
   const repoRoot = await fileOpGuard(cwd, confirm)
   const specs = fencePaths(repoRoot, paths)
   const trackedRaw = await runGit(repoRoot, ['ls-files', '-z', '--', ...specs])
   const tracked = new Set(trackedRaw.split('\0').filter(chunk => chunk !== ''))
-  const trackedSpecs = specs.filter(spec => tracked.has(spec))
-  const untrackedSpecs = specs.filter(spec => !tracked.has(spec))
+  const trackedSpecs: string[] = []
+  const untrackedSpecs: string[] = []
+  for (const spec of specs) {
+    if (tracked.has(spec)) {
+      trackedSpecs.push(spec)
+      continue
+    }
+    let isDir = false
+    try {
+      isDir = (await lstat(join(repoRoot, spec))).isDirectory()
+    } catch {
+      isDir = false
+    }
+    if (isDir) {
+      if ([...tracked].some(line => line.startsWith(spec + '/'))) trackedSpecs.push(spec)
+      untrackedSpecs.push(spec)
+      continue
+    }
+    untrackedSpecs.push(spec)
+  }
   // Both halves always run: a tracked-restore failure must not silently
   // skip the untracked clean (or vice versa) — errors combine verbatim.
   const failures: string[] = []
@@ -1632,8 +1654,10 @@ export async function gitDiscard(cwd: unknown, paths: unknown, confirm: unknown)
     }
   }
   if (untrackedSpecs.length > 0) {
-    // No -x: ignored files are never touched by a discard.
-    const cleaned = await runGitCapture(repoRoot, ['clean', '-f', '--', ...untrackedSpecs])
+    // No -x: ignored files are never touched by a discard. -d lets a
+    // directory pathspec (the folder menu's discard) clear the untracked
+    // files beneath it; on plain file pathspecs it changes nothing.
+    const cleaned = await runGitCapture(repoRoot, ['clean', '-fd', '--', ...untrackedSpecs])
     if (cleaned.code !== 0) {
       failures.push(cleaned.stderr.trim() || cleaned.stdout.trim() || 'git clean failed (exit ' + cleaned.code + ')')
     }
@@ -2037,29 +2061,37 @@ export async function gitTagPush(cwd: unknown, name: unknown, confirm: unknown):
 
 /* ─ file-tree context-menu operations ──────────────────────────── */
 
-/** One workspace file operation the tree's context menu can run. Only
- *  regular files inside the repository are touched; every path goes through
- *  the same fence the read endpoints use. Rename/delete are guarded by the
- *  explicit confirm flag (the client's two-step UI sets it). */
+/** One workspace file operation the tree's context menu can run. Files and
+ *  directories inside the repository (or inside a non-repository workspace,
+ *  where the workspace root fences instead) are touched; every path goes
+ *  through the same fence the read endpoints use. Rename/delete are guarded
+ *  by the explicit confirm flag (the client's two-step UI sets it).
+ *  Directory delete recurses (`rm -r` semantics); directory rename moves
+ *  the whole subtree. */
 export async function gitFileOp(cwd: unknown, path: unknown, action: unknown, newPath: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (confirm !== true) return { ok: false, error: 'file operations require confirm: true' }
   const repoRoot = await resolveRepository(cwd)
-  if (repoRoot === null) throw new Error('not a git repository')
-  const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
-  let stat: { isFile(): boolean } | null = null
+  const root = repoRoot ?? await resolveWorkspace(cwd)
+  if (root === null) throw new Error('workspace not found')
+  const absPath = repoRoot !== null
+    ? fenceRepoPath(root, typeof path === 'string' ? path : '')
+    : fenceWorkspacePath(root, typeof path === 'string' ? path : '')
+  let stat: { isFile(): boolean; isDirectory(): boolean } | null = null
   try {
     stat = await lstat(absPath)
   } catch {
-    return { ok: false, error: 'file does not exist: ' + String(path) }
+    return { ok: false, error: 'path does not exist: ' + String(path) }
   }
-  if (stat === null || !stat.isFile()) return { ok: false, error: 'not a regular file' }
+  if (stat === null || (!stat.isFile() && !stat.isDirectory())) return { ok: false, error: 'not a file or directory' }
   if (action === 'rename') {
     // Only the user-typed target is trimmed: the source path is tree-exact
     // (trailing spaces are legal in file names). Existence check plus rename
     // is check-then-act — adequate for this single-user local workbench.
     if (typeof newPath !== 'string' || newPath.trim() === '') return { ok: false, error: 'new path is required' }
-    const absTarget = fenceRepoPath(repoRoot, newPath.trim())
+    const absTarget = repoRoot !== null
+      ? fenceRepoPath(root, newPath.trim())
+      : fenceWorkspacePath(root, newPath.trim())
     if (absTarget === absPath) return { ok: true, output: '' }
     try {
       await lstat(absTarget)
@@ -2074,7 +2106,9 @@ export async function gitFileOp(cwd: unknown, path: unknown, action: unknown, ne
   }
   if (action === 'delete') {
     try {
-      await rm(absPath, { force: false })
+      // Directories delete recursively (the client's two-step confirm gates
+      // it); files are unaffected by the recursive flag.
+      await rm(absPath, { recursive: stat.isDirectory(), force: false })
       return { ok: true, output: '' }
     } catch (error) {
       return { ok: false, error: String((error as Error).message ?? error) }
@@ -2083,13 +2117,16 @@ export async function gitFileOp(cwd: unknown, path: unknown, action: unknown, ne
   return { ok: false, error: 'unknown file operation' }
 }
 
-/** Open one workspace file outside the plugin (read-only launch: the app
- *  gets the path as its argument; no shell is involved, so percent-characters
- *  and spaces need no escaping). The app id is a fixed whitelist — anything
- *  else fails closed, and every launch needs the explicit confirm flag like
- *  the other write-adjacent endpoints. */
-/** Exported for the check-git negative-path coverage (never spawns a GUI:
- *  unknown apps, missing paths and directories fail before any spawn). */
+/** Open one workspace file or directory outside the plugin (read-only
+ *  launch: the app gets the path as its argument; no shell is involved, so
+ *  percent-characters and spaces need no escaping). The app id is a fixed
+ *  whitelist — anything else fails closed, and every launch needs the
+ *  explicit confirm flag like the other write-adjacent endpoints. Files and
+ *  directories both open; only notepad refuses directories (it cannot show
+ *  them). A directory opened with the default app or explorer opens the
+ *  folder itself; a file revealed with explorer selects it (`/select`). */
+/** Exported for the check-git negative-path coverage (unknown apps, missing
+ *  paths and notepad-on-a-directory fail before any GUI spawns). */
 export async function gitOpenWith(cwd: unknown, path: unknown, app: unknown, confirm: unknown): Promise<GitWritePayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   if (confirm !== true) return { ok: false, error: 'open-with requires confirm: true' }
@@ -2097,14 +2134,20 @@ export async function gitOpenWith(cwd: unknown, path: unknown, app: unknown, con
     return { ok: false, error: 'unknown app' }
   }
   const repoRoot = await resolveRepository(cwd)
-  if (repoRoot === null) throw new Error('not a git repository')
-  const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
+  const root = repoRoot ?? await resolveWorkspace(cwd)
+  if (root === null) throw new Error('workspace not found')
+  const absPath = repoRoot !== null
+    ? fenceRepoPath(root, typeof path === 'string' ? path : '')
+    : fenceWorkspacePath(root, typeof path === 'string' ? path : '')
+  let isDir = false
   try {
     const stat = await lstat(absPath)
-    if (!stat.isFile()) return { ok: false, error: 'not a regular file' }
+    if (!stat.isFile() && !stat.isDirectory()) return { ok: false, error: 'not a file or directory' }
+    isDir = stat.isDirectory()
   } catch {
-    return { ok: false, error: 'file does not exist (it may only exist in history)' }
+    return { ok: false, error: 'path does not exist (it may only exist in history)' }
   }
+  if (isDir && app === 'notepad') return { ok: false, error: 'notepad cannot open a directory' }
   const tool = app === 'explorer' ? 'explorer.exe'
     : app === 'notepad' ? 'notepad.exe'
       : app === 'code' ? 'code'
@@ -2117,8 +2160,10 @@ export async function gitOpenWith(cwd: unknown, path: unknown, app: unknown, con
     // Never via a shell: cmd.exe would re-parse metacharacters (&, |, %)
     // in file names, so the default opener is explorer.exe itself (it
     // launches the associated verb directly, like the explicit choices).
+    // A directory opens as itself (the folder window); a file revealed
+    // with explorer selects it in its parent (`/select`).
     const argv = tool !== undefined
-      ? [tool, tool === 'explorer.exe' ? '/select,' + absPath : absPath]
+      ? [tool, tool === 'explorer.exe' && !isDir ? '/select,' + absPath : absPath]
       : process.platform === 'win32'
         ? ['explorer.exe', absPath]
         : ['xdg-open', absPath]

@@ -1,8 +1,9 @@
 /**
- * The file tree's context menu: right-click one changed-file row in the tree
- * panel and this popover appears with the file-manager operations — open
- * (default app), reveal in the OS file manager, open with an explicit app,
- * copy path/file name, add the path to the conversation, rename and delete.
+ * The file tree's context menu: right-click one file or directory row in the
+ * tree panel and this popover appears with the file-manager operations —
+ * open (default app), reveal in the OS file manager, open with an explicit
+ * app, copy path/file name, add the path to the conversation, rename and
+ * delete.
  * The same menu pattern the reference DSH git plugins use (copy repo path /
  * reveal in file manager / per-file actions), anchored like forward menus.
  *
@@ -24,8 +25,10 @@ import css from './review.module.css'
 type T = PropsLocale<typeof NS>['t']
 
 export interface FileMenuState {
-  /** Repo-relative path of the clicked file. */
+  /** Repo-relative path of the clicked file or directory. */
   path: string
+  /** Which row opened the menu (absent = file, the pre-directory-menu shape). */
+  kind?: 'file' | 'dir'
   x: number
   y: number
   /** Which tree opened the menu: commit-detail rows can jump into the
@@ -51,6 +54,10 @@ export interface FileMenuProps {
   writable: boolean
   /** Whether the current list is not the worktree tree (no worktree ops). */
   refsMode: boolean
+  /** Show the rename/delete group (default !refsMode: historical lists hide
+   *  it because their rows may not exist on disk; the non-repository
+   *  browser sets it with refsMode to get fs ops without the git groups). */
+  allowFsOps?: boolean
   /** Conversation input channels (the add-to-chat item appends the path). */
   useInput: SnapshotSelectorHook<InputState> | undefined
   inputActions: InputActions | undefined
@@ -107,12 +114,16 @@ function ChatItem({ path, useInput, inputActions, onRun, t }: {
   )
 }
 
-export function FileMenu({ state, apps, writable, refsMode, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, conflictResolve, openInPlugin, t }: FileMenuProps) {
+export function FileMenu({ state, apps, writable, refsMode, allowFsOps, useInput, inputActions, onClose, openApp, copyPath, copyName, rename, remove, gitAction, conflictResolve, openInPlugin, t }: FileMenuProps) {
   const [mode, setMode] = useState<'menu' | 'apps' | 'rename' | 'delete' | 'discard' | 'busy'>('menu')
   const [renameValue, setRenameValue] = useState(state.path)
   const [note, setNote] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const canChat = useInput !== undefined && inputActions !== undefined
+  const fsOps = allowFsOps ?? !refsMode
+  /** Directory rows share the menu: file-only groups (in-plugin open,
+   *  ours/theirs resolution) hide, destructive confirms use dir copy. */
+  const isDir = state.kind === 'dir'
 
   useEffect(() => {
     // Escape dismisses, but not mid-flight: the completion note must land on
@@ -221,7 +232,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
   if (mode === 'delete') {
     return (
       <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 330 }}>
-        <div className={css.fileMenuTitle}>{t('menu.confirmDeleteTitle')}</div>
+        <div className={css.fileMenuTitle}>{t(isDir ? 'menu.confirmDeleteDirTitle' : 'menu.confirmDeleteTitle')}</div>
         <div className={css.fileMenuDeletePath}>{state.path}</div>
         <div className={css.fileMenuActions}>
           <button
@@ -243,7 +254,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
   if (mode === 'discard') {
     return (
       <div className={css.fileMenuPop} ref={rootRef} style={{ left: pos.left, top: pos.top, width: 330 }}>
-        <div className={css.fileMenuTitle}>{t('menu.confirmDiscardTitle')}</div>
+        <div className={css.fileMenuTitle}>{t(isDir ? 'menu.confirmDiscardDirTitle' : 'menu.confirmDiscardTitle')}</div>
         <div className={css.fileMenuDeletePath}>{state.path}</div>
         <div className={css.fileMenuActions}>
           <button
@@ -289,7 +300,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
     )
   }
 
-  const pluginOpener = state.from === 'commit' ? openInPlugin : undefined
+  const pluginOpener = state.from === 'commit' && !isDir ? openInPlugin : undefined
   const items: LineItem[] = [
     ...(pluginOpener === undefined ? [] : [{ key: 'open-in-plugin', icon: <FileIcon />, label: t('menu.openInPlugin'), onClick: () => { pluginOpener(state.path); onClose() } }]),
     { key: 'open', icon: <OpenIcon />, label: t('menu.openDefault'), onClick: () => { void run('open', () => openApp(state.path, 'default')) }, disabled: apps === null },
@@ -321,12 +332,12 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
             onClick={() => { void run('copy', () => copyName(state.path)) }}
           >
             <span className={css.fileMenuItemIcon}><CopyIcon /></span>
-            <span className={css.pickerItemName}>{t('menu.copyName')}</span>
+            <span className={css.pickerItemName}>{t(isDir ? 'menu.copyDirName' : 'menu.copyName')}</span>
           </button>
           {canChat && useInput !== undefined && inputActions !== undefined && (
             <ChatItem path={state.path} useInput={useInput} inputActions={inputActions} onRun={(label, fn) => { void run(label, fn) }} t={t} />
           )}
-          {writable && !refsMode && state.git?.conflicted === true && conflictResolve !== undefined && (
+          {writable && !refsMode && !isDir && state.git?.conflicted === true && conflictResolve !== undefined && (
             <>
               <div className={css.fileMenuDivider} />
               <button
@@ -380,7 +391,7 @@ export function FileMenu({ state, apps, writable, refsMode, useInput, inputActio
               </button>
             </>
           )}
-          {writable && !refsMode && (
+          {writable && fsOps && (
             <>
               <div className={css.fileMenuDivider} />
               <button

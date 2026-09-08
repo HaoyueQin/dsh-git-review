@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
 import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitCommitFiles, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileBytes, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitFsList, gitHunkOp, gitInit, gitLastCommit, gitListFiles, gitLog, gitMerge, gitOpenApps, gitOpenWith, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
@@ -410,6 +411,61 @@ assert.ok(patch0 !== null && patch1 !== null)
   assert.equal(existsSync(join(repo, 'op-b.txt')), false)
 }
 
+// 13b. file-op on directories (folder menu): rename moves the subtree,
+//      delete recurses into it.
+{
+  mkdirSync(join(repo, 'opdir', 'sub'), { recursive: true })
+  writeFileSync(join(repo, 'opdir', 'sub', 'inner.txt'), 'inner\n')
+  const renamedDir = await gitFileOp(repo, 'opdir', 'rename', 'opdir2', true)
+  assert.equal(renamedDir.ok, true)
+  assert.equal(existsSync(join(repo, 'opdir2', 'sub', 'inner.txt')), true)
+  assert.equal(existsSync(join(repo, 'opdir')), false)
+  const deletedDir = await gitFileOp(repo, 'opdir2', 'delete', undefined, true)
+  assert.equal(deletedDir.ok, true)
+  assert.equal(existsSync(join(repo, 'opdir2')), false)
+}
+
+// 13c. stage/unstage/discard on a directory pathspec (folder menu's SCM
+//      group): tracked edits beneath restore to HEAD, untracked files —
+//      including nested untracked dirs (clean -d) — are removed.
+{
+  mkdirSync(join(repo, 'ddir', 'nested'), { recursive: true })
+  writeFileSync(join(repo, 'ddir', 'tracked.txt'), 'v1\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'dir fixtures')
+  writeFileSync(join(repo, 'ddir', 'tracked.txt'), 'v2\n')
+  writeFileSync(join(repo, 'ddir', 'untracked.txt'), 'new\n')
+  writeFileSync(join(repo, 'ddir', 'nested', 'deep.txt'), 'deep\n')
+  const stagedDir = await gitStage(repo, ['ddir'], true)
+  assert.equal(stagedDir.ok, true)
+  const unstagedDir = await gitUnstage(repo, ['ddir'], true)
+  assert.equal(unstagedDir.ok, true)
+  const discardedDir = await gitDiscard(repo, ['ddir'], true)
+  assert.equal(discardedDir.ok, true)
+  assert.equal(readLF('ddir/tracked.txt'), 'v1\n')
+  assert.equal(existsSync(join(repo, 'ddir', 'untracked.txt')), false)
+  assert.equal(existsSync(join(repo, 'ddir', 'nested')), false)
+}
+
+// 13d. file-op outside a repository (non-repository browser): the workspace
+//      root fences instead of the repo root. Under the OS tempdir, far from
+//      any repository (a fixture under ROOT would resolve the project's own
+//      outer repo via rev-parse). No git runs here, so the 8.3 concern in
+//      fixture() does not apply — resolveWorkspace realpaths first.
+{
+  const plain = mkdtempSync(join(tmpdir(), 'dsh-review-plain-'))
+  roots.push(plain)
+  writeFileSync(join(plain, 'n.txt'), 'x\n')
+  const renamed = await gitFileOp(plain, 'n.txt', 'rename', 'm.txt', true)
+  assert.equal(renamed.ok, true)
+  assert.equal(existsSync(join(plain, 'm.txt')), true)
+  const escape = await gitFileOp(plain, 'm.txt', 'rename', '../escape.txt', true).catch(e => ({ ok: false, error: String(e?.message ?? e) }))
+  assert.equal(escape.ok, false, 'workspace escape refuses')
+  const deleted = await gitFileOp(plain, 'm.txt', 'delete', undefined, true)
+  assert.equal(deleted.ok, true)
+  assert.equal(existsSync(join(plain, 'm.txt')), false)
+}
+
 // 14. branch lifecycle + remote tracking (J8-5): create/switch/rename/delete
 //     plus switch -c --track from a file:// remote branch.
 {
@@ -584,7 +640,8 @@ try {
 }
 
 // 23. Commit-files, list-files and open-with guards (no GUI ever spawns:
-//     unknown apps, missing paths and directories fail before any spawn).
+//     unknown apps, missing paths and notepad-on-a-directory fail before
+//     any spawn; directories otherwise open like files now).
 {
   const cov = fixture()
   writeFileSync(join(cov, 'a.txt'), 'one\n')
@@ -602,7 +659,7 @@ try {
   assert.equal(typeof lf.truncated, 'boolean')
   assert.equal((await gitOpenWith(cov, 'nope.txt', 'default', true)).ok, false)
   assert.equal((await gitOpenWith(cov, 'a.txt', 'evil-app', true)).ok, false)
-  assert.equal((await gitOpenWith(cov, '.git', 'default', true)).ok, false)
+  assert.equal((await gitOpenWith(cov, '.git', 'notepad', true)).ok, false, 'notepad refuses directories')
   const apps = await gitOpenApps()
   assert.equal(apps.ok, true)
   assert.ok(apps.apps.length > 0)

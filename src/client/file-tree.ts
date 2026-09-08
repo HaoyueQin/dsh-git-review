@@ -92,6 +92,19 @@ export function isUnmerged(x: string, y: string): boolean {
     || pair === 'AU' || pair === 'UA' || pair === 'DU' || pair === 'UD'
 }
 
+/** Collect every changed file beneath a directory node (deep walk). The
+ *  directory menu aggregates its SCM state from these rows. */
+export function collectDirFiles(dir: TreeDir): ChangedFile[] {
+  const out: ChangedFile[] = []
+  const walk = (entry: TreeEntry): void => {
+    if (entry.kind === 'file') out.push(entry.file)
+    else entry.children.forEach(walk)
+  }
+  dir.children.forEach(walk)
+  return out
+}
+
+
 /** Flat filter over the file list (empty query returns the input order). */
 export function filterFiles(files: readonly ChangedFile[], query: string): ChangedFile[] {
   const q = query.trim().toLowerCase()

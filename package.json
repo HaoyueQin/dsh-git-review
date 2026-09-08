@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-review",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A Review tab plus fenced git workbench for DeepSeek Harness: workspace changes vs HEAD as a filterable file tree with per-file diffs, a commit graph, and guarded stage/commit/branch/tag/stash/conflict operations, served by an in-host fenced git API.",
   "keywords": [
     "deepseek-harness",

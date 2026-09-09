@@ -101,8 +101,11 @@ const HASH_ONLY_RE = /^[0-9a-f]{40}$/
 
 export const name = 'dsh-git-review'
 
-/** The webServer service hosts this plugin's fenced prefix route. */
-export const inject = ['webServer']
+/** The webServer carrier hosts this plugin's fenced prefix route when present.
+ *  Optional composition (harness 0.1.5-alpha.1 made the web carrier optional in
+ *  ClientModuleRegistry): the route registers now if the service is already
+ *  composed, otherwise it waits via ctx.inject — same as installSettings below. */
+export const inject: string[] = []
 
 /** The plugin's own API prefix (package name; '/'-safe in a URL path). */
 const API_PREFIX = '/dsh-git-review/api'
@@ -127,7 +130,7 @@ const PREVIEW_CAP = 8 * 1024 * 1024
 /** Worktree files hashed per status call for the reviewed markers. */
 const BLOB_HASH_CAP = 200
 
-/** Structural webServer contract this plugin depends on (inject: 'webServer'). */
+/** Structural webServer contract this plugin depends on (optional web carrier). */
 interface WebServerService {
   register(registration: {
     kind: 'prefix'
@@ -2278,13 +2281,14 @@ export function apply(ctx: Context): void {
   // gets the settings card, and a host without the settings domain still
   // gets the API.
   installSettings(ctx)
-  const webServer = (ctx as Context & { webServer?: WebServerService }).webServer
-  if (webServer === undefined) {
-    // Host half is optional by design (the tab degrades to an explicit notice).
-    ctx.logger?.warn?.('[dsh-git-review] webServer service absent — review API disabled')
-    return
-  }
-  ctx.effect(() => webServer.register({
+  const registerFrom = (source: Context & { webServer?: WebServerService }): void => {
+    const webServer = source.webServer ?? (ctx as Context & { webServer?: WebServerService }).webServer
+    if (webServer === undefined) {
+      // Host half is optional by design (the tab degrades to an explicit notice).
+      ctx.logger?.warn?.('[dsh-git-review] webServer service absent — review API disabled')
+      return
+    }
+    ctx.effect(() => webServer.register({
     kind: 'prefix',
     path: API_PREFIX,
     handler: async (req, res) => {
@@ -2473,4 +2477,7 @@ export function apply(ctx: Context): void {
       }
     },
   }), 'dsh-git-review: fenced git api')
+  }
+  if ((ctx as Context & { webServer?: WebServerService }).webServer !== undefined) registerFrom(ctx as Context & { webServer?: WebServerService })
+  else ctx.inject(['webServer'], (wctx) => registerFrom(wctx as Context & { webServer?: WebServerService }))
 }

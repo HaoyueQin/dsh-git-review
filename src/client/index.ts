@@ -17,7 +17,7 @@
  *
  * Kernel contract: DeepSeek Harness >= 0.1.2-rc.1. The conversation.view
  * slot and the session-scope runtime shares carry their rc.1 shapes
- * (verified unchanged through 0.1.3-alpha.2 — re-verify per new rc,
+ * (verified unchanged through 0.1.5-alpha.1 — re-verify per new rc,
  * same policy as dsh-diff-stat).
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'

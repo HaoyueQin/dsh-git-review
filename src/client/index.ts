@@ -17,8 +17,9 @@
  *
  * Kernel contract: DeepSeek Harness >= 0.1.2-rc.1. The conversation.view
  * slot and the session-scope runtime shares carry their rc.1 shapes
- * (verified unchanged through 0.1.5-alpha.1 — re-verify per new rc,
- * same policy as dsh-diff-stat).
+ * (re-verified unchanged through 0.1.5-rc.1 — re-verify per new rc, same
+ * policy as dsh-diff-stat). Anchored on dsh-client-ui-layout for the optional
+ * global panel Hook (0.1.5+) read through Partial<GlobalStandardProps>.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -28,6 +29,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // renderer shares ConvViewProps references, the slot runtime itself).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { createElement } from 'react'

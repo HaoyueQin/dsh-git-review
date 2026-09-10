@@ -763,8 +763,8 @@ body[data-dsh-bg-glass] .root {
   align-items: center;
   gap: 6px 10px;
   padding: 6px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-error-primary)) 40%, var(--dsw-alias-border-secondary));
-  background: color-mix(in srgb, var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-error-primary)) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, var(--dsw-alias-border-secondary));
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
   color: var(--dsw-alias-label-primary);
   font-size: 12px;
 }
@@ -1935,7 +1935,7 @@ body[data-dsh-bg-glass] .root {
 }
 
 .tokNum {
-  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-business-primary));
+  color: var(--dsw-alias-state-warn-primary);
 }
 
 .tokCom {
@@ -2302,7 +2302,7 @@ body[data-dsh-bg-glass] .commitHeader {
 
 /* The HEAD pointer itself gets the strongest tone. */
 .refBadgeHeadState {
-  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-state-business-primary));
+  border: 1px solid var(--dsw-alias-state-warn-primary);
   background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 12%, transparent);
   color: var(--dsw-alias-state-business-primary);
   font-weight: 600;
@@ -2690,7 +2690,7 @@ body[data-dsh-bg-glass] .commitHeader {
 
 /* Blame-jump return focus: the file line navigated back to from a graph commit. */
 .fileRowFocus {
-  outline: 1px solid var(--dsw-alias-border-focus, #4d6bfe);
+  outline: 1px solid var(--dsw-alias-state-business-primary);
   outline-offset: -1px;
   border-radius: 4px;
 }

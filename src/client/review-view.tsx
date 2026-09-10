@@ -10,9 +10,10 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import type { RefObject } from 'react'
-import type { InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
+import type { GlobalStandardProps, InjectFace, PropsLocale, SessionStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { PanelInfo, UsePanelInfo } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload, GitCommitSummary, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitFsEntry, GitFsListPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { CommitMenu, type CommitMenuState } from './commit-menu.tsx'
@@ -145,6 +146,16 @@ async function loadFileContent(cwd: string, path: string, ref?: string | null): 
     : { kind: 'content', content: payload.content, truncated: payload.truncated, size: payload.size }
 }
 
+/** Root-scoped panel selection, as ui-layout's global seat declares it. The
+ *  seat arrives with the layout kit; a shell that predates it (the peer range
+ *  still covers 0.1.2-rc.1 through 0.1.5-alpha.2) has no usePanelInfo, so the
+ *  tab falls back to "the Conversation column is on screen". The fallback has
+ *  the same call shape as the real Hook and runs every render, so the Hook
+ *  order never depends on which shell is hosting the tab. */
+const NO_PANEL_SELECTED: PanelInfo = { activePanelId: null }
+const ALWAYS_VISIBLE_PANEL = ((selector?: (info: PanelInfo) => unknown) =>
+  selector === undefined ? NO_PANEL_SELECTED : selector(NO_PANEL_SELECTED)) as UsePanelInfo
+
 /** Total-render formatting: thousands separators, like Codex's toolbar. */
 function fmtCount(value: number): string {
   return value.toLocaleString('en-US')
@@ -156,7 +167,7 @@ function fmtCount(value: number): string {
  * typed optional so a kit change degrades instead of crashing.
  * @param props - injected cwd, locale dictionary and the session standard kit.
  */
-export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings, t, useSession, useInput, inputActions }: InjectFace<ReviewInjected> & PropsLocale<typeof NS> & Partial<SessionStandardProps>) {
+export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings, t, useSession, useInput, inputActions, usePanelInfo }: InjectFace<ReviewInjected> & PropsLocale<typeof NS> & Partial<SessionStandardProps> & Partial<GlobalStandardProps>) {
   // The shell caches injected props per session, so the `cwd` snapshot can
   // stick at undefined when the session list arrives late — re-resolve it
   // reactively; the injected value is only the first paint. (String compare
@@ -168,6 +179,11 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   // Agent-running gate for the write actions (commit/push) — a boolean
   // selector keeps re-renders to the running flip only.
   const running = useSession !== undefined ? (useSession((s: SessionSnapshot) => s.running) ?? false) : false
+  // Primary-column visibility: the frame renders the Conversation only while
+  // no other main-panel entry is selected, so activePanelId === null means
+  // this tab's column is on screen.
+  const panelHook: UsePanelInfo = usePanelInfo ?? ALWAYS_VISIBLE_PANEL
+  const panelVisible = panelHook((info: PanelInfo) => info.activePanelId) === null
   const [status, setStatus] = useState<StatusState>({ kind: 'loading' })
   const [reloadTick, setReloadTick] = useState(0)
   const [selected, setSelected] = useState<string | null>(null)
@@ -970,15 +986,31 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
   // session's running flag drops, the worktree just stopped changing, so a
   // refresh shows the final state without a manual click. No competitor can
   // do this — none of them can read the session state.
+  //
+  // While another primary-column entry is selected the drop is held instead of
+  // spent, and coming back re-reads: the tab never shows a worktree that moved
+  // while it was off screen. Today a panel switch remounts this subtree (keyed
+  // main entries replace rather than hide) and a remount re-reads anyway — the
+  // hold keeps the one refresh policy correct if the frame ever keeps panels
+  // mounted instead.
   const runningPrevRef = useRef(false)
+  const heldRefreshRef = useRef(false)
   /** Call-time workspace ticket: async callbacks compare the cwd they were
    *  launched with against this ref and drop stale responses. */
   const cwdRef = useRef(cwd)
   cwdRef.current = cwd
   useEffect(() => {
-    if (runningPrevRef.current && !running) refresh()
+    if (runningPrevRef.current && !running) {
+      if (panelVisible) refresh()
+      else heldRefreshRef.current = true
+    }
     runningPrevRef.current = running
-  }, [running, refresh])
+  }, [running, panelVisible, refresh])
+  useEffect(() => {
+    if (!panelVisible || !heldRefreshRef.current) return
+    heldRefreshRef.current = false
+    refresh()
+  }, [panelVisible, refresh])
 
   /** Select a tree file; the staged/unstaged scope resets per selection. */
   const selectFile = useCallback((path: string) => {

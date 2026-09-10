@@ -13,7 +13,7 @@
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/v/dsh-git-review?style=flat-square" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/dt/dsh-git-review?style=flat-square" alt="npm downloads"></a>
   <img src="https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="dsh plugin">
-  <img src="https://img.shields.io/badge/dsh-%3E%3D0.1.2--rc.1-4D6BFE?style=flat-square" alt="harness >=0.1.2-rc.1">
+  <img src="https://img.shields.io/badge/dsh-0.1.2--rc.1..0.1.5--rc.1-4D6BFE?style=flat-square" alt="harness 0.1.2-rc.1 through 0.1.5-rc.1">
   <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">
@@ -71,7 +71,7 @@ dsh plugin --profile web add ./dsh-git-review-<version>.tgz  # 以 pnpm pack 实
 dsh web
 ```
 
-要求 DeepSeek Harness `>=0.1.2-rc.1`，且宿主 PATH 里有 git。工作区不在 git 仓库内时，标签页提供文件浏览与一键初始化，而不是审查工作台——绝不白屏。
+要求 DeepSeek Harness `0.1.2-rc.1` 至 `0.1.5-rc.1`（prerelease 系列在 `peerDependencies` 里逐个钉住），且宿主 PATH 里有 git。工作区不在 git 仓库内时，标签页提供文件浏览与一键初始化，而不是审查工作台——绝不白屏。
 
 ## 检查
 

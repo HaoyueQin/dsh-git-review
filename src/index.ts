@@ -104,7 +104,16 @@ export const name = 'dsh-git-review'
 /** The webServer carrier hosts this plugin's fenced prefix route when present.
  *  Optional composition (harness 0.1.5-alpha.1 made the web carrier optional in
  *  ClientModuleRegistry): the route registers now if the service is already
- *  composed, otherwise it waits via ctx.inject — same as installSettings below. */
+ *  composed, otherwise it waits via ctx.inject — same as installSettings below.
+ *
+ *  Deliberately EMPTY. `webServer` cannot go in this list (an inject
+ *  declaration gates the whole apply body, and the settings card must load on
+ *  a host without a web carrier), and — the trap that made v0.1.3 unbootable —
+ *  it must never be read as a property either: cordis resolves context
+ *  properties through a proxy that throws
+ *  `cannot get property "webServer" without inject` whenever a service without
+ *  a declaration is missing or not yet composed, which fails the whole plugin
+ *  tree at boot. ctx.get() is the only safe probe: it returns undefined. */
 export const inject: string[] = []
 
 /** The plugin's own API prefix (package name; '/'-safe in a URL path). */
@@ -2281,8 +2290,9 @@ export function apply(ctx: Context): void {
   // gets the settings card, and a host without the settings domain still
   // gets the API.
   installSettings(ctx)
-  const registerFrom = (source: Context & { webServer?: WebServerService }): void => {
-    const webServer = source.webServer ?? (ctx as Context & { webServer?: WebServerService }).webServer
+  const registerFrom = (source: Context): void => {
+    // ctx.get, never a property read — see the `inject` note above.
+    const webServer = source.get('webServer') as WebServerService | undefined
     if (webServer === undefined) {
       // Host half is optional by design (the tab degrades to an explicit notice).
       ctx.logger?.warn?.('[dsh-git-review] webServer service absent — review API disabled')
@@ -2478,6 +2488,6 @@ export function apply(ctx: Context): void {
     },
   }), 'dsh-git-review: fenced git api')
   }
-  if ((ctx as Context & { webServer?: WebServerService }).webServer !== undefined) registerFrom(ctx as Context & { webServer?: WebServerService })
-  else ctx.inject(['webServer'], (wctx) => registerFrom(wctx as Context & { webServer?: WebServerService }))
+  if (ctx.get('webServer') !== undefined) registerFrom(ctx)
+  else ctx.inject(['webServer'], (wctx) => registerFrom(wctx))
 }

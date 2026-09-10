@@ -104,16 +104,37 @@ assert.ok(notRepoViewAt > earlyReturnAt, 'NotRepoView follows ReviewView')
 const lateHooks = [...reviewView.slice(earlyReturnAt, notRepoViewAt).matchAll(/\buse[A-Z][A-Za-z]*\s*\(/g)].map(m => m[0])
 assert.deepEqual(lateHooks, [], 'hooks after the non-ready early return: ' + lateHooks.join(', '))
 
-// 8. Host half: optional services must never be read as properties.
-//    cordis returns undefined only for ctx.get(); a property read without an
-//    inject declaration throws `cannot get property "X" without inject` from
-//    inside apply, and the loader applies the patch list as one group, so that
-//    throw fails the whole plugin tree and dsh cannot boot (2026-09-10:
-//    `ctx.webServer !== undefined` with `inject = []` did exactly this and
-//    v0.1.3 had to be unpublished). scripts/check-boot.mjs pins the same shape
-//    against the built artifact; this lock catches it before the build.
-const undeclaredReads = [...dispatch.matchAll(/\b[A-Za-z_$][\w$]*\.(webServer|settingsScope)\b/g)].map(m => m[0])
-assert.deepEqual(undeclaredReads, [], 'service property reads without inject: ' + undeclaredReads.join(', '))
+// 8. Host half: a service may only be read as a property inside a scope that
+//    declares it. cordis throws `cannot get property "X" without inject` from
+//    inside apply when a property is read in an undeclared scope, and the
+//    loader applies a patch list as one group — so one such read fails the
+//    entire plugin tree and dsh cannot boot (2026-09-10: `ctx.webServer !==
+//    undefined` with `inject = []` did exactly this and v0.1.3 was
+//    unpublished). Receivers named `<something>Ctx` are the injected child
+//    scopes — the ctx.inject callbacks, where the read is the intended API —
+//    so only those are allowed, and `ctx.inject(['x'], …)` / `ctx.get('x')`
+//    stay legal because naming the service there is how you declare it. The
+//    match covers the forms the first version missed (ctx?.x, ctx['x'],
+//    Reflect.get) after comments are stripped (comments describe the trap).
+const HOST_FILES = readdirSync(join(ROOT, 'src')).filter(file => file.endsWith('.ts'))
+const INJECTED_RECEIVER = /\b(?!ctx\b)[A-Za-z_$][\w$]*[Cc]tx\b/
+const SANCTIONED_CALL = /(?:\.\s*(?:inject|get)|Reflect\s*\.\s*get)\s*\([^()]*$/
+const SERVICE_READ = /\.\s*(webServer|settings|settingsScope)\b|\[\s*['"](webServer|settings|settingsScope)['"]\s*\]|Reflect\s*\.\s*get\(\s*([A-Za-z_$][\w$]*)\s*,\s*['"](webServer|settings|settingsScope)['"]/g
+const undeclaredReads = []
+for (const file of HOST_FILES) {
+  const source = read(join('src', file))
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+  for (const match of source.matchAll(SERVICE_READ)) {
+    const before = source.slice(Math.max(0, match.index - 80), match.index)
+    if (SANCTIONED_CALL.test(before)) continue
+    // Reflect.get(recv, 'x') carries its receiver in group 3; the others are
+    // judged by the expression that precedes the access.
+    if (INJECTED_RECEIVER.test(match[3] ?? before)) continue
+    undeclaredReads.push(file + ':' + (match[1] ?? match[2] ?? match[4]))
+  }
+}
+assert.deepEqual(undeclaredReads, [], 'service property reads outside an injected scope: ' + undeclaredReads.join(', '))
 
 // 9. Font tokens resolve against real theme variables. ui-theme ships
 //    --dsw-font-family (base.css) and --ds-font-family-code (the code stack,

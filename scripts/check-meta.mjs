@@ -104,4 +104,35 @@ assert.ok(notRepoViewAt > earlyReturnAt, 'NotRepoView follows ReviewView')
 const lateHooks = [...reviewView.slice(earlyReturnAt, notRepoViewAt).matchAll(/\buse[A-Z][A-Za-z]*\s*\(/g)].map(m => m[0])
 assert.deepEqual(lateHooks, [], 'hooks after the non-ready early return: ' + lateHooks.join(', '))
 
+// 8. Host half: optional services must never be read as properties.
+//    cordis returns undefined only for ctx.get(); a property read without an
+//    inject declaration throws `cannot get property "X" without inject` from
+//    inside apply, and the loader applies the patch list as one group, so that
+//    throw fails the whole plugin tree and dsh cannot boot (2026-09-10:
+//    `ctx.webServer !== undefined` with `inject = []` did exactly this and
+//    v0.1.3 had to be unpublished). scripts/check-boot.mjs pins the same shape
+//    against the built artifact; this lock catches it before the build.
+const undeclaredReads = [...dispatch.matchAll(/\b[A-Za-z_$][\w$]*\.(webServer|settingsScope)\b/g)].map(m => m[0])
+assert.deepEqual(undeclaredReads, [], 'service property reads without inject: ' + undeclaredReads.join(', '))
+
+// 9. Font tokens resolve against real theme variables. ui-theme ships
+//    --dsw-font-family (base.css) and --ds-font-family-code (the code stack,
+//    deliberately without a bare `monospace` tail — Windows CJK would fall back
+//    to SimSun); there is no --dsw-font-mono, and a phantom name here silently
+//    degraded one call site to the system monospace stack (2026-09-10 audit:
+//    five call sites already used the real name, the sixth did not).
+const cssFiles = []
+const walkCss = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) { walkCss(full); continue }
+    if (entry.name.endsWith('.css')) cssFiles.push(full)
+  }
+}
+walkCss(join(ROOT, 'src'))
+const fontTokens = [...new Set(cssFiles.flatMap(file =>
+  [...readFileSync(file, 'utf8').matchAll(/var\(\s*(--dsw-font-[A-Za-z0-9_-]+)/g)].map(m => m[1])))]
+const unknownFontTokens = fontTokens.filter(token => token !== '--dsw-font-family')
+assert.deepEqual(unknownFontTokens, [], 'font tokens the harness does not define: ' + unknownFontTokens.join(', '))
+
 console.log('check-meta: all assertions passed (' + refs.size + ' css refs, ' + cssDef.size + ' css defs, ' + dynamicKeys.length + ' locale keys, ' + argKeys.length + ' actions)')

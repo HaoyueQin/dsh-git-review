@@ -63,6 +63,12 @@ jobs:
       # Compilers-blind consistency (css refs, dynamic locale keys,
       # manifest, prefs/schema lock, dispatch coverage).
       - run: pnpm check:meta
+      # Boot-shape regression against the committed lib/: the host half must
+      # apply with and without the optional web carrier. Reading a service
+      # property without an inject declaration throws inside apply and fails
+      # the entire plugin tree, so dsh cannot start at all (that is what
+      # v0.1.3 shipped).
+      - run: pnpm check:boot
       - run: pnpm build
       # lib/ is committed so the tab runs without build rights; a source
       # change without a rebuilt lib would ship stale artifacts. All bundled

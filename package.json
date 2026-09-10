@@ -36,6 +36,7 @@
     "check:parse": "node scripts/check-parse.mjs",
     "check:git": "node scripts/check-git.mjs",
     "check:meta": "node scripts/check-meta.mjs",
+    "check:boot": "node scripts/check-boot.mjs",
     "build:clean": "node -e \"import('node:fs').then(fs => fs.rmSync('lib', { recursive: true, force: true }))\""
   },
   "exports": {

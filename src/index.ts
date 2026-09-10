@@ -2290,15 +2290,16 @@ export function apply(ctx: Context): void {
   // gets the settings card, and a host without the settings domain still
   // gets the API.
   installSettings(ctx)
-  const registerFrom = (source: Context): void => {
-    // ctx.get, never a property read — see the `inject` note above.
-    const webServer = source.get('webServer') as WebServerService | undefined
-    if (webServer === undefined) {
-      // Host half is optional by design (the tab degrades to an explicit notice).
-      ctx.logger?.warn?.('[dsh-git-review] webServer service absent — review API disabled')
-      return
-    }
-    ctx.effect(() => webServer.register({
+  // The fenced route lives in a child scope that declares the dependency.
+  // That buys three things the direct branch did not: the registration follows
+  // the carrier's lifetime (a restarted or replaced webServer re-runs this
+  // callback, and the effect is disposed with the scope that owns it), a route
+  // collision fails this child instead of the whole plugin tree, and a host
+  // without a web carrier simply never runs it. Reading the property is safe
+  // *here* because this scope declares it — the trap is reading it without a
+  // declaration (see the `inject` note on the export).
+  ctx.inject(['webServer'], (wctx) => {
+    wctx.effect(() => (wctx as Context & { webServer: WebServerService }).webServer.register({
     kind: 'prefix',
     path: API_PREFIX,
     handler: async (req, res) => {
@@ -2487,7 +2488,5 @@ export function apply(ctx: Context): void {
       }
     },
   }), 'dsh-git-review: fenced git api')
-  }
-  if (ctx.get('webServer') !== undefined) registerFrom(ctx)
-  else ctx.inject(['webServer'], (wctx) => registerFrom(wctx))
+  })
 }

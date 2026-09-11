@@ -13,6 +13,7 @@ import { badgeFor, badgesFor, buildFileTree, filterFiles, isUnmerged, mergeAllFi
 import { DEFAULT_PREFS, normalizePrefs, normalizeWorkspaceKey } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
 import { previewKindForPath } from '../src/client/preview-kind.ts'
+import { resolveImageSides } from '../src/client/image-sides.ts'
 import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, resolveMdAsset, rewriteMdAssets } from '../src/client/md-preview.ts'
 import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
 import { createDraftBox, draftsKey, parseDrafts } from '../src/client/comment-drafts.ts'
@@ -901,5 +902,92 @@ assert.equal(resolveRangeHash(null, chainCommits, HC), null)
 assert.equal(findBranchTip(chainCommits, 'main'), HB)
 assert.equal(findBranchTip(chainCommits, null), null)
 assert.equal(findBranchTip(chainCommits, 'ghost'), null)
+
+// 54. Image-diff sides: each scope reads the right byte source — the base of
+//     a staged edit is HEAD, the base of an unstaged edit is the index blob,
+//     an added file has no base at all, and a rename reads the old path on
+//     the base side.
+const worktreeInput = (extra) => ({ mode: 'worktree', scope: 'all', baseRef: null, targetRef: null, path: 'a.png', ...extra })
+let sides = resolveImageSides(worktreeInput({ x: 'M', y: ' ' }))
+assert.deepEqual(sides, {
+  before: { side: { kind: 'ref', ref: 'HEAD' }, path: 'a.png' },
+  after: { side: { kind: 'worktree' }, path: 'a.png' },
+  comparable: true,
+})
+// Staged half: the index blob against HEAD.
+sides = resolveImageSides(worktreeInput({ scope: 'staged', x: 'M', y: ' ' }))
+assert.deepEqual(sides.before.side, { kind: 'ref', ref: 'HEAD' })
+assert.deepEqual(sides.after.side, { kind: 'index' })
+// Unstaged half: the worktree against the staged blob.
+sides = resolveImageSides(worktreeInput({ scope: 'unstaged', x: 'M', y: 'M' }))
+assert.deepEqual(sides.before.side, { kind: 'index' })
+assert.deepEqual(sides.after.side, { kind: 'worktree' })
+// A base override replaces HEAD on the before side only.
+assert.deepEqual(resolveImageSides(worktreeInput({ baseRef: 'dev', x: 'M', y: ' ' })).before.side, { kind: 'ref', ref: 'dev' })
+// Untracked: neither HEAD nor the index carries it — the before side is empty.
+sides = resolveImageSides(worktreeInput({ x: '?', y: '?', untracked: true }))
+assert.deepEqual(sides.before.side, { kind: 'empty' })
+assert.deepEqual(sides.after.side, { kind: 'worktree' })
+assert.equal(sides.comparable, false)
+sides = resolveImageSides(worktreeInput({ scope: 'unstaged', x: '?', y: '?', untracked: true }))
+assert.deepEqual(sides.before.side, { kind: 'empty' }, 'an untracked file has no staged copy to compare against')
+// A staged addition: HEAD never had the file.
+sides = resolveImageSides(worktreeInput({ scope: 'staged', x: 'A', y: ' ' }))
+assert.deepEqual(sides.before.side, { kind: 'empty' })
+assert.deepEqual(sides.after.side, { kind: 'index' })
+// A worktree deletion leaves nothing on the after side.
+sides = resolveImageSides(worktreeInput({ x: 'M', y: 'D' }))
+assert.deepEqual(sides.before.side, { kind: 'ref', ref: 'HEAD' })
+assert.deepEqual(sides.after.side, { kind: 'empty' })
+assert.equal(sides.comparable, false)
+// A staged deletion has no index blob to read.
+assert.deepEqual(resolveImageSides(worktreeInput({ scope: 'staged', x: 'D', y: 'D' })).after.side, { kind: 'empty' })
+// A rename reads the old path on the base side, the new one on the target.
+sides = resolveImageSides(worktreeInput({ x: 'R', y: ' ', path: 'new.png', origPath: 'old.png' }))
+assert.equal(sides.before.path, 'old.png')
+assert.equal(sides.after.path, 'new.png')
+// Refs mode: both ends are the picked refs.
+sides = resolveImageSides({ mode: 'refs', scope: 'all', baseRef: 'main', targetRef: 'dev', path: 'a.png' })
+assert.deepEqual(sides.before.side, { kind: 'ref', ref: 'main' })
+assert.deepEqual(sides.after.side, { kind: 'ref', ref: 'dev' })
+assert.equal(sides.comparable, true)
+// An unset end compares against nothing (the picker's guard state).
+sides = resolveImageSides({ mode: 'refs', scope: 'all', baseRef: null, targetRef: 'dev', path: 'a.png' })
+assert.deepEqual(sides.before.side, { kind: 'empty' })
+assert.equal(sides.comparable, false)
+// Graph mode: parent0 against the commit; a root commit has no parent.
+sides = resolveImageSides({ mode: 'graph', scope: 'all', baseRef: HA, targetRef: HB, path: 'a.png' })
+assert.deepEqual(sides.before.side, { kind: 'ref', ref: HA })
+assert.deepEqual(sides.after.side, { kind: 'ref', ref: HB })
+sides = resolveImageSides({ mode: 'graph', scope: 'all', baseRef: null, targetRef: HB, path: 'a.png' })
+assert.deepEqual(sides.before.side, { kind: 'empty' })
+assert.equal(sides.comparable, false)
+
+// 55. Image sides, rename x scope: only a REF keeps the pre-rename name, so
+//     the unstaged half (index vs worktree) reads the current path on BOTH
+//     ends — the index has no `old.png` to serve, and answering `missing`
+//     there would hide a real comparison.
+sides = resolveImageSides({ mode: 'worktree', scope: 'all', baseRef: null, targetRef: null, x: 'R', y: ' ', path: 'new.png', origPath: 'old.png' })
+assert.equal(sides.before.path, 'old.png')
+assert.equal(sides.after.path, 'new.png')
+sides = resolveImageSides({ mode: 'worktree', scope: 'staged', baseRef: null, targetRef: null, x: 'R', y: ' ', path: 'new.png', origPath: 'old.png' })
+assert.equal(sides.before.path, 'old.png', 'the staged half still reads the old name from the base ref')
+assert.equal(sides.after.path, 'new.png')
+sides = resolveImageSides({ mode: 'worktree', scope: 'unstaged', baseRef: null, targetRef: null, x: 'R', y: 'M', path: 'new.png', origPath: 'old.png' })
+assert.equal(sides.before.path, 'new.png', 'the index end follows the current path after a rename')
+assert.equal(sides.after.path, 'new.png')
+
+// 56. SVG prolog: exporters emit an XML declaration, a DOCTYPE and comments
+//     before the root element — the sniff walks past all of them, while still
+//     refusing a plain HTML document (the security posture is unchanged).
+const sniff = (text) => sniffPreviewMime(new TextEncoder().encode(text))
+assert.equal(sniff('<svg xmlns="http://www.w3.org/2000/svg"/>'), 'image/svg+xml')
+assert.equal(sniff('<?xml version="1.0" encoding="UTF-8"?>\n<svg/>'), 'image/svg+xml')
+assert.equal(sniff('<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n<svg/>'), 'image/svg+xml')
+assert.equal(sniff('<!-- exported by a tool -->\n<svg/>'), 'image/svg+xml')
+assert.equal(sniff('<?xml version="1.0"?>\n<!-- c -->\n<!DOCTYPE svg>\n<svg/>'), 'image/svg+xml')
+assert.equal(sniff('<!-- unterminated\n<svg/>'), null, 'an unterminated comment never reaches the root')
+assert.equal(sniff('<!DOCTYPE html><html><body>x</body></html>'), null)
+assert.equal(sniff('<?xml version="1.0"?><html/>'), null, 'a prolog never turns HTML into SVG')
 
 console.log('check-parse: all assertions passed')

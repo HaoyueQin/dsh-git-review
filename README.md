@@ -51,6 +51,7 @@ DSH Git Review registers a **Review** tab next to Chat and Trajectory in the ses
 - **Act under guard**: stage / unstage / discard per file or per hunk, commit (plus amend, Ctrl+Enter), commit-and-push, and push; branches (create / switch / rename / delete / merge / track remotes) with fetch and pull; history operations (reset / revert / cherry-pick, per-commit actions from the graph); lightweight tags (create / delete / push); stash; and merge-conflict resolution (ours / theirs, continue / abort). Every write needs explicit confirmation, destructive ones ask twice, and everything locks while the agent is running.
 - **Close the loop**: comment on any diff line and drop it into the composer draft, mark files reviewed (auto-cleared when the file changes again), and keep comment drafts per workspace.
 - **Preview files**: markdown renders with the shell's own Markdown engine, HTML / images / SVG show inline, PDFs open sandboxed — every preview has a source view toggle, and office documents open in your external apps from the tree's right-click menu.
+- **Picture diffs**: image changes (PNG / JPG / GIF / WebP / BMP / AVIF / ICO / SVG) render as pictures right inside the diff view — 2-up (side by side, or stacked in unified), swipe, onion skin and a difference blend, with the source diff one click away.
 
 Preferences (diff layout, default search scope, graph shape, matching, whitespace, syntax) live in the harness settings Plugins tab and sync instantly with the Review tab.
 

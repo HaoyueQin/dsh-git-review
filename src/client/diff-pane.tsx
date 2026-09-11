@@ -15,6 +15,7 @@ import { CommentIcon, ExpandIcon, CollapseIcon, HistoryIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { FileCounts } from './file-counts.tsx'
 import { ViewSwitch, type FileViewMode } from './file-pane.tsx'
+import { ImageDiffPane, type ImageCompareMode, type ImageEndState } from './image-diff-pane.tsx'
 import type { CommentDraft } from './comment-drafts.ts'
 import type { ChangedFile } from '../contract.ts'
 import type { InputActions, InputState } from '@deepseek-ai/dsh-client-ui-conversation/client'
@@ -28,6 +29,21 @@ export { MAX_RENDER_ROWS }
 
 /** Which half of a file's changes the diff covers (mirrors the host param). */
 export type DiffScope = 'all' | 'staged' | 'unstaged'
+
+/** Picture-diff wiring, handed to the pane when the selected file is an
+ *  image (image-sides.ts decides which end reads which byte source). */
+export interface ImageDiffConfig {
+  before: ImageEndState
+  after: ImageEndState
+  mode: ImageCompareMode
+  onModeChange: (mode: ImageCompareMode) => void
+  /** 'compare' draws the pictures, 'source' the textual diff/binary notice. */
+  view: 'compare' | 'source'
+  onViewChange: (view: 'compare' | 'source') => void
+  /** End captions (a ref name, or the worktree/base wording). */
+  beforeLabel: string
+  afterLabel: string
+}
 
 /** Props of the diff pane. */
 export interface DiffPaneProps {
@@ -84,6 +100,8 @@ export interface DiffPaneProps {
   onFileHistory?: ((path: string, x: number, y: number) => void) | undefined
   /** True while the history fetch is in flight (button shows busy). */
   historyLoading?: boolean
+  /** Image comparison wiring (absent for any non-picture file). */
+  image?: ImageDiffConfig
   t: T
 }
 
@@ -264,8 +282,11 @@ function CommentEditor({ path, line, useInput, inputActions, onDraftAdd, onClose
  * The pane for one selected file.
  * @param props - the file, its diff text/state and the context toggle.
  */
-export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, syntaxHighlight, search, baseActive, useInput, inputActions, onDraftAdd, hunkOps, onHunkOp, hunkBusy, hunkNotice, onFileHistory, historyLoading, t }: DiffPaneProps) {
+export function DiffPane({ file, diff, truncated, loading, binary, size, full, onToggleFull, scope, onScopeChange, view, onViewChange, showViewSwitch = true, allowFileView = true, wsIgnore, onToggleWs, syntaxHighlight, search, baseActive, useInput, inputActions, onDraftAdd, hunkOps, onHunkOp, hunkBusy, hunkNotice, onFileHistory, historyLoading, image, t }: DiffPaneProps) {
   const parsed = useMemo<ParsedDiff>(() => parseUnifiedDiff(diff), [diff])
+  /** The picture comparison replaces the hunks unless the header switched
+   *  this file back to its source view. */
+  const showImage = image !== undefined && image.view === 'compare'
   const showBinary = binary || parsed.binary
   const notice = showBinary
     ? (size > 0 ? t('diff.binarySize', { size }) : t('diff.binary'))
@@ -332,7 +353,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
           <span className={css.diffRename}>{t('diff.renamedFrom', { path: file.origPath })}</span>
         )}
         <span className={css.diffHeaderSpacer} />
-        {matchRowCount > 0 && (
+        {matchRowCount > 0 && !showImage && (
           <span className={css.matchNav}>
             <button type="button" className={css.toolBtn} onClick={() => { gotoMatch(-1) }} title={t('search.prev')} aria-label={t('search.prev')}>
               {'\u2039'}
@@ -343,9 +364,31 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
             </button>
           </span>
         )}
+        {image !== undefined && (
+          <span className={css.scopeSwitch} role="group" aria-label={t('image.compare')}>
+            <button
+              type="button"
+              className={css.scopeBtn + (image.view === 'compare' ? ' ' + css.scopeBtnActive : '')}
+              aria-pressed={image.view === 'compare'}
+              onClick={() => { image.onViewChange('compare') }}
+            >
+              {t('image.compare')}
+            </button>
+            <button
+              type="button"
+              className={css.scopeBtn + (image.view === 'source' ? ' ' + css.scopeBtnActive : '')}
+              aria-pressed={image.view === 'source'}
+              onClick={() => { image.onViewChange('source') }}
+            >
+              {t('image.source')}
+            </button>
+          </span>
+        )}
         {showViewSwitch && <ViewSwitch active={view} onViewChange={onViewChange} allowFileView={allowFileView} t={t} />}
         {/* Whitespace toggle: the loudest review noise (formatting-only hunks)
-            hides behind it; active state follows the persisted preference. */}
+            hides behind it; active state follows the persisted preference.
+            Pictures have no whitespace, so it stands down there. */}
+        {!showImage && (
         <button
           type="button"
           className={css.toolBtn + (wsIgnore ? ' ' + css.toolBtnActive : '')}
@@ -355,6 +398,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
         >
           <span>{t('diff.ws')}</span>
         </button>
+        )}
         {!file.untracked && !baseActive && (
           <span className={css.scopeSwitch} role="group" aria-label={t('scope.label')}>
             {(['all', 'staged', 'unstaged'] as const).map(candidate => (
@@ -384,15 +428,31 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
             <span>{t('history.toggle')}</span>
           </button>
         )}
+        {!showImage && (
         <button type="button" className={css.toolBtn} onClick={onToggleFull} title={full ? t('collapseAll') : t('expandAll')}>
           {full ? <CollapseIcon /> : <ExpandIcon />}
           <span>{full ? t('collapseAll') : t('expandAll')}</span>
         </button>
+        )}
       </div>
-      {notice !== null && <div className={css.noticeRow}>{notice}</div>}
+      {notice !== null && !showImage && <div className={css.noticeRow}>{notice}</div>}
       {hunkNotice != null && hunkNotice !== '' && (
         <div className={css.noticeRow + ' ' + css.noticeError}>{hunkNotice}</div>
       )}
+      {showImage && image !== undefined
+        ? (
+          <ImageDiffPane
+            before={image.before}
+            after={image.after}
+            mode={image.mode}
+            onModeChange={image.onModeChange}
+            stacked={unified}
+            beforeLabel={image.beforeLabel}
+            afterLabel={image.afterLabel}
+            t={t}
+          />
+        )
+        : (
       <div className={css.diffScroll} ref={scrollRef}>
         {loading && <div className={css.paneNotice}>{t('diff.loading')}</div>}
         {!loading && !showBinary && parsed.hunks.length === 0 && (
@@ -425,6 +485,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
         {/* Seat overlay reserve: the composer card floats over the pane's bottom. */}
         <div className={css.diffBottomReserve} />
       </div>
+        )}
     </div>
   )
 }

@@ -26,6 +26,8 @@ import { buildHunkPatch } from './diff-parse.ts'
 import { FilePane, type FileViewMode } from './file-pane.tsx'
 import { markdownRenderer, PreviewPane } from './preview-pane.tsx'
 import { previewKindForPath, type PreviewKind } from './preview-kind.ts'
+import { resolveImageSides, type ImageSidePlan, type ImageSidesPlan } from './image-sides.ts'
+import type { ImageCompareMode, ImageEndState } from './image-diff-pane.tsx'
 import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, MD_ASSET_CAP, resolveMdAsset, rewriteMdAssets } from './md-preview.ts'
 import { findBranchTip, isAncestorOrSelf, resolveRangeHash } from './range-guard.ts'
 import type { ReviewSettings } from './review-settings.ts'
@@ -120,18 +122,54 @@ async function loadFileDiff(cwd: string, path: string, origPath: string | undefi
   return payload.binary ? { kind: 'binary', size: payload.size } : { kind: 'text', diff: payload.diff, truncated: payload.truncated }
 }
 
-/** Preview bytes (image/PDF) for the in-tab preview; mirrors loadFileContent. */
+/** Preview bytes (image/PDF) for the in-tab preview; mirrors loadFileContent.
+ *  `missing` means the path has no file at the requested source (an
+ *  added/deleted end of an image diff) — not a failure. */
 type PreviewBytesState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'ready'; mime: string; base64: string; size: number; truncated: boolean }
+  | { kind: 'ready'; mime: string; base64: string; size: number; truncated: boolean; missing: boolean }
   | { kind: 'failed'; message: string }
 
 async function loadPreviewBytes(cwd: string, path: string, ref?: string | null): Promise<Exclude<PreviewBytesState, { kind: 'idle' | 'loading' }>> {
   const payload = await hostCall<GitFileBytesPayload & { error?: string }>('file-bytes', ref ? { cwd, path, ref } : { cwd, path })
   if (payload === null) return { kind: 'failed', message: 'host unavailable' }
   if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
-  return { kind: 'ready', mime: payload.mime, base64: payload.base64, size: payload.size, truncated: payload.truncated }
+  return { kind: 'ready', mime: payload.mime, base64: payload.base64, size: payload.size, truncated: payload.truncated, missing: payload.missing === true }
+}
+
+/** Fetch ONE end of an image comparison. An `empty` end never travels: the
+ *  plan already knows there is no file there, so it answers `missing`
+ *  directly; the other sources ride the same fenced endpoint (the index end
+ *  uses `stage`, which a ref argument can never address). */
+async function loadImageSide(cwd: string, target: ImageSidePlan): Promise<Exclude<PreviewBytesState, { kind: 'idle' | 'loading' }>> {
+  const empty = { kind: 'ready', mime: '', base64: '', size: 0, truncated: false, missing: true } as const
+  if (target.side.kind === 'empty') return empty
+  const payload = target.side.kind === 'index'
+    ? await hostCall<GitFileBytesPayload & { error?: string }>('file-bytes', { cwd, path: target.path, stage: 'index' })
+    : target.side.kind === 'ref'
+      ? await hostCall<GitFileBytesPayload & { error?: string }>('file-bytes', { cwd, path: target.path, ref: target.side.ref })
+      : await hostCall<GitFileBytesPayload & { error?: string }>('file-bytes', { cwd, path: target.path })
+  if (payload === null) return { kind: 'failed', message: 'host unavailable' }
+  if (!payload.ok) return { kind: 'failed', message: payload.error ?? 'unknown error' }
+  if (payload.missing === true) return empty
+  return { kind: 'ready', mime: payload.mime, base64: payload.base64, size: payload.size, truncated: payload.truncated, missing: false }
+}
+
+/** One end's pane state: a decoded data: URL, or the reason there is none
+ *  (absent / oversized / failed / not actually an image). */
+function imageEndState(state: PreviewBytesState): ImageEndState {
+  const ready = state.kind === 'ready' && !state.missing && !state.truncated && state.mime.startsWith('image/')
+  if (ready && state.kind === 'ready') {
+    return { dataUrl: 'data:' + state.mime + ';base64,' + state.base64, missing: false, truncated: false, failed: false }
+  }
+  return {
+    dataUrl: null,
+    missing: state.kind === 'ready' && state.missing,
+    truncated: state.kind === 'ready' && !state.missing && state.truncated,
+    failed: state.kind === 'failed'
+      || (state.kind === 'ready' && !state.missing && !state.truncated && !state.mime.startsWith('image/')),
+  }
 }
 
 /** Fetch one file's full content; keeps non-ok payloads as explicit failures.
@@ -340,6 +378,12 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
    *  raster images and PDFs (markdown/SVG reuse the loaded text). */
   const [previewSource, setPreviewSource] = useState(false)
   const [previewBytes, setPreviewBytes] = useState<PreviewBytesState>({ kind: 'idle' })
+  /** Picture diff: how the two ends are laid out, whether the source view
+   *  wins over the pictures, and the two ends' loaded bytes. */
+  const [imageMode, setImageMode] = useState<ImageCompareMode>('side')
+  const [imageSource, setImageSource] = useState(false)
+  const [beforeBytes, setBeforeBytes] = useState<PreviewBytesState>({ kind: 'idle' })
+  const [afterBytes, setAfterBytes] = useState<PreviewBytesState>({ kind: 'idle' })
   // Content search: the draft debounces into the committed query; matches map
   // drives the tree's per-file count chips and the diff pane's highlighting.
   // The scope decides what is searched — file names (client-side tree
@@ -948,6 +992,106 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     return () => { alive = false }
   }, [viewTab, cwd, selectedCommit, graphFileInfo, commitInfo, diffFull, wsIgnore])
 
+  /** The picture comparison's two byte sources for whatever the pane is
+   *  showing right now — the worktree/refs selection, or the graph commit's
+   *  file (parent0 against the commit). Null for any non-image file. */
+  const imageSides: ImageSidesPlan | null = useMemo(() => {
+    if (viewTab === 'changes') {
+      if (selectedFile === null || previewKindForPath(selectedFile.path) !== 'image') return null
+      return resolveImageSides({
+        mode: refsMode ? 'refs' : 'worktree',
+        scope: diffScope,
+        baseRef,
+        targetRef: refsMode ? targetRef : null,
+        x: selectedFile.x,
+        y: selectedFile.y,
+        untracked: selectedFile.untracked,
+        path: selectedFile.path,
+        origPath: selectedFile.origPath,
+      })
+    }
+    if (viewTab === 'graph' && graphWorktreeFile !== null) {
+      // The graph's uncommitted-changes row carries worktree semantics.
+      const worktreeFile = ready?.files.find(item => item.path === graphWorktreeFile) ?? null
+      if (worktreeFile === null || previewKindForPath(worktreeFile.path) !== 'image') return null
+      return resolveImageSides({
+        mode: 'worktree',
+        // The same scope the panel's text diff reads, so the two views of one
+        // file can never disagree (the scope selector drives both).
+        scope: diffScope,
+        baseRef: null,
+        targetRef: null,
+        x: worktreeFile.x,
+        y: worktreeFile.y,
+        untracked: worktreeFile.untracked,
+        path: worktreeFile.path,
+        origPath: worktreeFile.origPath,
+      })
+    }
+    if (graphFileInfo === null || previewKindForPath(graphFileInfo.path) !== 'image') return null
+    const parent0 = commitInfo !== null && commitInfo.parents.length > 0 ? commitInfo.parents[0]! : null
+    return resolveImageSides({
+      mode: 'graph',
+      scope: 'all',
+      baseRef: parent0,
+      targetRef: selectedCommit,
+      x: graphFileInfo.x,
+      y: graphFileInfo.y,
+      untracked: false,
+      path: graphFileInfo.path,
+      origPath: graphFileInfo.origPath,
+    })
+  }, [viewTab, selectedFile, refsMode, baseRef, targetRef, diffScope, graphFileInfo, commitInfo, selectedCommit, graphWorktreeFile, ready])
+
+  // Image-diff lifecycle: both ends load whenever the comparison's sources
+  // change (a scope switch reads the index blob, a ref switch another
+  // commit). An `empty` end answers locally, so no request travels for the
+  // added/deleted side of a picture.
+  useEffect(() => {
+    // The whole-file view brings its own bytes: fetching a second copy for a
+    // comparison nothing is showing would double the memory for large images.
+    if (cwd === undefined || imageSides === null || effectiveView === 'file') {
+      setBeforeBytes({ kind: 'idle' })
+      setAfterBytes({ kind: 'idle' })
+      return
+    }
+    let alive = true
+    setBeforeBytes({ kind: 'loading' })
+    setAfterBytes({ kind: 'loading' })
+    void loadImageSide(cwd, imageSides.before).then(next => { if (alive) setBeforeBytes(next) })
+    void loadImageSide(cwd, imageSides.after).then(next => { if (alive) setAfterBytes(next) })
+    return () => { alive = false }
+  }, [cwd, imageSides, effectiveView])
+
+  // The picture/source choice belongs to one file: a new selection opens on
+  // the pictures again (a sticky source view would hide the new picture).
+  useEffect(() => {
+    setImageSource(false)
+  }, [selected])
+
+  /** The picture-diff wiring handed to whichever pane is on screen
+   *  (undefined for every non-image file, which keeps the text diff path). */
+  const imageDiff = useMemo(() => {
+    if (imageSides === null) return undefined
+    const label = (plan: ImageSidePlan): string => {
+      if (plan.side.kind === 'worktree') return t('compare.worktree')
+      if (plan.side.kind === 'index') return t('scope.staged')
+      if (plan.side.kind !== 'ref') return ''
+      // A picked commit arrives as a 40-hex id: the caption gets the short form.
+      return /^[0-9a-f]{40}$/.test(plan.side.ref) ? plan.side.ref.slice(0, 7) : plan.side.ref
+    }
+    return {
+      before: imageEndState(beforeBytes),
+      after: imageEndState(afterBytes),
+      mode: imageMode,
+      onModeChange: setImageMode,
+      view: (imageSource ? 'source' : 'compare') as 'compare' | 'source',
+      onViewChange: (next: 'compare' | 'source'): void => { setImageSource(next === 'source') },
+      beforeLabel: label(imageSides.before),
+      afterLabel: label(imageSides.after),
+    }
+  }, [imageSides, beforeBytes, afterBytes, imageMode, imageSource, t])
+
   // The worktree virtual row's file diff (graph view): plain worktree-vs-HEAD
   // semantics — same loader the changes view uses, scoped to this pane.
   useEffect(() => {
@@ -1149,6 +1293,10 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     setHunkNotice(null)
     setPreviewSource(false)
     setPreviewBytes({ kind: 'idle' })
+    setImageSource(false)
+    setImageMode('side')
+    setBeforeBytes({ kind: 'idle' })
+    setAfterBytes({ kind: 'idle' })
     setHistoryState({ kind: 'closed' })
   }, [])
 
@@ -2696,6 +2844,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                           useInput={useInput}
                           inputActions={inputActions}
                           onDraftAdd={addDraft}
+                          image={imageDiff}
                           t={t}
                         />
                       )}
@@ -2862,6 +3011,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                           useInput={useInput}
                           inputActions={inputActions}
                           onDraftAdd={addDraft}
+                          image={imageDiff}
                           t={t}
                         />
                       )}
@@ -2967,6 +3117,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     useInput={useInput}
                     inputActions={inputActions}
                     onDraftAdd={addDraft}
+                    image={imageDiff}
                     t={t}
                   />
                 )}

@@ -548,8 +548,9 @@ assert.ok(patch0 !== null && patch1 !== null)
   assert.equal(svg.mime, 'image/svg+xml')
   const text = await gitFileBytes(repo, 'doc.txt', undefined)
   assert.equal(text.ok, false, 'unsniffable file refuses honestly')
-  const missing = await gitFileBytes(repo, 'nope.png', undefined).catch(e => ({ ok: false, error: String(e?.message ?? e) }))
-  assert.equal(missing.ok, false)
+  const missing = await gitFileBytes(repo, 'nope.png', undefined)
+  assert.equal(missing.ok, true)
+  assert.equal(missing.missing, true, 'a path absent at this source answers missing, never throws')
   const escape = await gitFileBytes(repo, '../escape.png', undefined).catch(e => ({ ok: false, error: String(e?.message ?? e) }))
   assert.equal(escape.ok, false, 'path escape refuses')
   // history bytes: committed png readable at its commit
@@ -664,6 +665,44 @@ try {
   assert.equal(apps.ok, true)
   assert.ok(apps.apps.length > 0)
   assert.ok(apps.apps.some(app => app.id === 'default' && app.available))
+}
+
+// 24. Image-diff byte sources (file-bytes): the staged blob reads the index
+//     copy, and a path absent at the requested source answers `missing` —
+//     the added/deleted side of an image diff, not a failure.
+{
+  const { writeFileSync: writeBin } = await import('node:fs')
+  const pngOld = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02, 0x03, 0x04])
+  const pngNew = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x09, 0x08, 0x07, 0x06])
+  writeBin(join(repo, 'shot.png'), pngOld)
+  sh(repo, 'add', 'shot.png')
+  sh(repo, 'commit', '-m', 'image fixture')
+  const head = await gitFileBytes(repo, 'shot.png', 'HEAD')
+  assert.equal(head.ok, true)
+  assert.equal(head.missing, false)
+  assert.deepEqual(Buffer.from(head.base64, 'base64'), pngOld)
+  // A revision staged but not committed: index and worktree carry it, HEAD differs.
+  writeBin(join(repo, 'shot.png'), pngNew)
+  sh(repo, 'add', 'shot.png')
+  const staged = await gitFileBytes(repo, 'shot.png', undefined, 'index')
+  assert.equal(staged.ok, true)
+  assert.deepEqual(Buffer.from(staged.base64, 'base64'), pngNew)
+  const worktree = await gitFileBytes(repo, 'shot.png', undefined)
+  assert.deepEqual(Buffer.from(worktree.base64, 'base64'), pngNew)
+  // An added file has no base side at all.
+  writeBin(join(repo, 'fresh.png'), pngNew)
+  assert.equal((await gitFileBytes(repo, 'fresh.png', 'HEAD')).missing, true)
+  assert.equal((await gitFileBytes(repo, 'fresh.png', undefined, 'index')).missing, true)
+  // A deleted file has no target side left.
+  rmSync(join(repo, 'shot.png'))
+  sh(repo, 'rm', '--cached', 'shot.png')
+  assert.deepEqual(Buffer.from((await gitFileBytes(repo, 'shot.png', 'HEAD')).base64, 'base64'), pngOld)
+  assert.equal((await gitFileBytes(repo, 'shot.png', undefined, 'index')).missing, true)
+  assert.equal((await gitFileBytes(repo, 'shot.png', undefined)).missing, true)
+  // The two sources are mutually exclusive — the index can never ride in as
+  // a ref argument (normalizeBaseRef rejects ':').
+  const both = await gitFileBytes(repo, 'shot.png', 'HEAD', 'index').catch(e => ({ ok: false, error: String(e?.message ?? e) }))
+  assert.equal(both.ok, false)
 }
 
 try {

@@ -166,6 +166,10 @@ export interface GitFileBytesPayload {
   size: number
   /** True when only a capped prefix was served (no full preview). */
   truncated: boolean
+  /** True when the path does not exist at the requested source — the added
+   *  (no base side) or deleted (no target side) end of an image diff. That
+   *  is a normal state, not a failure: base64/mime arrive empty. */
+  missing?: boolean
 }
 
 /** One blame row: the commit that last touched that final line. */
@@ -320,6 +324,9 @@ export interface GitFileDiffArgs {
   base: string | null; target: string | null; ws: boolean
 }
 export interface GitFileRefArgs { cwd: string; path: string; ref?: string }
+/** `file-bytes` adds the staged-blob source (see readPreviewBytes): the base
+ *  of an unstaged image diff, the target of a staged one. */
+export interface GitFileBytesArgs { cwd: string; path: string; ref?: string; stage?: 'index' }
 export interface GitCwdArgs { cwd: string }
 export interface GitFsListArgs { cwd: string; path?: string }
 export interface GitLogArgs { cwd: string; limit?: number; skip?: number }
@@ -388,7 +395,7 @@ export interface GitActionArgs {
   blame: GitBlameArgs
   'file-history': GitFileHistoryArgs
   'file-content': GitFileRefArgs
-  'file-bytes': GitFileRefArgs
+  'file-bytes': GitFileBytesArgs
   'list-files': GitCwdArgs
   'fs-list': GitFsListArgs
   'git-init': GitConfirmArgs

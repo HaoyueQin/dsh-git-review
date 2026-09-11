@@ -596,12 +596,28 @@ export function sniffPreviewMime(bytes: Uint8Array): PreviewMime | null {
   for (let n = 0; n < bytes.length; n++) {
     if (bytes[n] === 0) return null
   }
-  // Byte-scan the probe (stays binary-safe — no string decoding).
+  // Byte-scan the probe (stays binary-safe — no string decoding). XML allows
+  // a prolog before the root element and real exporters use it: skip the
+  // `<?xml?>` declaration, `<!DOCTYPE …>` declarations and comments in any
+  // order. Without this an Inkscape/Illustrator SVG answers "not previewable"
+  // and the picture diff shows a load failure.
   let at = 0
   while (at < bytes.length && (bytes[at] === 0x20 || bytes[at] === 0x09 || bytes[at] === 0x0A || bytes[at] === 0x0D)) at += 1
-  if (ascii(at, '<?xml')) {
-    while (at < bytes.length && bytes[at] !== 0x3E) at += 1
-    at += 1
+  // Bounded: every branch advances `at`; the guard only stops a pathological
+  // prolog from scanning forever.
+  for (let prolog = 0; prolog < 16; prolog++) {
+    if (ascii(at, '<!--')) {
+      at += 4
+      while (at < bytes.length && !ascii(at, '-->')) at += 1
+      at = Math.min(bytes.length, at + 3)
+    } else if (ascii(at, '<!') || ascii(at, '<?')) {
+      // DOCTYPE (or any other declaration / processing instruction) runs to
+      // the next '>'.
+      while (at < bytes.length && bytes[at] !== 0x3E) at += 1
+      at += 1
+    } else {
+      break
+    }
     while (at < bytes.length && (bytes[at] === 0x20 || bytes[at] === 0x09 || bytes[at] === 0x0A || bytes[at] === 0x0D)) at += 1
   }
   // '<svg' must end at a tag delimiter — '<svgx…' is not SVG.

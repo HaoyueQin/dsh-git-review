@@ -912,16 +912,40 @@ function runGitBytes(root: string, args: readonly string[], byteCap: number = PR
   })
 }
 
+/** One preview answer (file-bytes + asset). `missing` marks "no file at that
+ *  source" — the added/deleted end of an image diff, a normal state. */
+interface PreviewBytes {
+  data: Buffer
+  mime: PreviewMime | null
+  size: number
+  truncated: boolean
+  missing: boolean
+}
+
+/** The "no file at this source" answer (added/deleted side of a diff). */
+function missingBytes(): PreviewBytes {
+  return { data: Buffer.alloc(0), mime: null, size: 0, truncated: false, missing: true }
+}
+
 /** Shared preview-byte core (file-bytes + asset): fenced raw bytes plus
  *  the magic-sniffed mime, never trusted from the extension. Throws on
  *  fence/IO failures; an unsniffable type arrives as mime null for the
- *  caller to answer honestly. Oversized files report truncated instead of
- *  entering memory whole. */
-async function readPreviewBytes(cwd: unknown, path: unknown, ref: unknown): Promise<{ data: Buffer; mime: PreviewMime | null; size: number; truncated: boolean }> {
+ *  caller to answer honestly, and a path absent at the requested source
+ *  comes back flagged `missing` instead of throwing. Oversized files report
+ *  truncated instead of entering memory whole.
+ *
+ *  `stage: 'index'` reads the staged blob (`:0:path`) — the base of an
+ *  unstaged image diff and the target of a staged one. It is a separate
+ *  argument because `normalizeBaseRef` deliberately rejects ':' so no ref
+ *  argument can ever address the index. */
+async function readPreviewBytes(cwd: unknown, path: unknown, ref: unknown, stage?: unknown): Promise<PreviewBytes> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
+  const wantIndex = stage === 'index'
+  const wantRef = typeof ref === 'string' && ref !== ''
+  if (wantIndex && wantRef) throw new Error('ref and stage are mutually exclusive')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) {
-    if (typeof ref === 'string' && ref !== '') throw new Error('not a git repository')
+    if (wantRef || wantIndex) throw new Error('not a git repository')
     const workspaceRoot = await resolveWorkspace(cwd)
     if (workspaceRoot === null) throw new Error('not a git repository')
     const absPath = fenceWorkspacePath(workspaceRoot, typeof path === 'string' ? path : '')
@@ -931,24 +955,34 @@ async function readPreviewBytes(cwd: unknown, path: unknown, ref: unknown): Prom
       if (!stat.isFile()) throw new Error('not a regular file')
       size = stat.size
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return missingBytes()
       throw new Error('cannot read file: ' + String((error as Error).message ?? error))
     }
     const data = (await readPrefix(absPath, PREVIEW_CAP)).bytes
     const truncated = size > PREVIEW_CAP
     const mime = sniffPreviewMime(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
-    return { data, mime, size, truncated }
+    return { data, mime, size, truncated, missing: false }
   }
   const absPath = fenceRepoPath(repoRoot, typeof path === 'string' ? path : '')
   const relPath = relative(repoRoot, absPath).replaceAll('\\', '/')
   let data: Buffer
   let size: number
   let truncated: boolean
-  if (typeof ref === 'string' && ref !== '') {
-    const normalized = normalizeBaseRef(ref)
-    if (normalized === null) throw new Error('invalid ref')
-    const resolved = await resolveRangeRef(repoRoot, normalized)
-    if (resolved === null || resolved === EMPTY_TREE_ID) throw new Error('cannot resolve ref')
-    const spec = resolved + ':' + relPath
+  if (wantIndex || wantRef) {
+    let spec: string
+    if (wantIndex) {
+      spec = ':0:' + relPath
+    } else {
+      const normalized = normalizeBaseRef(ref)
+      if (normalized === null) throw new Error('invalid ref')
+      const resolved = await resolveRangeRef(repoRoot, normalized)
+      if (resolved === null || resolved === EMPTY_TREE_ID) throw new Error('cannot resolve ref')
+      spec = resolved + ':' + relPath
+    }
+    // Probe before reading: "absent at this source" is an answer (the added
+    // or deleted side of an image diff), never a failure to surface.
+    const present = await runGit(repoRoot, ['cat-file', '-e', spec]).then(() => true).catch(() => false)
+    if (!present) return missingBytes()
     size = Number((await runGit(repoRoot, ['cat-file', '-s', spec])).trim())
     if (!Number.isFinite(size)) throw new Error('cannot read file at ref')
     const streamed = await runGitBytes(repoRoot, ['cat-file', '-p', spec])
@@ -961,22 +995,26 @@ async function readPreviewBytes(cwd: unknown, path: unknown, ref: unknown): Prom
       if (!stat.isFile()) throw new Error('not a regular file')
       size = stat.size
     } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return missingBytes()
       throw new Error('cannot read file: ' + String((error as Error).message ?? error))
     }
     data = (await readPrefix(absPath, PREVIEW_CAP)).bytes
     truncated = size > PREVIEW_CAP
   }
   const mime = sniffPreviewMime(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
-  return { data, mime, size, truncated }
+  return { data, mime, size, truncated, missing: false }
 }
 
 /** One `file-bytes` answer: the core above, base64 over the JSON wire (the
  *  route stays POST+JSON per the J8-4 CSRF posture). An unsniffable file
- *  is an honest error and the tab keeps its binary notice. */
-export async function gitFileBytes(cwd: unknown, path: unknown, ref: unknown): Promise<GitFileBytesPayload | { ok: false; error: string }> {
-  const { data, mime, size, truncated } = await readPreviewBytes(cwd, path, ref)
+ *  is an honest error and the tab keeps its binary notice; a path absent at
+ *  the requested source answers `missing`, so an image diff renders its
+ *  empty side instead of a load failure. */
+export async function gitFileBytes(cwd: unknown, path: unknown, ref: unknown, stage: unknown): Promise<GitFileBytesPayload | { ok: false; error: string }> {
+  const { data, mime, size, truncated, missing } = await readPreviewBytes(cwd, path, ref, stage)
+  if (missing) return { ok: true, base64: '', mime: '', size: 0, truncated: false, missing: true }
   if (mime === null) return { ok: false, error: 'file is not previewable (unknown type)' }
-  return { ok: true, base64: data.toString('base64'), mime, size, truncated }
+  return { ok: true, base64: data.toString('base64'), mime, size, truncated, missing: false }
 }
 
 /** GET image bytes for markdown `<img>` (the shell renderer only paints
@@ -2448,7 +2486,7 @@ export function apply(ctx: Context): void {
           return
         }
         if (action === 'file-bytes') {
-          respond(res, 200, await gitFileBytes(body['cwd'], body['path'], body['ref']))
+          respond(res, 200, await gitFileBytes(body['cwd'], body['path'], body['ref'], body['stage']))
           return
         }
         if (action === 'list-files') {

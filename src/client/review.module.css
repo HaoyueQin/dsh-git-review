@@ -2030,6 +2030,197 @@ body[data-dsh-bg-glass] .root {
   font-variant-numeric: tabular-nums;
 }
 
+/* ── image diff (picture comparison: 2-up / swipe / onion / difference) ── */
+
+.imageCompareScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 16px var(--dsh-review-bottom-clearance, 140px);
+  scroll-padding-bottom: var(--dsh-review-bottom-clearance, 140px);
+}
+
+/* The mode switch rides its own wrapping line above the pictures (the file
+   header keeps the layout/source controls), mirroring GitHub's split. */
+.imageToolRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-bottom: 10px;
+}
+
+.imageHint {
+  min-width: 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11.5px;
+}
+
+.imagePairRow,
+.imagePairStack {
+  display: flex;
+  gap: 12px;
+}
+
+/* A narrow pane wraps the pair instead of squeezing both pictures. */
+.imagePairRow {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.imagePairStack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.imageEnd {
+  display: flex;
+  flex: 1 1 260px;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+}
+
+.imageEndCap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.imageEndLabel {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.imageEndSize {
+  margin-left: auto;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.imageEndImg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background-color: var(--dsw-alias-bg-layer-2);
+}
+
+.imageEndBlank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  padding: 24px;
+  border: 1px dashed var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+}
+
+/* Overlay modes share one frame so the two pictures line up exactly. */
+.imageOverlayWrap {
+  display: flex;
+  justify-content: center;
+}
+
+.imageFrame {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-secondary);
+  border-radius: 8px;
+  background-color: var(--dsw-alias-bg-layer-2);
+  touch-action: none;
+}
+
+.imageLayer,
+.imageLayerFixed {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
+/* The swipe's clipped layer holds a full-frame image, so it keeps the frame's
+   pixel size while its wrapper narrows to the divider position. */
+.imageLayerFixed {
+  inset: auto;
+  top: 0;
+  left: 0;
+  max-width: none;
+}
+
+.imageClip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.imageLayerOnion {
+  pointer-events: none;
+}
+
+.imageLayerBlend {
+  mix-blend-mode: difference;
+}
+
+.imageSwipeBar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background-color: var(--dsw-alias-state-business-primary);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.imageSwipeBar::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--dsw-alias-state-business-primary);
+  border-radius: 999px;
+  background-color: var(--dsw-alias-bg-layer-2);
+}
+
+.imageSwipeBar:focus-visible {
+  outline: 1px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+/* Onion skin's opacity slider, captioned with the two end labels. */
+.imageSliderRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  margin: 10px auto 0;
+}
+
+.imageSlider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+
 /* ── shared notices / empty states ───────────────────────────────────── */
 
 .paneNotice {

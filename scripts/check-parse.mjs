@@ -4,9 +4,9 @@
 // ".ts"'. No build step, no test framework. NUL in fixtures is written
 // '\x00' (a '\0' before a digit would parse as an octal escape).
 import assert from 'node:assert/strict'
-import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, parseBlamePorcelain, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, sniffPreviewMime, splitDiffSections } from '../src/git-parse.ts'
+import { countMatches, countOccurrences, EMPTY_TREE_ID, mergeDiffRows, mergeStatus, normalizeBaseRef, numstatIndex, OBJECT_ID_RE, parseBlamePorcelain, parseDecorations, parseLogLines, parseNameStatusZ, parseNumstatZ, parsePorcelainV1, parseStashLines, refRange, sniffPreviewMime, splitDiffSections, unquoteHeaderPath } from '../src/git-parse.ts'
 import { buildHunkPatch } from '../src/client/diff-parse.ts'
-import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows, unquoteHeaderPath } from '../src/client/diff-parse.ts'
+import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { langOf, makeLineHighlighter, sliceTokens, splitLineByTokens, tokenizeLine } from '../src/client/highlight.ts'
 import { badgeFor, badgesFor, buildFileTree, filterFiles, isUnmerged, mergeAllFiles } from '../src/client/file-tree.ts'
@@ -1000,5 +1000,71 @@ assert.deepEqual(parsePorcelainV1('R  new.ts\u0000'), [{ x: 'R', y: ' ', path: '
 assert.deepEqual(parseNumstatZ('1\t0'), [], 'a numstat row without two tabs is dropped')
 assert.deepEqual(parseNameStatusZ('M\u0000'), [], 'a status letter without a path is dropped')
 assert.deepEqual(parseNameStatusZ('R100\u0000old.ts\u0000'), [], 'a rename without its destination is dropped')
+
+// 58. "\ No newline" on a context line: the marker belongs to the unchanged
+//     final line (BOTH cells), never to the +/- pair above it.
+const trailingCtx = parseUnifiedDiff([
+  '--- a/f.txt',
+  '+++ b/f.txt',
+  '@@ -1,3 +1,3 @@',
+  ' a',
+  '-b',
+  '+B',
+  ' c',
+  '\\ No newline at end of file',
+].join('\n'))
+const ctxRow = trailingCtx.hunks[0].rows[2]
+assert.equal(ctxRow.kind, 'ctx')
+assert.equal(ctxRow.left.noNewline, true, 'the unchanged last line carries the marker (old side)')
+assert.equal(ctxRow.right.noNewline, true, 'the unchanged last line carries the marker (new side)')
+assert.equal(trailingCtx.hunks[0].rows[1].right.noNewline, undefined, 'the marker never lands on the +/- pair')
+
+// 59. A hunk cut short by junk settles its counts: `damaged` must flag it so
+//     the pane can say the rendering is incomplete.
+const junked = parseUnifiedDiff([
+  '--- a/f.txt',
+  '+++ b/f.txt',
+  '@@ -1,3 +1,3 @@',
+  ' a',
+  'not-a-diff-line',
+  ' b',
+  ' c',
+].join('\n'))
+assert.equal(junked.hunks[0].damaged, true, 'a hunk ended by junk is flagged')
+
+// 60. buildHunkPatch refuses a non-integer index (array access would coerce
+//     it into a bogus slice instead of failing).
+const oneHunkRaw = ['--- a/f.txt', '+++ b/f.txt', '@@ -1 +1 @@', '-x', '+y'].join('\n')
+assert.equal(buildHunkPatch(oneHunkRaw, 0.5), null)
+assert.equal(buildHunkPatch(oneHunkRaw, Number.NaN), null)
+assert.equal(buildHunkPatch(oneHunkRaw, -1), null)
+
+// 61. Decorations: a ref name may itself contain a comma, so the split is on
+//     ', ' — splitting on the bare comma fabricated a phantom entry.
+assert.deepEqual(parseDecorations('HEAD -> feat,a, origin/main, tag: v1'), [
+  { name: 'HEAD', kind: 'head' },
+  { name: 'feat,a', kind: 'head' },
+  { name: 'origin/main', kind: 'other' },
+  { name: 'v1', kind: 'tag' },
+])
+
+// 62. A C-quoted header path decodes before it becomes a section path, so the
+//     host's search counts land on the real file name.
+const quotedSection = splitDiffSections([
+  'diff --git "a/we\\"ird.txt" "b/we\\"ird.txt"',
+  '--- "a/we\\"ird.txt"',
+  '+++ "b/we\\"ird.txt"',
+  '@@ -1 +1 @@',
+  '-a',
+  '+b',
+].join('\n'))
+assert.equal(quotedSection[0].path, 'we"ird.txt')
+
+// 63. Object ids: a sha256 repository writes 64 hex, so both widths parse.
+assert.equal(OBJECT_ID_RE.test('a'.repeat(40)), true)
+assert.equal(OBJECT_ID_RE.test('a'.repeat(64)), true)
+assert.equal(OBJECT_ID_RE.test('a'.repeat(41)), false)
+assert.equal(OBJECT_ID_RE.test('a'.repeat(39)), false)
+assert.equal(OBJECT_ID_RE.test('A'.repeat(40)), false, 'ids are lowercase hex')
 
 console.log('check-parse: all assertions passed')

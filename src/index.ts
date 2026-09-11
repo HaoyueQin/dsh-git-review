@@ -91,13 +91,15 @@ import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
-import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, sniffPreviewMime, splitDiffSections } from './git-parse.ts'
+import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, OBJECT_ID_RE, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, sniffPreviewMime, splitDiffSections } from './git-parse.ts'
 import { installSettings } from './settings-schema.ts'
 import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitFsListPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 import type { PreviewMime } from './git-parse.ts'
 
 /** A bare 40-hex object id (the only commit-id form accepted over the wire). */
-const HASH_ONLY_RE = /^[0-9a-f]{40}$/
+/** A full object id — 40 hex (sha1) or 64 hex (sha256). Pinning 40 rejected
+ *  every id a sha256 repository hands back. */
+const HASH_ONLY_RE = OBJECT_ID_RE
 
 export const name = 'dsh-git-review'
 

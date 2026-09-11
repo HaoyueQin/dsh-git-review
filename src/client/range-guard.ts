@@ -8,6 +8,8 @@
  *  stripping (Node >= 23.6).
  */
 
+import { OBJECT_ID_RE } from '../git-parse.ts'
+
 /** Minimal commit shape for ancestry walks and name resolution. */
 export interface RangeCommit {
   hash: string
@@ -35,7 +37,7 @@ export function resolveRangeHash(
 ): string | null {
   if (value === null || value === undefined) return null
   if (value === 'HEAD') return headHash
-  if (/^[0-9a-f]{40}$/i.test(value)) return value.toLowerCase()
+  if (OBJECT_ID_RE.test(value.toLowerCase())) return value.toLowerCase()
   for (const commit of commits) {
     if (commit.refs !== undefined && commit.refs.some(deco => deco.name === value)) return commit.hash
   }

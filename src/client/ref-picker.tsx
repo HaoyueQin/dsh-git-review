@@ -13,6 +13,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { GitCommitSummary, GitRefEntry } from '../contract.ts'
+import { OBJECT_ID_RE } from '../git-parse.ts'
 import { BranchIcon, CheckIcon, CommitIcon, PopupIcon, TagIcon } from './icons.tsx'
 import { fmtGraphDate } from './graph-view.tsx'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
@@ -29,7 +30,7 @@ function shortHash(hash: string): string {
 /** The icon + label of the current value (drives the trigger chip). */
 function valueLabel(value: string | null, refs: GitRefEntry[] | null, commits: GitCommitSummary[] | null, headLabel: string | null): { icon: JSX.Element; text: string } {
   if (value === null) return { icon: <BranchIcon />, text: headLabel ?? 'HEAD' }
-  if (/^[0-9a-f]{40}$/.test(value)) {
+  if (OBJECT_ID_RE.test(value)) {
     const commit = commits?.find(item => item.hash === value) ?? null
     return {
       icon: <CommitIcon />,

@@ -17,7 +17,7 @@ import type { PanelInfo, UsePanelInfo } from '@deepseek-ai/dsh-client-ui-layout/
 import type { ChangedFile, GitBlameLine, GitBlamePayload, GitCommitFilesPayload, GitCommitSummary, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitFsEntry, GitFsListPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefEntry, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStashPayload, GitStatusFailure, GitStatusPayload, GitWritePayload, OpenApp, OpenAppsPayload } from '../contract.ts'
 import { FileMenu, type FileMenuState } from './file-menu.tsx'
 import { CommitMenu, type CommitMenuState } from './commit-menu.tsx'
-import { EMPTY_TREE_ID } from '../git-parse.ts'
+import { EMPTY_TREE_ID, OBJECT_ID_RE } from '../git-parse.ts'
 import { assetUrl, hostCall } from './api.ts'
 import { BranchIcon, CheckIcon, ChevronIcon, CommentIcon, CommitIcon, FileIcon, GraphIcon, PopupIcon, RefreshIcon, SearchIcon, SwapIcon } from './icons.tsx'
 import { RefPicker } from './ref-picker.tsx'
@@ -1078,7 +1078,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
       if (plan.side.kind === 'index') return t('scope.staged')
       if (plan.side.kind !== 'ref') return ''
       // A picked commit arrives as a 40-hex id: the caption gets the short form.
-      return /^[0-9a-f]{40}$/.test(plan.side.ref) ? plan.side.ref.slice(0, 7) : plan.side.ref
+      return OBJECT_ID_RE.test(plan.side.ref) ? plan.side.ref.slice(0, 7) : plan.side.ref
     }
     return {
       before: imageEndState(beforeBytes),

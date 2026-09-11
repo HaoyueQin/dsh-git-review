@@ -11,7 +11,7 @@
  * Node's native TS type stripping (Node >= 23.6).
  */
 /** Pure diff parsing: no I/O, no React. */
-import { isPathologicalRegex } from '../git-parse.ts'
+import { isPathologicalRegex, unquoteHeaderPath } from '../git-parse.ts'
 
 /** Above this row count any pane renders a prefix (with a notice). */
 export const MAX_RENDER_ROWS = 20_000
@@ -83,7 +83,9 @@ const HUNK_RE = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/
  * no hunks (binary/empty).
  */
 export function buildHunkPatch(raw: string, hunkIndex: number): string | null {
-  if (raw === '' || hunkIndex < 0) return null
+  // A fractional or NaN index would slice a nonsensical patch out of the diff
+  // (array access coerces it), so the guard is an integer check, not `< 0`.
+  if (raw === '' || !Number.isInteger(hunkIndex) || hunkIndex < 0) return null
   const lines = raw.split('\n')
   if (lines[lines.length - 1] === '') lines.pop()
   const hunkStarts: number[] = []
@@ -106,43 +108,8 @@ export function buildHunkPatch(raw: string, hunkIndex: number): string | null {
   return [...lines.slice(0, headEnd), ...lines.slice(bodyStart, bodyEnd), ''].join('\n')
 }
 
-/** Undo git's header quoting for ---/+++ fields. A quoted field keeps its
- *  inner spaces verbatim (verified against real git: space-padded names are
- *  NOT quoted, so trimming them corrupts the path). C-quoted escapes are
- *  restored at the BYTE level (git quotes raw bytes: an octal run may be
- *  one UTF-8 sequence split across escapes). Unquoted fields keep the
- *  historical trim (some drivers trail a tab after the path). */
-export function unquoteHeaderPath(field: string): string {
-  const trimmed = field.trim()
-  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed
-  const body = trimmed.slice(1, -1)
-  if (!body.includes('\\')) return body
-  const encoder = new TextEncoder()
-  const bytes: number[] = []
-  const pushUtf8 = (text: string): void => {
-    for (const byte of encoder.encode(text)) bytes.push(byte)
-  }
-  for (let i = 0; i < body.length;) {
-    if (body[i] !== '\\') {
-      pushUtf8(body[i]!)
-      i += 1
-      continue
-    }
-    const next = body[i + 1] ?? ''
-    if (next === 'n') { bytes.push(0x0a); i += 2; continue }
-    if (next === 't') { bytes.push(0x09); i += 2; continue }
-    if (next === '\\' || next === '"') { bytes.push(next.charCodeAt(0)); i += 2; continue }
-    const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1))
-    if (octal !== null) {
-      bytes.push(parseInt(octal[0], 8) & 0xff)
-      i += 1 + octal[0].length
-      continue
-    }
-    pushUtf8('\\')
-    i += 1
-  }
-  return new TextDecoder().decode(new Uint8Array(bytes))
-}
+// unquoteHeaderPath now lives in ../git-parse.ts: the host's search sections
+// decode the same headers, and that module is shared by both halves.
 
 /** Strip the a/ b/ prefix git prepends to diff paths (runs after
  *  unquoteHeaderPath: a quoted 'a/...' is a prefix, a literal leading
@@ -182,6 +149,11 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
   let runDels: DiffCell[] = []
   let runAdds: DiffCell[] = []
   let lastCell: DiffCell | null = null
+  // A context row owns BOTH sides, so a trailing "\ No newline" marker has to
+  // mark the row rather than only its right cell: the marker annotates the
+  // line printed above it, and an unchanged final line is one line on each
+  // side. Without this the marker landed on the last +/- run instead.
+  let lastCtx: { left: DiffCell; right: DiffCell } | null = null
   // Hunk state flows through parameters/returns (not closures): TypeScript's
   // control-flow analysis cannot see assignments made inside arrow functions,
   // so closure-held `hunk` narrows to `null`/`never` in the loop body.
@@ -216,6 +188,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
     consumedNew = 0
     // A new hunk owns its cells: a stale marker must not leak across.
     lastCell = null
+    lastCtx = null
     return created
   }
   let hunk: ParsedHunk | null = null
@@ -225,6 +198,7 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       // A later '\ No newline' marker must not annotate the previous
       // file's last cell (multi-file texts share this walk).
       lastCell = null
+      lastCtx = null
       continue
     }
     if (hunk === null) {
@@ -259,21 +233,30 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
         finishHunk()
       }
       lastCell = null
+      lastCtx = null
       continue
     }
     if (line.startsWith('\\')) {
-      // "\ No newline at end of file" annotates the cell right before it.
-      if (lastCell !== null) lastCell.noNewline = true
+      // "\ No newline at end of file" annotates the line printed right above
+      // it — and a context line is that line on BOTH sides.
+      if (lastCtx !== null) {
+        lastCtx.left.noNewline = true
+        lastCtx.right.noNewline = true
+      } else if (lastCell !== null) {
+        lastCell.noNewline = true
+      }
       continue
     }
     if (line.startsWith('-')) {
       lastCell = { no: oldNo++, text: line.slice(1) }
+      lastCtx = null
       if (hunk !== null) consumedOld += 1
       runDels.push(lastCell)
       continue
     }
     if (line.startsWith('+')) {
       lastCell = { no: newNo++, text: line.slice(1) }
+      lastCtx = null
       if (hunk !== null) consumedNew += 1
       runAdds.push(lastCell)
       continue
@@ -286,12 +269,16 @@ export function parseUnifiedDiff(text: string): ParsedDiff {
       const text = line === '' ? '' : line.slice(1)
       consumedOld += 1
       consumedNew += 1
-      hunk.rows.push({ kind: 'ctx', left: { no: oldNo++, text }, right: { no: newNo++, text } })
+      const left: DiffCell = { no: oldNo++, text }
+      const right: DiffCell = { no: newNo++, text }
+      hunk.rows.push({ kind: 'ctx', left, right })
+      lastCell = right
+      lastCtx = { left, right }
       continue
     }
-    // Unknown body line: end the hunk (safety against malformed input).
-    flushRun(hunk)
-    hunk = null
+    // Unknown body line: end the hunk (safety against malformed input) — and
+    // settle its counts, or `damaged` never flags a hunk that junk cut short.
+    finishHunk()
   }
   finishHunk()
   return result

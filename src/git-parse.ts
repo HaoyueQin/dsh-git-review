@@ -297,7 +297,9 @@ export interface DecorationEntry {
  */
 export function parseDecorations(raw: string): DecorationEntry[] {
   const out: DecorationEntry[] = []
-  for (const piece of raw.split(',')) {
+  // Split on ', ' — a ref name may itself contain a comma (git allows one),
+  // and splitting on the bare comma fabricated a phantom 'other' entry.
+  for (const piece of raw.split(', ')) {
     const item = piece.trim()
     if (item === '') continue
     if (item.startsWith('HEAD -> ')) {
@@ -327,7 +329,11 @@ export interface LogLine {
   body: string
 }
 
-const HASH_RE = /^[0-9a-f]{40}$/
+/** A full object id: SHA-1 (40 hex) or SHA-256 (64 hex). Pinning 40 silently
+ *  blanked the graph and blame in a sha256 repository while porcelain and
+ *  name-status kept working, so nothing looked broken. */
+export const OBJECT_ID_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+const HASH_RE = OBJECT_ID_RE
 
 /**
  * Parse `git log --all --format=%H%x1f%P%x1f%an%x1f%at%x1f%D%x1f%s%x1f%b%x1e`
@@ -359,7 +365,7 @@ export interface BlameRow {
 export function parseBlamePorcelain(raw: string): BlameRow[] {
   const rows: BlameRow[] = []
   const meta = new Map<string, { author: string; timestamp: number; summary: string }>()
-  const HEADER = /^([0-9a-f]{40}) (\d+) (\d+)(?: \d+)?$/
+  const HEADER = /^([0-9a-f]{40}(?:[0-9a-f]{24})?) (\d+) (\d+)(?: \d+)?$/
   let current: { hash: string; origLine: number; finalLine: number } | null = null
   const flush = (): void => {
     if (current === null) return
@@ -452,6 +458,49 @@ export function parseStashLines(raw: string): StashLine[] {
   return out
 }
 
+/** Undo git's header quoting for ---/+++ fields. A quoted field keeps its
+ *  inner spaces verbatim (verified against real git: space-padded names are
+ *  NOT quoted, so trimming them corrupts the path). C-quoted escapes are
+ *  restored at the BYTE level (git quotes raw bytes: an octal run may be
+ *  one UTF-8 sequence split across escapes). Unquoted fields keep the
+ *  historical trim (some drivers trail a tab after the path).
+ *
+ *  `core.quotepath=false` only exempts non-ASCII: a path with a quote,
+ *  backslash or control byte stays C-quoted, so every reader of a header
+ *  path (the diff pane and the search sections both) must come through
+ *  here or the counts land on a quoted phantom path. */
+export function unquoteHeaderPath(field: string): string {
+  const trimmed = field.trim()
+  if (trimmed.length < 2 || !trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed
+  const body = trimmed.slice(1, -1)
+  if (!body.includes('\\')) return body
+  const encoder = new TextEncoder()
+  const bytes: number[] = []
+  const pushUtf8 = (text: string): void => {
+    for (const byte of encoder.encode(text)) bytes.push(byte)
+  }
+  for (let i = 0; i < body.length;) {
+    if (body[i] !== '\\') {
+      pushUtf8(body[i]!)
+      i += 1
+      continue
+    }
+    const next = body[i + 1] ?? ''
+    if (next === 'n') { bytes.push(0x0a); i += 2; continue }
+    if (next === 't') { bytes.push(0x09); i += 2; continue }
+    if (next === '\\' || next === '"') { bytes.push(next.charCodeAt(0)); i += 2; continue }
+    const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1))
+    if (octal !== null) {
+      bytes.push(parseInt(octal[0], 8) & 0xff)
+      i += 1 + octal[0].length
+      continue
+    }
+    pushUtf8('\\')
+    i += 1
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes))
+}
+
 /** One per-file section of a full `git diff` text. */
 export interface DiffSection {
   /** Path parsed from the +++ (or ---) header line; null when unclear. */
@@ -482,10 +531,10 @@ export function splitDiffSections(diffText: string): DiffSection[] {
     if (current === null) continue
     if (!current.started) {
       if (line.startsWith('+++ ')) {
-        const field = line.slice(4).trim()
+        const field = unquoteHeaderPath(line.slice(4))
         if (field !== '/dev/null') current.path = field.startsWith('b/') ? field.slice(2) : field
       } else if (line.startsWith('--- ') && current.path === null) {
-        const field = line.slice(4).trim()
+        const field = unquoteHeaderPath(line.slice(4))
         if (field !== '/dev/null') current.path = field.startsWith('a/') ? field.slice(2) : field
       } else if (line.startsWith('@@')) {
         current.started = true

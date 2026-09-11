@@ -8,7 +8,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec, type WordHighlighter, type WordSpans } from './diff-parse.ts'
+import { countRenderableMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, rowHasMatch, unifyHunkRows, MAX_RENDER_ROWS, type DiffCell, type PairRow, type ParsedDiff, type SearchEngine, type SearchSpec, type WordHighlighter, type WordSpans } from './diff-parse.ts'
 import { makeLineHighlighter, sliceTokens, type TokenSpan } from './highlight.ts'
 import { renderMarkedText, searchParts } from './marked-text.tsx'
 import { CommentIcon, ExpandIcon, CollapseIcon, HistoryIcon } from './icons.tsx'
@@ -308,7 +308,7 @@ export function DiffPane({ file, diff, truncated, loading, binary, size, full, o
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [activeMatch, setActiveMatch] = useState(0)
   const matchRowCount = useMemo(
-    () => (unified ? countUnifiedMatches(parsed, engine) : countMatchRows(parsed, engine)),
+    () => countRenderableMatches(parsed, engine, unified),
     [parsed, engine, unified],
   )
   useEffect(() => {

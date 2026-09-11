@@ -412,9 +412,11 @@ assert.deepEqual(mergeBase[0].outEdges, [{ from: 0, to: 0, color: 0 }, { from: 0
 assert.deepEqual(mergeBase[1].inEdges, [{ from: 0, to: 0, color: 0 }])
 assert.deepEqual(mergeBase[1].pass, [{ lane: 1, color: 1 }])
 assert.deepEqual(mergeBase[2].inEdges, [{ from: 1, to: 1, color: 1 }])
-// 29b. Dead trailing slots don't widen the canvas: after the merge above
-//      every lane is freed, so the last row draws at width 1, not 2.
-assert.equal(mergeBase[2].laneCount, 1)
+// 29b. Dead trailing slots don't widen the canvas — but the row's OWN lane
+//      always counts: H3 sits in lane 1, so the canvas stays 2 wide even
+//      though every other lane is free (at width 1 its node is clipped away,
+//      which the old "live only" count did).
+assert.equal(mergeBase[2].laneCount, 2)
 
 // 30. countMatches: literal case-insensitive default; the optional case and
 //     regex toggles; an invalid regex counts 0 (never throws).

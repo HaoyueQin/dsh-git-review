@@ -141,6 +141,9 @@ function dirOf(path: string): string {
  */
 export function resolveMdAsset(mdPath: string, url: string): string | null {
   if (/^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|data:|#)/.test(url)) return null
+  // A protocol-relative URL (`//host/path`) is external too: reading it as a
+  // repo-root path aimed the asset endpoint at a file that cannot exist.
+  if (url.startsWith('//')) return null
   const clean = url.split('#')[0]!.split('?')[0]!
   if (clean === '') return null
   const base = clean.startsWith('/') ? '' : dirOf(mdPath)

@@ -486,6 +486,31 @@ export function countUnifiedMatches(parsed: ParsedDiff, engine: SearchEngine): n
   return count
 }
 
+/** Matches the pane will actually RENDER — the same row budget `renderHunks`
+ *  walks. Counting the whole parse showed an unreachable "n / m" on a diff
+ *  past MAX_RENDER_ROWS, and navigation then failed silently for the dropped
+ *  rows (nodes[shownMatch] was undefined). */
+export function countRenderableMatches(parsed: ParsedDiff, engine: SearchEngine, unified: boolean): number {
+  if (!engine.active) return 0
+  let budget = MAX_RENDER_ROWS
+  let count = 0
+  for (const hunk of parsed.hunks) {
+    if (budget <= 0) break
+    const rows = hunk.rows.slice(0, budget)
+    budget -= rows.length
+    if (unified) {
+      for (const line of unifyHunkRows(rows)) {
+        if (engine.test(line.text)) count += 1
+      }
+    } else {
+      for (const row of rows) {
+        if (rowHasMatch(row, engine)) count += 1
+      }
+    }
+  }
+  return count
+}
+
 /* ── word-level (in-line) highlight ──────────────────────────────────── */
 
 /** Half-open [start, end) changed spans of one side's text, ascending. */

@@ -82,7 +82,7 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
       try {
         unregister = glass.register({
           plugin: 'dsh-git-review',
-          selectors: ['[data-git-review-toolbar]', '[data-git-review-tree]', '[data-git-review-diff]'],
+          selectors: ['[data-git-review-toolbar]', '[data-git-review-tree]', '[data-git-review-diff]', '[data-git-review-graph]'],
           mode: 'fill',
         })
       } catch {
@@ -122,11 +122,15 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
   // its plugin-configuration card. A deployment without the settings surface
   // never runs this callback — the tab keeps its localStorage fallback and
   // the intersection filter leaves no card behind.
+  // Registration rides the INJECTED scope (raw), not the outer ctx: a
+  // settingsScope that disappears later then takes the card with it instead
+  // of leaving it bound to a dead service.
   ctx.inject(['settingsScope'], (raw) => {
-    const binder = (raw as ClientContext & { settingsScope?: ReviewSettingsBinderFace }).settingsScope
+    const scoped = raw as ClientContext & { settingsScope?: ReviewSettingsBinderFace }
+    const binder = scoped.settingsScope
     if (binder === undefined) return
-    ctx.effect(() => settings.attach(binder.bind({ namespace: SETTINGS_NAMESPACE })), 'dsh-git-review: settings scope')
-    ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+    scoped.effect(() => settings.attach(binder.bind({ namespace: SETTINGS_NAMESPACE })), 'dsh-git-review: settings scope')
+    scoped.slots.inject('settings.plugin.item', () => scoped.slots.register({
       name: 'settings.plugin.item',
       key: SETTINGS_NAMESPACE,
       locale: NS,

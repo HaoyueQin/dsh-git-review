@@ -29,18 +29,15 @@
   /* Theme-token compat aliases (ponytail: batch-rename call sites later).
    * Verified against ui-theme design-platform.css (0.1.2-rc.1): this
    * harness ships border-l1..l4 + interactive-bg-hover/active — it has
-   * NEVER had border-secondary/border-primary/fill-hover/fill-active.
-   * Every one of those references below silently resolved to
-   * currentColor or transparent (invalid var()), which is why strokes
-   * read as text-colored or missing, hover fills never painted, and the
-   * toolbar/tree/diff boundaries were invisible on glass. Mapping them
-   * once here keeps light/dark theming (l2/l3 flip with the theme). */
+   * NEVER had border-secondary/fill-hover/fill-active. Those references
+   * silently resolved to currentColor or transparent (invalid var()), which
+   * is why strokes read as text-colored or missing, hover fills never
+   * painted, and the toolbar/tree/diff boundaries were invisible on glass.
+   * Mapping them once here keeps light/dark theming (l2/l3 flip with the
+   * theme). Only names that still have call sites are kept. */
   --dsw-alias-border-secondary: var(--dsw-alias-border-l2);
-  --dsw-alias-border-primary: var(--dsw-alias-border-l3);
   --dsw-alias-fill-hover: var(--dsw-alias-interactive-bg-hover);
   --dsw-alias-fill-active: var(--dsw-alias-interactive-bg-active);
-  --dsw-alias-border: var(--dsw-alias-border-l2);
-  --dsw-alias-fill-selected: var(--dsw-alias-interactive-bg-hover);
 
   /* Floating-composer clearance (the screenshot bug: tab content scrolled
    * under the floating input card + task strip, neither visible nor
@@ -1114,6 +1111,17 @@ body[data-dsh-bg-glass] .root {
   background: transparent;
 }
 
+/* An active segment that is ALSO disabled (the preview/source switch's shown
+   half) is a state indicator, not a control: it keeps the active look rather
+   than being dimmed by the :disabled rules above, which outrank it. */
+.scopeBtnActive:disabled {
+  color: var(--dsw-alias-label-primary);
+}
+
+.scopeBtnActive:disabled:hover {
+  background: var(--dsw-alias-fill-active);
+}
+
 /* A toggled tool button (ignore-whitespace etc.) reads pressed. */
 .toolBtnActive {
   background: var(--dsw-alias-fill-active);
@@ -1982,7 +1990,7 @@ body[data-dsh-bg-glass] .root {
   min-height: 480px;
   border: 1px solid var(--dsw-alias-border-secondary);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--dsw-static-neutral-00);
 }
 
 /* Image zoom controls (− / ratio / +): one more bounded group in the
@@ -2406,7 +2414,11 @@ body[data-dsh-bg-glass] .root {
 }
 
 body[data-dsh-bg-glass] .commitHeader {
-  background: transparent;
+  /* This header is sticky: a fully transparent fill lets the rows scrolling
+     underneath show through it. Blur what passes below instead of going
+     opaque, so the glass look survives without the text overlap. */
+  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 55%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .commitRow {
@@ -2816,6 +2828,13 @@ body[data-dsh-bg-glass] .commitHeader {
   color: var(--dsw-alias-label-primary);
 }
 
+/* A disabled preference button must not read as clickable (the settings card
+   disables them until the store is ready). */
+.pluginPrefBtn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .pluginPrefBtnActive {
   border-color: var(--dsw-alias-brand-primary);
   background: color-mix(in srgb, var(--dsw-alias-brand-primary) 9%, transparent);
@@ -2861,7 +2880,7 @@ body[data-dsh-bg-glass] .commitHeader {
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-2);
-  box-shadow: 0 2px 12px rgb(0 0 0 / 8%);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--dsw-alias-label-primary) 14%, transparent);
 }
 
 .guideTitle {

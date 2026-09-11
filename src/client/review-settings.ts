@@ -20,7 +20,7 @@ import {
   type PrefsStorage, type ReviewPrefs,
 } from './prefs.ts'
 
-/** The five persisted fields (the ReviewPrefs keys the UI can set). */
+/** The persisted fields (the ReviewPrefs keys the UI can set). */
 export type ReviewSettingsField = keyof ReviewPrefs
 
 /** The scope face this plugin binds — a minimal re-type of ctx.settingsScope's

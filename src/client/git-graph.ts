@@ -132,7 +132,10 @@ export function computeGraphLanes(commits: readonly GraphCommit[]): GraphLaneRow
     // merge keep drawing at peak width.
     let live = tips.length
     while (live > 1 && tips[live - 1]!.hash === null) live -= 1
-    rows.push({ lane, color, inEdges, outEdges, pass, laneCount: live })
+    // The row's own lane can sit past the last live slot (a root commit, or a
+    // first parent folded into another lane, frees its own lane): the canvas
+    // must still cover it or the node and its edges are clipped away.
+    rows.push({ lane, color, inEdges, outEdges, pass, laneCount: Math.max(live, lane + 1) })
   }
   return rows
 }

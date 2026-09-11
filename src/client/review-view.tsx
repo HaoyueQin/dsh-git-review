@@ -524,7 +524,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
     const next = Math.min(GRAPH_WIDTH_MAX, Math.max(GRAPH_WIDTH_MIN, Math.round(base + (event.key === 'ArrowRight' ? step : -step))))
     setGraphListWidth(next)
     try { localStorage.setItem('dsh-git-review.graphWidth', String(next)) } catch { /* private mode — width just doesn't persist */ }
-  }, [graphListWidth])
+  }, [graphListWidth, effectiveGraphWidth])
   // The worktree virtual row's detail state (the graph view can show the
   // uncommitted changes as if they were a "commit").
   const [graphWorktree, setGraphWorktree] = useState(false)
@@ -2332,7 +2332,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                       value={renameValue}
                       onChange={event => { setRenameValue(event.target.value) }}
                       onKeyDown={event => {
-                        if (event.key === 'Enter' && renameValue.trim() !== '' && renameValue.trim() !== ref.name) {
+                        if (event.key === 'Enter' && renameValue.trim() !== '' && renameValue.trim() !== ref.name && !running && !branchBusy) {
                           void executeBranch('rename', { name: ref.name, newName: renameValue.trim() })
                         }
                         if (event.key === 'Escape') setRenameTarget(null)
@@ -2343,7 +2343,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                     <button
                       type="button"
                       className={css.branchIconBtn}
-                      disabled={branchBusy || renameValue.trim() === '' || renameValue.trim() === ref.name}
+                      disabled={branchBusy || running || renameValue.trim() === '' || renameValue.trim() === ref.name}
                       onClick={() => { void executeBranch('rename', { name: ref.name, newName: renameValue.trim() }) }}
                     >
                       {'\u2713'}
@@ -2692,15 +2692,18 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
           </div>
         </div>
       )}
+      {/* Both banners sit OUTSIDE .body: that container is a flex ROW, so a
+          noticeRow placed inside it collapsed to a narrow left column and
+          squeezed the tree/diff instead of spanning the pane. */}
+      {data?.truncated === true && viewTab === 'changes' && <div className={css.noticeRow}>{t('status.truncated')}</div>}
+      {refsMode && rangeReady && viewTab === 'changes' && data !== null && data.files.length === 0 && data.totals.added === 0 && data.totals.deleted === 0 && (
+        <div className={css.noticeRow}>
+          <span>{t('compare.emptyDirection')}</span>
+          {' '}
+          <button type="button" className={css.scopeBtn} title={t('compare.swap')} onClick={swapEnds}>{t('compare.swap')}</button>
+        </div>
+      )}
       <div className={css.body}>
-        {data?.truncated === true && viewTab === 'changes' && <div className={css.noticeRow}>{t('status.truncated')}</div>}
-        {refsMode && rangeReady && viewTab === 'changes' && data !== null && data.files.length === 0 && data.totals.added === 0 && data.totals.deleted === 0 && (
-          <div className={css.noticeRow}>
-            <span>{t('compare.emptyDirection')}</span>
-            {' '}
-            <button type="button" className={css.scopeBtn} title={t('compare.swap')} onClick={swapEnds}>{t('compare.swap')}</button>
-          </div>
-        )}
         {viewTab === 'graph' ? (
           <>
             <section
@@ -3370,7 +3373,7 @@ function NotRepoView({ cwd, root, t, onDidInit, openApps, useInput, inputActions
         {(initError !== null) && <div className={css.noticeRow + ' ' + css.noticeError}>{initError}</div>}
       </header>
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-        <div style={{ width: 280, maxWidth: '40%', borderRight: '1px solid var(--dsw-alias-border, #e5e5e5)', overflowY: 'auto', padding: 8 }}>
+        <div style={{ width: 280, maxWidth: '40%', borderRight: '1px solid var(--dsw-alias-border-secondary)', overflowY: 'auto', padding: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, fontSize: 12, opacity: 0.8 }}>
             <button type="button" className={css.toolBtn} disabled={segments.length === 0} onClick={goUp} title={t('state.notRepo.up')}>
               <span>{t('state.notRepo.up')}</span>
@@ -3392,7 +3395,7 @@ function NotRepoView({ cwd, root, t, onDidInit, openApps, useInput, inputActions
                 event.preventDefault()
                 setMenu({ path: entry.path, x: event.clientX, y: event.clientY, kind: entry.kind })
               }}
-              style={{ display: 'flex', width: '100%', textAlign: 'left', padding: '4px 6px', borderRadius: 6, background: selected === entry.path ? 'var(--dsw-alias-fill-selected, #e8eefc)' : 'transparent', border: 'none', cursor: 'pointer', fontSize: 13 }}
+              style={{ display: 'flex', width: '100%', textAlign: 'left', padding: '4px 6px', borderRadius: 6, background: selected === entry.path ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent', border: 'none', cursor: 'pointer', fontSize: 13 }}
               title={entry.path}
             >
               <span style={{ marginRight: 6 }}>{entry.kind === 'dir' ? '📁' : '📄'}</span>

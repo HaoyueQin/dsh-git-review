@@ -203,9 +203,12 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
  */
 export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, width, showModeRow = true, showFilter = true, listFailed, matchCounts, viewedHas, onToggleViewed, pendingCount, onFileMenu, onDirMenu, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
-  const flat = filter.trim() !== ''
-  // The filtered flat list never needs the tree: skip the O(n log n)
-  // rebuild while typing (all-files mode makes this a keystroke cost).
+  // The filtered flat list never needs the tree: skip the O(n log n) rebuild
+  // while typing (all-files mode makes this a keystroke cost). A tree wider
+  // than one page falls back to that same paged list — recursive rows carry no
+  // budget of their own, so a workspace with thousands of untracked files used
+  // to mount every one of them at once.
+  const flat = filter.trim() !== '' || visible.length > TREE_PAGE
   const tree = useMemo(() => (flat ? null : buildFileTree(visible)), [flat, visible])
   const [shown, setShown] = useState(TREE_PAGE)
   useEffect(() => { setShown(TREE_PAGE) }, [filter, files])

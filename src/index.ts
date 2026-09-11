@@ -1298,7 +1298,11 @@ export async function gitLog(cwd: unknown, limit: unknown, skip: unknown): Promi
       }
       throw new Error('git log failed: ' + (streamed.stderr.trim() || streamed.stdout.trim()))
     }
-    raw = streamed.stdout
+    // A cut feed ends mid-record: drop everything after the last record
+    // terminator rather than parsing a phantom partial commit. The same
+    // guard file-history uses — the two log readers must agree, or the graph
+    // shows a half subject where the history popover shows none.
+    raw = streamed.truncated ? streamed.stdout.slice(0, streamed.stdout.lastIndexOf('\x1e') + 1) : streamed.stdout
     const commits = parseLogLines(raw)
     return { ok: true, commits, truncated: streamed.truncated || commits.length > maxCount }
   }
@@ -1506,9 +1510,15 @@ function runGitCapture(root: string, args: readonly string[], timeoutMs: number 
       encoding: 'utf8',
       env: gitEnv(),
     }, (error, stdout, stderr) => {
+      // execFile reports transport failures (timeout, maxBuffer) with a
+      // STRING code plus `killed` — that is not an exit status. The literal
+      // -1 keeps those distinguishable from git's own 1, which callers read
+      // as a meaningful success (git grep's "no match", commit's "nothing to
+      // commit"): collapsing them to 1 made a timed-out search answer "0
+      // matches".
       const code = error === null
         ? 0
-        : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : 1
+        : typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : -1
       resolvePromise({ code, stdout: String(stdout), stderr: String(stderr) })
     })
   })

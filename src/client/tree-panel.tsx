@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ChangedFile } from '../contract.ts'
-import { badgesFor, buildFileTree, collectDirFiles, filterFiles, type TreeDir, type TreeEntry } from './file-tree.ts'
+import { badgesFor, buildFileTree, collectDirFiles, filterFiles, flattenTree, type TreeDir, type TreeEntry } from './file-tree.ts'
 import { ChevronIcon, SearchIcon } from './icons.tsx'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { FileCounts } from './file-counts.tsx'
@@ -15,7 +15,7 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { NS, ReviewKey } from './locales.ts'
 import css from './review.module.css'
 
-/** Flat-list page size: bounds the mounted rows in all-files mode. */
+/** Rows mounted per page: bounds the flat list and the flattened tree. */
 const TREE_PAGE = 300
 
 type T = PropsLocale<typeof NS>['t']
@@ -138,62 +138,33 @@ function FileRow({ entry, depth, selected, onSelect, matchCount, viewedHas, onTo
   )
 }
 
-/** Render one tree node (dir or file) at its depth. */
-function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchCounts, viewedHas, onToggleViewed, onFileMenu, onDirMenu, t }: {
-  entry: TreeEntry
+/** Render one directory row. The panel flattens the tree itself (see
+ *  flattenTree), so this never recurses and one bounded row slice mounts. */
+function DirRow({ dir, depth, collapsed, onToggleDir, onDirMenu }: {
+  dir: TreeDir
   depth: number
-  selected: string | null
-  onSelect: (path: string) => void
   collapsed: ReadonlySet<string>
   onToggleDir: (path: string) => void
-  matchCounts: ReadonlyMap<string, number> | undefined
-  viewedHas?: (blob: string) => boolean
-  onToggleViewed?: (blob: string) => void
-  onFileMenu?: (path: string, x: number, y: number, file: ChangedFile) => void
   onDirMenu?: (path: string, x: number, y: number, files: ChangedFile[]) => void
-  t: T
 }) {
-  if (entry.kind === 'file') {
-    return <FileRow entry={entry} depth={depth} selected={selected} onSelect={onSelect} matchCount={matchCounts?.get(entry.path)} viewedHas={viewedHas} onToggleViewed={onToggleViewed} onFileMenu={onFileMenu} t={t} />
-  }
-  const dir: TreeDir = entry
   const isCollapsed = collapsed.has(dir.path)
   return (
-    <div>
-      <button
-        type="button"
-        className={css.dirRow}
-        style={{ paddingLeft: 6 + depth * 12 }}
-        onClick={() => { onToggleDir(dir.path) }}
-        onContextMenu={onDirMenu === undefined || dir.path === '' ? undefined : (event) => {
-          event.preventDefault()
-          event.stopPropagation()
-          onDirMenu(dir.path, event.clientX, event.clientY, collectDirFiles(dir))
-        }}
-        title={dir.path === '' ? undefined : dir.path}
-      >
-        <ChevronIcon rotated={!isCollapsed} />
-        <span className={css.dirName}>{dir.name}</span>
-        <span className={css.dirCount}>{dir.fileCount}</span>
-      </button>
-      {!isCollapsed && dir.children.map(child => (
-        <Node
-          key={child.kind + ':' + child.path}
-          entry={child}
-          depth={depth + 1}
-          selected={selected}
-          onSelect={onSelect}
-          collapsed={collapsed}
-          onToggleDir={onToggleDir}
-          matchCounts={matchCounts}
-          viewedHas={viewedHas}
-          onToggleViewed={onToggleViewed}
-          onFileMenu={onFileMenu}
-          onDirMenu={onDirMenu}
-          t={t}
-        />
-      ))}
-    </div>
+    <button
+      type="button"
+      className={css.dirRow}
+      style={{ paddingLeft: 6 + depth * 12 }}
+      onClick={() => { onToggleDir(dir.path) }}
+      onContextMenu={onDirMenu === undefined || dir.path === '' ? undefined : (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onDirMenu(dir.path, event.clientX, event.clientY, collectDirFiles(dir))
+      }}
+      title={dir.path === '' ? undefined : dir.path}
+    >
+      <ChevronIcon rotated={!isCollapsed} />
+      <span className={css.dirName}>{dir.name}</span>
+      <span className={css.dirCount}>{dir.fileCount}</span>
+    </button>
   )
 }
 
@@ -203,13 +174,14 @@ function Node({ entry, depth, selected, onSelect, collapsed, onToggleDir, matchC
  */
 export function TreePanel({ files, selected, onSelect, filter, onFilterChange, collapsed, onToggleDir, mode, onModeChange, width, showModeRow = true, showFilter = true, listFailed, matchCounts, viewedHas, onToggleViewed, pendingCount, onFileMenu, onDirMenu, t }: TreePanelProps) {
   const visible = useMemo(() => filterFiles(files, filter), [files, filter])
-  // The filtered flat list never needs the tree: skip the O(n log n) rebuild
-  // while typing (all-files mode makes this a keystroke cost). A tree wider
-  // than one page falls back to that same paged list — recursive rows carry no
-  // budget of their own, so a workspace with thousands of untracked files used
-  // to mount every one of them at once.
-  const flat = filter.trim() !== '' || visible.length > TREE_PAGE
+  // A filtered list renders as the flat paged list (no tree is needed while
+  // typing, so the O(n log n) rebuild is skipped). Otherwise the tree is
+  // flattened once and rendered as one bounded slice of rows: recursive rows
+  // carried no budget of their own, so a workspace with thousands of untracked
+  // files used to mount every one at once.
+  const flat = filter.trim() !== ''
   const tree = useMemo(() => (flat ? null : buildFileTree(visible)), [flat, visible])
+  const treeRows = useMemo(() => (tree === null ? [] : flattenTree(tree.children, collapsed)), [tree, collapsed])
   const [shown, setShown] = useState(TREE_PAGE)
   useEffect(() => { setShown(TREE_PAGE) }, [filter, files])
   return (
@@ -270,23 +242,34 @@ export function TreePanel({ files, selected, onSelect, filter, onFilterChange, c
                 </button>
               )}
             </>
-            : (tree?.children ?? []).map(child => (
-              <Node
-                key={child.kind + ':' + child.path}
-                entry={child}
-                depth={0}
-                selected={selected}
-                onSelect={onSelect}
-                collapsed={collapsed}
-                onToggleDir={onToggleDir}
-                matchCounts={matchCounts}
-                viewedHas={viewedHas}
-                onToggleViewed={onToggleViewed}
-                onFileMenu={onFileMenu}
-                onDirMenu={onDirMenu}
-                t={t}
-              />
-            ))}
+            : <>
+              {treeRows.slice(0, shown).map(row => row.entry.kind === 'file'
+                ? <FileRow
+                  key={'f:' + row.entry.path}
+                  entry={row.entry}
+                  depth={row.depth}
+                  selected={selected}
+                  onSelect={onSelect}
+                  matchCount={matchCounts?.get(row.entry.path)}
+                  viewedHas={viewedHas}
+                  onToggleViewed={onToggleViewed}
+                  onFileMenu={onFileMenu}
+                  t={t}
+                />
+                : <DirRow
+                  key={'d:' + row.entry.path}
+                  dir={row.entry}
+                  depth={row.depth}
+                  collapsed={collapsed}
+                  onToggleDir={onToggleDir}
+                  onDirMenu={onDirMenu}
+                />)}
+              {treeRows.length > shown && (
+                <button type="button" className={css.scopeBtn} onClick={() => { setShown(value => value + TREE_PAGE) }}>
+                  {t('tree.showMore', { count: treeRows.length - shown })}
+                </button>
+              )}
+            </>}
       </div>
     </div>
   )

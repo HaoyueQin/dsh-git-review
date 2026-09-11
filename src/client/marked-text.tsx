@@ -44,13 +44,18 @@ function matchRanges(text: string, engine: SearchEngine): Array<readonly [number
 export function renderMarkedText(text: string, engine: SearchEngine, tokens: TokenSpan[] | null): ReactNode {
   if (tokens === null || tokens.length === 0) return searchParts(text, engine)
   const ranges = matchRanges(text, engine)
-  const cut = (start: number, end: number): ReactNode => {
+  /** Cut the matches overlapping [start, end). `from` is the first range that
+   *  can still reach into this segment — walk past it and a long match spanning
+   *  a token boundary would be lost. */
+  const cut = (start: number, end: number, from: number): ReactNode => {
     const nodes: ReactNode[] = []
     let cursor = start
-    for (const [from, to] of ranges) {
-      if (to <= start || from >= end) continue
-      const left = Math.max(from, start)
-      const right = Math.min(to, end)
+    for (let i = from; i < ranges.length; i++) {
+      const [rangeStart, rangeEnd] = ranges[i]!
+      if (rangeStart >= end) break
+      const left = Math.max(rangeStart, start)
+      const right = Math.min(rangeEnd, end)
+      if (right <= left) continue
       if (left > cursor) nodes.push(text.slice(cursor, left))
       nodes.push(<mark key={left} className={css.matchMark}>{text.slice(left, right)}</mark>)
       cursor = right
@@ -58,8 +63,13 @@ export function renderMarkedText(text: string, engine: SearchEngine, tokens: Tok
     if (cursor < end) nodes.push(text.slice(cursor, end))
     return nodes.length === 0 ? null : nodes
   }
+  // Segments and ranges are both position-ordered, so one forward cursor skips
+  // the ranges each segment has already passed: O(segments + ranges) instead
+  // of re-scanning every match for every token of the line.
+  let rangeAt = 0
   return splitLineByTokens(text, tokens).map((seg, index) => {
-    const inner = cut(seg.start, seg.end)
+    while (rangeAt < ranges.length && ranges[rangeAt]![1] <= seg.start) rangeAt += 1
+    const inner = cut(seg.start, seg.end, rangeAt)
     return seg.kind === null ? <span key={index}>{inner}</span> : <span key={index} className={tokenClass(seg.kind)}>{inner}</span>
   })
 }

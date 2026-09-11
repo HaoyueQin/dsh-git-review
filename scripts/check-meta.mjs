@@ -174,4 +174,34 @@ assert.ok(fontTokens.length > 0, 'font variables were actually found (not a vacu
 const unknownFontTokens = fontTokens.filter(token => !ALLOWED_FONT_TOKENS.has(token))
 assert.deepEqual(unknownFontTokens, [], 'font tokens the harness does not define: ' + unknownFontTokens.join(', '))
 
+// 10. Network timeouts read from ONE table (src/action-timeouts.ts). The
+//     client used to keep its own slow-action list and missed tag-push: the
+//     host allowed it 120s while the browser aborted at 10s, so a slow tag
+//     push surfaced as "host unavailable" while git ran on. Both directions
+//     are locked here — the host's uses of NETWORK_TIMEOUT_MS must cover
+//     exactly the declared actions, and the client must keep no second list.
+const timeouts = read('src/action-timeouts.ts')
+// Read the declaration LINE: `readonly string[]` carries a `]` of its own, so
+// slicing to the first `]` stopped before the array and the lock was vacuous.
+const listLine = timeouts.split('\n').find(line => line.includes('export const NETWORK_ACTIONS'))
+assert.ok(listLine !== undefined, 'NETWORK_ACTIONS is exported')
+const declaredActions = [...listLine.matchAll(/'([\w-]+)'/g)].map(m => m[1])
+assert.ok(declaredActions.length > 0, 'NETWORK_ACTIONS is not empty')
+const apiSource = read('src/client/api.ts')
+assert.ok(/hostTimeoutMs\(action\)/.test(apiSource), 'the client derives its timeout from the shared table')
+assert.ok(!/SLOW_ACTIONS/.test(apiSource), 'the client keeps no private slow-action list')
+// `export` is optional: gitPush is a plain `async function`, and a pattern
+// requiring `export` silently attributed its timeout to the previous handler.
+const hostFns = [...dispatch.matchAll(/(?:export )?async function (\w+)/g)].map(m => ({ name: m[1], at: m.index }))
+const networkFns = new Set()
+for (const use of dispatch.matchAll(/NETWORK_TIMEOUT_MS\)/g)) {
+  const owner = hostFns.filter(fn => fn.at < use.index).at(-1)
+  assert.ok(owner !== undefined, 'every NETWORK_TIMEOUT_MS use sits inside a host handler')
+  networkFns.add(owner.name)
+}
+const actionByFn = new Map([...dispatch.matchAll(/if \(action === '([\w-]+)'\) \{\s*respond\(res, 200, await (\w+)\(/g)].map(m => [m[2], m[1]]))
+const hostNetworkActions = [...networkFns].map(fn => actionByFn.get(fn))
+assert.ok(hostNetworkActions.every(name => typeof name === 'string'), 'every network handler is dispatched by name')
+assert.deepEqual([...hostNetworkActions].sort(), [...declaredActions].sort(), 'host NETWORK_TIMEOUT_MS actions == NETWORK_ACTIONS')
+
 console.log('check-meta: all assertions passed (' + refs.size + ' css refs, ' + cssDef.size + ' css defs, ' + dynamicKeys.length + ' locale keys, ' + argKeys.length + ' actions)')

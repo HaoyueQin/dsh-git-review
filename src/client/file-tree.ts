@@ -105,6 +105,30 @@ export function collectDirFiles(dir: TreeDir): ChangedFile[] {
 }
 
 
+/** One row of the flattened tree: the entry plus its indent depth. */
+export interface TreeRow {
+  entry: TreeEntry
+  depth: number
+}
+
+/**
+ * Flatten the tree in render order, skipping the children of collapsed
+ * directories (a collapsed directory still contributes its own row). The panel
+ * renders a bounded slice of these rows, so a workspace with thousands of
+ * files keeps its tree shape without mounting every node at once.
+ */
+export function flattenTree(children: readonly TreeEntry[], collapsed: ReadonlySet<string>): TreeRow[] {
+  const rows: TreeRow[] = []
+  const walk = (entries: readonly TreeEntry[], depth: number): void => {
+    for (const entry of entries) {
+      rows.push({ entry, depth })
+      if (entry.kind === 'dir' && !collapsed.has(entry.path)) walk(entry.children, depth + 1)
+    }
+  }
+  walk(children, 0)
+  return rows
+}
+
 /** Flat filter over the file list (empty query returns the input order). */
 export function filterFiles(files: readonly ChangedFile[], query: string): ChangedFile[] {
   const q = query.trim().toLowerCase()

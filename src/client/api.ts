@@ -17,15 +17,7 @@ export function assetUrl(cwd: string, path: string, ref?: string | null): string
 }
 
 import type { GitActionArgs } from '../contract.ts'
-
-/** Read requests are local git commands: 10s is ample. */
-const REQUEST_TIMEOUT_MS = 10_000
-/** Actions that reach the network on the host side. The host allows them 120s
- *  (PUSH_TIMEOUT_MS), so aborting at 10s reported "host unavailable" while git
- *  was still working — and an abort does not stop the host, so the operation
- *  completed behind a failure notice while the UI kept its busy latch. */
-const WRITE_TIMEOUT_MS = 150_000
-const SLOW_ACTIONS = new Set(['push', 'fetch', 'pull', 'conflict-finish'])
+import { CLIENT_TIMEOUT_MARGIN_MS, hostTimeoutMs } from '../action-timeouts.ts'
 
 /**
  * POST one action to the fenced API.
@@ -43,7 +35,12 @@ export async function hostCall<T, A extends keyof GitActionArgs>(action: A, body
 export async function hostCall<T>(action: string, body: unknown): Promise<T | null>;
 export async function hostCall<T>(action: string, body: unknown): Promise<T | null> {
   const controller = new AbortController()
-  const timeoutMs = SLOW_ACTIONS.has(action) ? WRITE_TIMEOUT_MS : REQUEST_TIMEOUT_MS
+  // One shared table (src/action-timeouts.ts) decides both ends: the client
+  // waits a margin past whatever the host allows that action, so a slow push
+  // (or a slow read on a huge repository) reports git's own answer instead of
+  // aborting early — an abort never stops the host, and the caller's busy
+  // latch would stay set behind a bogus "host unavailable".
+  const timeoutMs = hostTimeoutMs(action) + CLIENT_TIMEOUT_MARGIN_MS
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const res = await fetch(BASE + '/' + encodeURIComponent(action), {

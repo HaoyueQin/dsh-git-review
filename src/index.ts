@@ -92,6 +92,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
 import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, OBJECT_ID_RE, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, sniffPreviewMime, splitDiffSections } from './git-parse.ts'
+import { GIT_TIMEOUT_MS, NETWORK_TIMEOUT_MS } from './action-timeouts.ts'
 import { installSettings } from './settings-schema.ts'
 import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitFsListPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 import type { PreviewMime } from './git-parse.ts'
@@ -122,8 +123,6 @@ export const inject: string[] = []
 const API_PREFIX = '/dsh-git-review/api'
 /** Request body cap — status/file-diff bodies are tiny. */
 const BODY_CAP = 64 * 1024
-/** One git invocation's wall clock; local repos answer far under this. */
-const GIT_TIMEOUT_MS = 30_000
 /** execFile kill-switch; DIFF_CAP below is the real answer-size contract. */
 const GIT_MAX_BUFFER = 64 * 1024 * 1024
 /** Diff text cap: larger answers truncate at a line boundary (flagged). */
@@ -902,14 +901,16 @@ function runGitBytes(root: string, args: readonly string[], byteCap: number = PR
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolvePromise({ code: 1, data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
+      // Transport failure, not an exit status — see runGitCapture.
+      resolvePromise({ code: -1, data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
     })
     child.once('close', (code: number | null) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      // Cap kill is truncated success; timeout/crash stays an error.
-      resolvePromise({ code: (truncated && !timedOut) ? 0 : (code ?? 1), data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
+      // Cap kill is truncated success; timeout/crash stays an error — and a
+      // transport failure reports -1, never git's own 1 (runGitCapture rule).
+      resolvePromise({ code: (truncated && !timedOut) ? 0 : (timedOut ? -1 : (code ?? -1)), data: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8'), truncated })
     })
   })
 }
@@ -1494,9 +1495,6 @@ function parseGrepCounts(raw: string, stripPrefix?: string): GitSearchPayload['m
   return out
 }
 
-/** Push is a network operation: it outlives the local-git timeout. */
-const PUSH_TIMEOUT_MS = 120_000
-
 /**
  * Run one git command and resolve BOTH streams plus the exit code — never
  * rejects. Commit's "nothing to commit" lands on stdout with exit 1: that is
@@ -1564,7 +1562,8 @@ function runGitStreamed(root: string, args: readonly string[], timeoutMs: number
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolvePromise({ code: 1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
+      // Transport failure, not an exit status — see runGitCapture.
+      resolvePromise({ code: -1, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
     })
     child.once('close', (code: number | null) => {
       if (settled) return
@@ -1572,8 +1571,8 @@ function runGitStreamed(root: string, args: readonly string[], timeoutMs: number
       clearTimeout(timer)
       // A cap kill is truncated success (partial stdout + truncated flag);
       // a timeout or crash stays an error so callers throw instead of
-      // parsing a prefix as a whole answer.
-      resolvePromise({ code: (truncated && !timedOut) ? 0 : (code ?? 1), stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
+      // parsing a prefix as a whole answer — reported as -1, never git's own 1.
+      resolvePromise({ code: (truncated && !timedOut) ? 0 : (timedOut ? -1 : (code ?? -1)), stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8'), truncated })
     })
   })
 }
@@ -1624,7 +1623,7 @@ export async function gitFetch(cwd: unknown, confirm: unknown): Promise<GitWrite
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
-  const result = await runGitCapture(repoRoot, ['fetch', '--all'], PUSH_TIMEOUT_MS)
+  const result = await runGitCapture(repoRoot, ['fetch', '--all'], NETWORK_TIMEOUT_MS)
   if (result.code !== 0) {
     return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git fetch failed (exit ' + result.code + ')' }
   }
@@ -1859,7 +1858,7 @@ async function gitPush(cwd: unknown, confirm: unknown): Promise<GitWritePayload>
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
-  const result = await runGitCapture(repoRoot, ['push'], PUSH_TIMEOUT_MS)
+  const result = await runGitCapture(repoRoot, ['push'], NETWORK_TIMEOUT_MS)
   if (result.code !== 0) {
     return { ok: false, error: result.stderr.trim() || result.stdout.trim() || 'git push failed (exit ' + result.code + ')' }
   }
@@ -1930,7 +1929,7 @@ export async function gitPull(cwd: unknown, rebase: unknown, confirm: unknown): 
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
   if (repoRoot === null) throw new Error('not a git repository')
-  return writeAnswer(await runGitCapture(repoRoot, ['pull', rebase === true ? '--rebase' : '--no-rebase', '--no-edit'], PUSH_TIMEOUT_MS), 'pull')
+  return writeAnswer(await runGitCapture(repoRoot, ['pull', rebase === true ? '--rebase' : '--no-rebase', '--no-edit'], NETWORK_TIMEOUT_MS), 'pull')
 }
 
 /** One `conflict-resolve` answer: take one file's ours/theirs half and
@@ -1967,7 +1966,7 @@ export async function gitConflictFinish(cwd: unknown, action: unknown, kind: unk
   }
   if (action !== 'continue' && action !== 'abort') return { ok: false, error: 'conflict action must be continue or abort' }
   const verb = action === 'abort' ? '--abort' : '--continue'
-  return writeAnswer(await runGitCapture(repoRoot, [op, verb], PUSH_TIMEOUT_MS), op + ' ' + verb)
+  return writeAnswer(await runGitCapture(repoRoot, [op, verb], NETWORK_TIMEOUT_MS), op + ' ' + verb)
 }
 
 /** Guard shared by the branch endpoints: confirm flag + normalizeBaseRef
@@ -1978,6 +1977,9 @@ async function branchGuard(repoRoot: string, confirm: unknown, rawName: unknown)
   const name = normalizeBaseRef(rawName)
   if (name === null) return { ok: false, error: 'invalid branch name' }
   const check = await runGitCapture(repoRoot, ['check-ref-format', '--branch', name])
+  // A negative code is a transport failure (timeout / over-buffer), not git's
+  // verdict on the name — surface it as a failure, not as an invalid name.
+  if (check.code < 0) throw new Error(check.stderr.trim() || 'git check-ref-format failed')
   if (check.code !== 0) {
     return { ok: false, error: check.stderr.trim() || check.stdout.trim() || 'invalid branch name: ' + name }
   }
@@ -2075,6 +2077,7 @@ async function tagGuard(repoRoot: string, confirm: unknown, rawName: unknown): P
   const name = normalizeBaseRef(rawName)
   if (name === null) return { ok: false, error: 'invalid tag name' }
   const check = await runGitCapture(repoRoot, ['check-ref-format', 'refs/tags/' + name])
+  if (check.code < 0) throw new Error(check.stderr.trim() || 'git check-ref-format failed')
   if (check.code !== 0) {
     return { ok: false, error: check.stderr.trim() || check.stdout.trim() || 'invalid tag name: ' + name }
   }
@@ -2118,7 +2121,7 @@ export async function gitTagPush(cwd: unknown, name: unknown, confirm: unknown):
   if (repoRoot === null) throw new Error('not a git repository')
   const guard = await tagGuard(repoRoot, confirm, name)
   if (!guard.ok) return guard
-  return writeAnswer(await runGitCapture(repoRoot, ['push', 'origin', 'refs/tags/' + guard.name], PUSH_TIMEOUT_MS), 'push tag')
+  return writeAnswer(await runGitCapture(repoRoot, ['push', 'origin', 'refs/tags/' + guard.name], NETWORK_TIMEOUT_MS), 'push tag')
 }
 
 /* ─ file-tree context-menu operations ──────────────────────────── */

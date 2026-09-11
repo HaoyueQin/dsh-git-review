@@ -68,7 +68,11 @@ export function htmlFallbackForPreview(text: string): string {
 }
 
 const INLINE_IMG = /!\[([^\]]*)\]\(\s*<?([^\s)>]+)>?((?:\s+["'][^"']*["'])?\s*)\)/g
-const REF_USE = /!\[[^\]]*\]\[([^\]]*)\]/g
+// The id is captured ALONG WITH the alt text: `![alt][]` is a collapsed
+// reference whose id IS the alt text, so a pattern that kept only the bracket
+// contents compared '' with every definition id and never matched — the image
+// was skipped by collectMdAssets and a remote one slipped past defangRemoteImages.
+const REF_USE = /!\[([^\]]*)\]\[([^\]]*)\]/g
 const REF_DEF = /^( {0,3}\[[^\]]+\]:\s*<?)([^\s>]+)(>?.*)$/gm
 
 /** Collect rewritable asset URLs: inline `![](url)` plus used reference
@@ -83,7 +87,7 @@ export function collectMdAssets(text: string): string[] {
   for (let hit = INLINE_IMG.exec(text); hit !== null; hit = INLINE_IMG.exec(text)) take(hit[2]!)
   const usedIds = new Set<string>()
   REF_USE.lastIndex = 0
-  for (let hit = REF_USE.exec(text); hit !== null; hit = REF_USE.exec(text)) usedIds.add(hit[1]!)
+  for (let hit = REF_USE.exec(text); hit !== null; hit = REF_USE.exec(text)) usedIds.add(hit[2] === '' ? hit[1]! : hit[2]!)
   if (usedIds.size > 0) {
     REF_DEF.lastIndex = 0
     for (let hit = REF_DEF.exec(text); hit !== null; hit = REF_DEF.exec(text)) {
@@ -113,7 +117,10 @@ export function defangRemoteImages(text: string): string {
   }
   if (remoteIds.size === 0) return inline
   REF_USE.lastIndex = 0
-  return inline.replace(REF_USE, (whole, id: string) => (remoteIds.has(id.toUpperCase()) ? whole.slice(1) : whole))
+  return inline.replace(REF_USE, (whole, alt: string, id: string) => {
+    const ref = id === '' ? alt : id
+    return remoteIds.has(ref.toUpperCase()) ? whole.slice(1) : whole
+  })
 }
 
 /** Rewrite collected URLs via `table` (raw -> absolute same-origin asset URL;

@@ -9,7 +9,7 @@ import { buildHunkPatch } from '../src/client/diff-parse.ts'
 import { countMatchRows, countUnifiedMatches, makeSearchEngine, makeWordHighlighter, parseUnifiedDiff, splitByMatch, unifyHunkRows } from '../src/client/diff-parse.ts'
 import { computeGraphLanes } from '../src/client/git-graph.ts'
 import { langOf, makeLineHighlighter, sliceTokens, splitLineByTokens, tokenizeLine } from '../src/client/highlight.ts'
-import { badgeFor, badgesFor, buildFileTree, filterFiles, isUnmerged, mergeAllFiles } from '../src/client/file-tree.ts'
+import { badgeFor, badgesFor, buildFileTree, filterFiles, flattenTree, isUnmerged, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs, normalizeWorkspaceKey } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
 import { previewKindForPath } from '../src/client/preview-kind.ts'
@@ -216,6 +216,11 @@ assert.equal(libDir.kind === 'dir' ? libDir.fileCount : -1, 2)
 assert.equal(tree.fileCount, 3)
 assert.equal(filterFiles(treeFiles, 'DEEP').length, 1)
 assert.equal(filterFiles(treeFiles, '  ').length, 3)
+// 15b. flattenTree: render order with indent depth; a collapsed directory
+//      keeps its own row and drops its children (the panel's row budget).
+assert.deepEqual(flattenTree(tree.children, new Set()).map(r => r.depth + ':' + r.entry.name), ['0:lib', '1:deep', '2:b.ts', '1:a.ts', '0:readme.md'])
+assert.deepEqual(flattenTree(tree.children, new Set(['lib'])).map(r => r.entry.name), ['lib', 'readme.md'])
+assert.deepEqual(flattenTree(tree.children, new Set(['lib/deep'])).map(r => r.depth + ':' + r.entry.name), ['0:lib', '1:deep', '1:a.ts', '0:readme.md'])
 
 // 16. Badge priority: untracked beats added, added beats deleted, renamed
 //     and modified map to their own glyphs.
@@ -878,6 +883,12 @@ assert.deepEqual(tokenizeLine('// /* not a block */', 'c').map(t => t.kind), ['c
 assert.equal(defangRemoteImages('![a](https://e.com/y.png)'), '[a](https://e.com/y.png "external image")')
 assert.equal(defangRemoteImages('![a](docs/x.svg)'), '![a](docs/x.svg)')
 assert.equal(defangRemoteImages('![a][id]\n\n[id]: https://e.com/y.png'), '[a][id]\n\n[id]: https://e.com/y.png')
+// 52b. Collapsed reference `![alt][]`: its id IS the alt text, so the asset is
+//      collected and a remote definition defangs like the named form.
+assert.deepEqual(collectMdAssets('![shot][]\n\n[shot]: docs/a.png'), ['docs/a.png'])
+assert.deepEqual(collectMdAssets('![a][b]\n\n[b]: docs/b.png'), ['docs/b.png'])
+assert.equal(defangRemoteImages('![shot][]\n\n[shot]: https://e.com/y.png'), '[shot][]\n\n[shot]: https://e.com/y.png')
+assert.equal(defangRemoteImages('![a][b]\n\n[b]: docs/x.svg'), '![a][b]\n\n[b]: docs/x.svg')
 assert.equal(htmlFallbackForPreview('<a href="javascript:alert(1)">x</a>'), 'x')
 assert.equal(htmlFallbackForPreview('<a href="https://e.com">x</a>'), '[x](https://e.com)')
 

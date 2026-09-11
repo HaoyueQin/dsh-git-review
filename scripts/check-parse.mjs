@@ -93,7 +93,7 @@ let parsed = parseUnifiedDiff([
   '-gone',
   '+here',
   ' tail',
-  '@@ -10,3 +10,4 @@ fn b',
+  '@@ -10,2 +10,4 @@ fn b',
   ' ctx',
   '+one',
   '+two',
@@ -112,6 +112,7 @@ assert.equal(h1.rows[1].right.text, 'here')
 assert.equal(h2.rows.map(r => r.kind).join(','), 'ctx,add,add,ctx')
 assert.equal(h2.rows[1].right.no, 11)
 assert.equal(h2.rows[1].left, null)
+assert.equal(h2.damaged, false, 'the declared counts match the body (no truncated-hunk flag)')
 
 // 9. Pure additions have no old side; counts count.
 parsed = parseUnifiedDiff([
@@ -473,7 +474,7 @@ const pairDiff = parseUnifiedDiff([
 const pairEngine = makeSearchEngine({ query: 'alpha' })
 assert.equal(countUnifiedMatches(pairDiff, pairEngine), 2)
 
-// 34. Preferences normalization: junk store falls back to defaults, valid
+// 34b. Preferences normalization: junk store falls back to defaults, valid
 // values survive, unknown keys drop (a hand-edited localStorage must never
 // crash the tab).
 assert.deepEqual(normalizePrefs(null), DEFAULT_PREFS)
@@ -628,7 +629,7 @@ assert.deepEqual(numToks.filter(t => t.kind === 'num').map(t => 'x = 404abc + 0x
 const exactHl = makeLineHighlighter('a.ts', 5)
 assert.notEqual(exactHl.line('ab = '), null, 'exact-budget line still tokenizes')
 assert.equal(exactHl.line('more'), null, 'spent budget degrades')
-// 40b. Gap-preserving segments: tokens plus the plain text between them tile
+// 40c. Gap-preserving segments: tokens plus the plain text between them tile
 //      the line exactly, so highlight rendering never drops identifiers or
 //      whitespace (regression: renderers that mapped tokens alone lost text).
 const gapLine = 'const x = 1'
@@ -989,5 +990,15 @@ assert.equal(sniff('<?xml version="1.0"?>\n<!-- c -->\n<!DOCTYPE svg>\n<svg/>'),
 assert.equal(sniff('<!-- unterminated\n<svg/>'), null, 'an unterminated comment never reaches the root')
 assert.equal(sniff('<!DOCTYPE html><html><body>x</body></html>'), null)
 assert.equal(sniff('<?xml version="1.0"?><html/>'), null, 'a prolog never turns HTML into SVG')
+
+// 57. Malformed-record guards: short tokens, missing companion paths and
+//     empty name-status paths are dropped instead of fabricating entries —
+//     branches no other fixture exercises.
+assert.deepEqual(parsePorcelainV1('M\u0000'), [], 'a token shorter than four chars is not an entry')
+assert.deepEqual(parsePorcelainV1('M \u0000'), [], 'a token without the status separator is not an entry')
+assert.deepEqual(parsePorcelainV1('R  new.ts\u0000'), [{ x: 'R', y: ' ', path: 'new.ts', origPath: undefined }], 'a rename missing its companion token yields one entry, never two')
+assert.deepEqual(parseNumstatZ('1\t0'), [], 'a numstat row without two tabs is dropped')
+assert.deepEqual(parseNameStatusZ('M\u0000'), [], 'a status letter without a path is dropped')
+assert.deepEqual(parseNameStatusZ('R100\u0000old.ts\u0000'), [], 'a rename without its destination is dropped')
 
 console.log('check-parse: all assertions passed')

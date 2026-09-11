@@ -19,7 +19,10 @@ const read = (rel) => readFileSync(join(ROOT, rel), 'utf8')
 // Comments lie about classes (file names like review.module.css in prose),
 // so they are stripped before matching; the strict head ([A-Za-z_]) keeps
 // numeric fragments (.5px, .04em) out of the definition set.
-const cssText = read('src/client/review.module.css').replace(/\/\*[\s\S]*?\*\//g, '')
+const cssText = read('src/client/review.module.css')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  // An `.ext` inside url(...) is a file name, not a class (url(logo.svg)).
+  .replace(/url\([^)]*\)/g, 'url()')
 const cssDef = new Set(
   [...cssText.matchAll(/\.([A-Za-z_][A-Za-z0-9_-]*)(?![A-Za-z0-9_-])/g)]
     .map(m => m[1]),
@@ -68,10 +71,18 @@ assert.ok(patch.includes("name: '" + pkg.name + "'"), 'patch name matches packag
 // 4. Client inject list ⊆ the build's platform module table (a declared but
 //    unshared module would resolve to undefined at runtime).
 const tsdown = read('tsdown.config.ts')
-const table = [...tsdown.matchAll(/'(@deepseek-ai\/[^']+)'/g)].map(m => m[1])
-const platform = table.filter((value, index) => table.indexOf(value) === index && value !== '@deepseek-ai/cordis' && value !== '@deepseek-ai/schemastery')
+// Read the PLATFORM_MODULES array itself, not every '@deepseek-ai/…' literal
+// in the file: the host half's LIB_EXTERNALS and the purity gate's prefix
+// string would otherwise pass as shared modules.
+const platformBlock = tsdown.slice(tsdown.indexOf('const PLATFORM_MODULES'))
+const platform = [...platformBlock.slice(0, platformBlock.indexOf(']')).matchAll(/'(@deepseek-ai\/[^']+)'/g)].map(m => m[1])
 const outside = pkg.dsh.client.inject.filter((id) => !platform.includes(id))
 assert.deepEqual(outside, [], 'inject entries outside the platform table: ' + outside.join(', '))
+// And the reverse direction: depending on a module being shared without
+// declaring it would leave the bundle requiring a slot the loader never
+// seeds. react is exempt — the shell provides it without an inject entry.
+const undeclared = platform.filter(id => id !== 'react' && id !== 'react/jsx-runtime' && !pkg.dsh.client.inject.includes(id))
+assert.deepEqual(undeclared, [], 'platform modules missing from dsh.client.inject: ' + undeclared.join(', '))
 
 // 5. Prefs/schema field lock: DEFAULT_PREFS keys == schema fields.
 assert.deepEqual([...Object.keys(DEFAULT_PREFS)].sort(), [...REVIEW_SETTINGS_FIELDS].sort())
@@ -101,7 +112,7 @@ const earlyReturnAt = reviewView.indexOf("if (status.kind === 'notRepo')")
 assert.ok(earlyReturnAt !== -1, 'ReviewView non-ready early return exists')
 const notRepoViewAt = reviewView.indexOf('function NotRepoView')
 assert.ok(notRepoViewAt > earlyReturnAt, 'NotRepoView follows ReviewView')
-const lateHooks = [...reviewView.slice(earlyReturnAt, notRepoViewAt).matchAll(/\buse[A-Z][A-Za-z]*\s*\(/g)].map(m => m[0])
+const lateHooks = [...reviewView.slice(earlyReturnAt, notRepoViewAt).matchAll(/\buse[A-Z][A-Za-z]*\s*[<(]/g)].map(m => m[0])
 assert.deepEqual(lateHooks, [], 'hooks after the non-ready early return: ' + lateHooks.join(', '))
 
 // 8. Host half: a service may only be read as a property inside a scope that
@@ -151,9 +162,16 @@ const walkCss = (dir) => {
   }
 }
 walkCss(join(ROOT, 'src'))
+// The scan must see EVERY font variable, not just the --dsw-font-* prefix:
+// the code stack is --ds-font-family-code, so a prefix-limited pattern found
+// nothing and the assertion compared two empty sets — the lock was vacuous
+// from the day it landed. The allow-list below is the harness's real set.
+const FONT_VAR = /var\(\s*(--[A-Za-z0-9-]*font[A-Za-z0-9-]*)/g
+const ALLOWED_FONT_TOKENS = new Set(['--dsw-font-family', '--ds-font-family-code'])
 const fontTokens = [...new Set(cssFiles.flatMap(file =>
-  [...readFileSync(file, 'utf8').matchAll(/var\(\s*(--dsw-font-[A-Za-z0-9_-]+)/g)].map(m => m[1])))]
-const unknownFontTokens = fontTokens.filter(token => token !== '--dsw-font-family')
+  [...readFileSync(file, 'utf8').matchAll(FONT_VAR)].map(m => m[1])))]
+assert.ok(fontTokens.length > 0, 'font variables were actually found (not a vacuous pass)')
+const unknownFontTokens = fontTokens.filter(token => !ALLOWED_FONT_TOKENS.has(token))
 assert.deepEqual(unknownFontTokens, [], 'font tokens the harness does not define: ' + unknownFontTokens.join(', '))
 
 console.log('check-meta: all assertions passed (' + refs.size + ' css refs, ' + cssDef.size + ' css defs, ' + dynamicKeys.length + ' locale keys, ' + argKeys.length + ' actions)')

@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildHunkPatch } from '../src/client/diff-parse.ts'
+import { buildHunkPatch, parseUnifiedDiff } from '../src/client/diff-parse.ts'
 import { gitBlame, gitBranchCreate, gitBranchDelete, gitBranchRename, gitBranchSwitch, gitBranchTrack, gitCherryPick, gitCommit, gitCommitFiles, gitConflictFinish, gitConflictResolve, gitDiscard, gitEnv, gitFetch, gitFileBytes, gitFileDiff, gitFileHistory, gitFileContent, gitFileOp, gitFsList, gitHunkOp, gitInit, gitLastCommit, gitListFiles, gitLog, gitMerge, gitOpenApps, gitOpenWith, gitPull, gitRefs, gitReset, gitRevert, gitSearch, gitStage, gitStash, gitStatus, gitTagCreate, gitTagDelete, gitTagPush, gitUnstage } from '../src/index.ts'
 
 /** Run one git command in cwd (fixtures only — never on user repos). */
@@ -221,11 +221,9 @@ sh(repo, 'checkout', 'main')
   sh(repo, 'add', '-A')
   sh(repo, 'commit', '-m', 'main work')
   const merged = await gitMerge(repo, 'conflicter', false, true)
-  console.log('MERGE RESULT:', JSON.stringify(merged))
   assert.equal(merged.ok, false, 'merge must conflict')
   const mid = await gitStatus(repo, null, null, false)
   assert.equal(mid.inProgress, 'merge')
-  console.log('STATUS:', JSON.stringify({ ip: mid.inProgress, xy: mid.files.map(f => f.x + f.y + ':' + f.path) }))
   const conflicted = mid.files.filter(file => /[UA]{2}|U[AD]|DU/.test(file.x + file.y))
   assert.ok(conflicted.some(file => file.path === 'a.txt'), 'a.txt is unmerged')
   const resolved = await gitConflictResolve(repo, 'a.txt', 'ours', true)
@@ -270,8 +268,9 @@ const worktreeDiff = await gitFileDiff(repo, HUNK_FILE, false, false, undefined,
 assert.equal(worktreeDiff.ok, true)
 if (!('diff' in worktreeDiff) || worktreeDiff.binary === true) throw new Error('expected a text diff')
 const rawDiff = worktreeDiff.diff
-assert.ok(rawDiff.includes('@@ -1,') && rawDiff.includes('@@ -1'), 'two hunks expected')
-assert.ok((rawDiff.match(/^@@ /gm) ?? []).length === 2)
+const hunkHeads = [...rawDiff.matchAll(/^@@ -(\d+)/gm)].map(m => m[1])
+assert.equal(hunkHeads.length, 2, 'two hunks expected')
+assert.notEqual(hunkHeads[0], hunkHeads[1], 'the two hunks start at different lines')
 const patch0 = buildHunkPatch(rawDiff, 0)
 const patch1 = buildHunkPatch(rawDiff, 1)
 assert.ok(patch0 !== null && patch1 !== null)
@@ -308,7 +307,7 @@ assert.ok(patch0 !== null && patch1 !== null)
 
 // 10. blame + file-history + file-content@ref: the history-tracing trio.
 {
-  const blamed = await gitBlame(repo, 'hunk.txt', true)
+  const blamed = await gitBlame(repo, 'hunk.txt', undefined)
   assert.equal(blamed.ok, true)
   assert.ok(blamed.lines.length >= 20)
   const authors = new Set(blamed.lines.map(row => row.author))
@@ -348,9 +347,8 @@ assert.ok(patch0 !== null && patch1 !== null)
   assert.ok(page0.commits.length >= 1)
   const page1 = await gitLog(repo, 3, 2)
   assert.equal(page1.ok, true)
-  if (page0.commits.length >= 3 && page1.commits.length > 0) {
-    assert.ok(!page1.commits.some(c => c.hash === page0.commits[0].hash), 'skip pages forward')
-  }
+  assert.ok(page0.commits.length >= 3 && page1.commits.length > 0, 'the paging fixture still yields both pages')
+  assert.ok(!page1.commits.some(c => c.hash === page0.commits[0].hash), 'skip pages forward')
   // streaming cap surfaces as a boolean, never a crash
   assert.equal(typeof page0.truncated, 'boolean')
   // commit-message bodies ride the log feed (subject-only messages: '')
@@ -384,10 +382,24 @@ assert.ok(patch0 !== null && patch1 !== null)
   const rxBad = await gitSearch(repo, '([', null, null, 'diff', false, true)
   assert.equal(rxBad.ok, true)
   assert.equal(rxBad.matches.length, 0, 'invalid regex counts as 0')
-  // Overlong regex degrades to literal matching (host-stall guard), and the
-  // whitespace flag threads through without breaking the call shape.
-  const rxLong = await gitSearch(repo, 'needle' + 'x'.repeat(120), null, null, 'diff', false, true)
+  // Overlong regex degrades to literal matching (host-stall guard, diff mode
+  // only — content mode greps with git itself): past the 100-char cap '.' stops
+  // being a wildcard. Both files carry a matching diff line, so only the one
+  // holding the LITERAL dots may be counted.
+  const longDots = 'a' + '.'.repeat(120)
+  writeFileSync(join(repo, 'literal.txt'), 'head ' + longDots + ' tail\n')
+  writeFileSync(join(repo, 'wild.txt'), 'head a' + 'b'.repeat(120) + ' tail\n')
+  // Stage ONLY these two: `add -A` would commit the searchable.txt drift the
+  // neighbouring assertions still rely on.
+  sh(repo, 'add', 'literal.txt', 'wild.txt')
+  sh(repo, 'commit', '-m', 'long-query fixtures')
+  writeFileSync(join(repo, 'literal.txt'), 'head ' + longDots + ' tail\nchanged\n')
+  writeFileSync(join(repo, 'wild.txt'), 'head a' + 'b'.repeat(120) + ' tail\nchanged\n')
+  const rxLong = await gitSearch(repo, longDots, null, null, 'diff', false, true)
   assert.equal(rxLong.ok, true)
+  assert.ok(rxLong.matches.some(m => m.path === 'literal.txt'), 'the literal dots still match')
+  assert.ok(!rxLong.matches.some(m => m.path === 'wild.txt'), 'past the cap the dot is no longer a wildcard')
+  sh(repo, 'checkout', '--', 'literal.txt', 'wild.txt')
   const wsCall = await gitSearch(repo, 'needle', null, null, 'diff', false, false, true)
   assert.equal(wsCall.ok, true)
   assert.ok(wsCall.matches.some(m => m.path === 'searchable.txt'), 'ws flag keeps real matches')
@@ -703,6 +715,23 @@ try {
   // a ref argument (normalizeBaseRef rejects ':').
   const both = await gitFileBytes(repo, 'shot.png', 'HEAD', 'index').catch(e => ({ ok: false, error: String(e?.message ?? e) }))
   assert.equal(both.ok, false)
+}
+
+// 25. Truncation honesty (J9-2): a single file's diff past DIFF_CAP comes back
+//     flagged, and the partial answer still parses — the "half an answer is
+//     still an answer" contract the byte caps promise. Without this the cap
+//     could be written as never-truncating and every script stayed green.
+{
+  const bigLines = Array.from({ length: 30000 }, (_, i) => 'line ' + String(i) + ' ' + 'x'.repeat(70))
+  writeFileSync(join(repo, 'big.txt'), bigLines.join('\n') + '\n')
+  sh(repo, 'add', '-A')
+  sh(repo, 'commit', '-m', 'big baseline')
+  writeFileSync(join(repo, 'big.txt'), bigLines.map(line => line.replaceAll('x', 'y')).join('\n') + '\n')
+  const capped = await gitFileDiff(repo, 'big.txt', false, false, undefined, 'all', null, null, false)
+  assert.equal(capped.ok, true)
+  assert.equal(capped.binary, false)
+  assert.equal(capped.truncated, true, 'a diff past DIFF_CAP reports truncated')
+  assert.ok(parseUnifiedDiff(capped.diff).hunks.length > 0, 'the truncated diff still parses')
 }
 
 try {

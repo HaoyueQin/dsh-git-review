@@ -12,7 +12,7 @@ import { langOf, makeLineHighlighter, sliceTokens, splitLineByTokens, tokenizeLi
 import { badgeFor, badgesFor, buildFileTree, filterFiles, flattenTree, isUnmerged, mergeAllFiles } from '../src/client/file-tree.ts'
 import { DEFAULT_PREFS, normalizePrefs, normalizeWorkspaceKey } from '../src/client/prefs.ts'
 import { migrationFields, prefsFromSection, sectionIsDefault } from '../src/client/review-settings.ts'
-import { previewKindForPath } from '../src/client/preview-kind.ts'
+import { needsScriptNotice, previewKindForPath } from '../src/client/preview-kind.ts'
 import { resolveImageSides } from '../src/client/image-sides.ts'
 import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, resolveMdAsset, rewriteMdAssets } from '../src/client/md-preview.ts'
 import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
@@ -1079,5 +1079,16 @@ assert.equal(OBJECT_ID_RE.test('a'.repeat(64)), true)
 assert.equal(OBJECT_ID_RE.test('a'.repeat(41)), false)
 assert.equal(OBJECT_ID_RE.test('a'.repeat(39)), false)
 assert.equal(OBJECT_ID_RE.test('A'.repeat(40)), false, 'ids are lowercase hex')
+
+// 64. The script-deps banner: fires on <script>/<canvas> at any case, stays
+//     quiet for pure CSS-animation pages and lookalike tags (<noscript>,
+//     <scriptless>) — the sandboxed preview animates those without scripts.
+assert.equal(needsScriptNotice('<body style="background:#04060c"><canvas id="scene"></canvas><script>(function(){})()</script></body>'), true)
+assert.equal(needsScriptNotice('<SCRIPT SRC="app.js" DEFER></SCRIPT>'), true)
+assert.equal(needsScriptNotice('<CANVAS class="x"></CANVAS>'), true, 'tag names match case-insensitively')
+assert.equal(needsScriptNotice('<noscript>enable JS</noscript>'), false)
+assert.equal(needsScriptNotice('<scriptless>not a tag</scriptless>'), false)
+assert.equal(needsScriptNotice('<style>@keyframes spin{to{transform:rotate(1turn)}}</style><svg><circle/></svg>'), false)
+assert.equal(needsScriptNotice(''), false)
 
 console.log('check-parse: all assertions passed')

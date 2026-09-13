@@ -13,7 +13,7 @@ import type { NS } from './locales.ts'
 import { FileTypeIcon } from './file-type-icon.tsx'
 import { FileCounts } from './file-counts.tsx'
 import css from './review.module.css'
-import type { PreviewKind } from './preview-kind.ts'
+import { needsScriptNotice, type PreviewKind } from './preview-kind.ts'
 
 type T = PropsLocale<typeof NS>['t']
 
@@ -63,6 +63,9 @@ export interface PreviewPaneProps {
   /** The host served only a capped prefix — no partial image/PDF render. */
   bytesTruncated: boolean
   onShowSource: () => void
+  /** Open the file with the OS default app (script-dependent HTML pages
+   *  offer it from the banner; absent when the caller has no open-with). */
+  onOpenExternal?: () => void
   t: T
 }
 
@@ -70,7 +73,7 @@ export interface PreviewPaneProps {
  * The preview half of the file view (the source half stays FilePane).
  * @param props - the file, its kind, loaded payloads and the way back.
  */
-export function PreviewPane({ file, kind, text, textLoading, textTruncated = false, dataUrl, bytesFailed, bytesTruncated, onShowSource, t }: PreviewPaneProps) {
+export function PreviewPane({ file, kind, text, textLoading, textTruncated = false, dataUrl, bytesFailed, bytesTruncated, onShowSource, onOpenExternal, t }: PreviewPaneProps) {
   const labels = useMemo<MarkdownLabels>(() => ({
     code: { copyLabel: t('preview.copy'), copiedLabel: t('preview.copied') },
     footnotes: t('preview.footnotes'),
@@ -116,6 +119,9 @@ export function PreviewPane({ file, kind, text, textLoading, textTruncated = fal
     setZoom(value)
   }
   const imageReady = kind === 'image' && dataUrl !== null && !bytesTruncated
+  /** A script/canvas HTML page sits inert in the sandboxed iframe (often as
+   *  a black or frozen pane) — say so above the preview, never over it. */
+  const scriptDeps = kind === 'html' && !textLoading && needsScriptNotice(text)
   return (
     <div className={css.diffPane} data-git-review-diff="">
       <div className={css.diffHeader}>
@@ -152,6 +158,16 @@ export function PreviewPane({ file, kind, text, textLoading, textTruncated = fal
           </button>
         </span>
       </div>
+      {scriptDeps && (
+        <div className={css.scriptBanner} role="note">
+          <span className={css.scriptBannerText}>{t('preview.scriptNotice')}</span>
+          {onOpenExternal !== undefined && (
+            <button type="button" className={css.toolBtn} onClick={onOpenExternal}>
+              {t('preview.scriptOpen')}
+            </button>
+          )}
+        </div>
+      )}
       <div className={css.previewScroll} ref={scrollRef}>
         {kind === 'markdown' && (textLoading
           ? <div className={css.paneNotice}>{t('file.loading')}</div>

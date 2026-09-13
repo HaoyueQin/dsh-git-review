@@ -3062,6 +3062,7 @@ export function ReviewView({ cwd: injectedCwd, sessionId, sessionsList, settings
                       bytesFailed={previewBytesFailed}
                       bytesTruncated={previewBytes.kind === 'ready' && previewBytes.truncated}
                       onShowSource={() => { setPreviewSource(true) }}
+                      onOpenExternal={cwd === undefined ? undefined : () => { void openFileApp(selectedFile.path, 'default') }}
                       t={t}
                     />
                   )
@@ -3446,6 +3447,7 @@ function NotRepoView({ cwd, root, t, onDidInit, openApps, useInput, inputActions
                   bytesFailed={false}
                   bytesTruncated={false}
                   onShowSource={() => { setPreviewSource(true) }}
+                  onOpenExternal={selected !== null ? () => { void openEntry(selected, 'default') } : undefined}
                   t={t}
                 />
               ) : null

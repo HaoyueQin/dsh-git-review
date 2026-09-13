@@ -772,6 +772,30 @@ body[data-dsh-bg-glass] .root {
   font-weight: 600;
 }
 
+/* The script-deps banner: same warning strip recipe as .conflictBar, but
+   inside the diff pane above the preview scroll — an HTML page that needs
+   scripts the sandbox never runs must not read as a broken black pane.
+   In flow (flex: none), so it pushes the preview down instead of covering
+   it. */
+.scriptBanner {
+  display: flex;
+  flex: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 40%, var(--dsw-alias-border-secondary));
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+}
+
+.scriptBannerText {
+  flex: 1;
+  min-width: 200px;
+}
+
 /* ── body split ──────────────────────────────────────────────────────── */
 
 .body {

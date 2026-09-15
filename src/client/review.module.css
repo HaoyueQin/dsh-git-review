@@ -1,11 +1,16 @@
 /* dsh-git-review — Review tab chrome. All colors come from the harness's
  * semantic aliases so light/dark themes apply without plugin-side branching.
- * Frosted glass (deepseek-harness-background v1, fill mode) targets
- * [data-git-review-toolbar] / [data-git-review-tree] / [data-git-review-diff]:
- * the registry takes over their background-color + blur chain while the glass
- * is on, and every surface falls back to this stylesheet when it is off.
+ * Frosted glass (deepseek-harness-background v1, fill mode) comes from the
+ * bridge, which OWNS the recipe: the four panels [data-git-review-toolbar] /
+ * [data-git-review-tree] / [data-git-review-diff] / [data-git-review-graph]
+ * and the sticky [data-git-review-graph-header] are registered in
+ * src/client/index.ts. The registry takes over their background-color, sheen
+ * gradient and blur chain while the glass is on, and every surface falls back
+ * to this stylesheet when it is off.
  * Keep fills in this stylesheet (never inline style backgrounds) so the fill
- * takeover wins the cascade.
+ * takeover wins the cascade — and never hand-write a glass recipe here: such a
+ * copy carries the SAME specificity as the generated rule (body[attr]
+ * [attr]), which turns the winner into stylesheet insertion order.
  *
  * Glass gate root override (the actual frosted-glass fix): the background
  * painter makes the app shell base transparent while the glass is on, but
@@ -2421,7 +2426,15 @@ body[data-dsh-bg-glass] .root {
 }
 
 /* Column header row (图/描述/日期/作者/提交), aligned with the data rows
-   via the same grid template the rows set inline. */
+   via the same grid template the rows set inline.
+   Frosted glass for this row comes from the background bridge, NOT from a
+   rule here: the row carries [data-git-review-graph-header] and is registered
+   as a 'fill' surface in src/client/index.ts alongside the panels. It needs an
+   anchor of its own because a registry rule addresses the registered element
+   itself — this header nests inside the registered [data-git-review-graph]
+   panel, so no panel rule ever reached it (the row stayed opaque over frosted
+   neighbours). The paint below is the fallback it keeps when the bridge is
+   absent or its gate is off. */
 .commitHeader {
   position: sticky;
   top: 0;
@@ -2435,14 +2448,6 @@ body[data-dsh-bg-glass] .root {
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-tertiary);
   font-size: 11.5px;
-}
-
-body[data-dsh-bg-glass] .commitHeader {
-  /* This header is sticky: a fully transparent fill lets the rows scrolling
-     underneath show through it. Blur what passes below instead of going
-     opaque, so the glass look survives without the text overlap. */
-  background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 55%, transparent);
-  backdrop-filter: blur(8px);
 }
 
 .commitRow {

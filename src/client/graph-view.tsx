@@ -260,7 +260,7 @@ export function CommitGraph({ commits, lanes, selected, onSelect, collapsed = fa
   }
   return (
     <div ref={listRef} className={css.commitList} style={{ '--graph-w': graphWidth + 'px' } as CSSProperties}>
-      <div className={css.commitHeader} style={{ gridTemplateColumns: columns }} aria-hidden="true">
+      <div className={css.commitHeader} data-git-review-graph-header="" style={{ gridTemplateColumns: columns }} aria-hidden="true">
         <span>{t('graph.col.graph')}</span>
         {density >= 1 && <span>{t('graph.col.subject')}</span>}
         {density >= 2 && <span>{t('graph.col.date')}</span>}

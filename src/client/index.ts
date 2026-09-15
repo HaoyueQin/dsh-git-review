@@ -71,6 +71,18 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
   // Frosted-glass surfaces (deepseek-harness-background v1 bridge, fill mode:
   // the review root paints --dsw-alias-bg-layer-1, outside the auto-transparency
   // table, so the registry takes over the fill as well as the blur chain).
+  // The graph column header is registered SEPARATELY from its panel: it is a
+  // sticky row nested inside [data-git-review-graph], and a registry rule
+  // addresses the registered element itself, never its descendants — without
+  // its own anchor the header kept this stylesheet's opaque paint while every
+  // other surface frosted, which is exactly the "table head will not join the
+  // glass" symptom. Registering it (rather than hand-writing the recipe in
+  // review.module.css) keeps the recipe in ONE place: the sheen + blur chain,
+  // the panel-opacity slider curve and the dark-scheme calibration all ride
+  // the bridge, and a future recipe change follows for free. Hand-rolled
+  // copies carry the SAME specificity as the generated rule (body[attr]
+  // [attr]), so the winner would be stylesheet insertion order — a silent
+  // flip-flop instead of a decision.
   // Zero-dependency: absent bridge means no registration, UI unchanged.
   ctx.effect(() => {
     let unregister: (() => void) | undefined
@@ -82,7 +94,15 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
       try {
         unregister = glass.register({
           plugin: 'dsh-git-review',
-          selectors: ['[data-git-review-toolbar]', '[data-git-review-tree]', '[data-git-review-diff]', '[data-git-review-graph]'],
+          selectors: [
+            '[data-git-review-toolbar]',
+            '[data-git-review-tree]',
+            '[data-git-review-diff]',
+            '[data-git-review-graph]',
+            // The header of the graph column: sticky, therefore it must keep
+            // its own fill (see the effect's comment above).
+            '[data-git-review-graph-header]',
+          ],
           mode: 'fill',
         })
       } catch {

@@ -3,9 +3,10 @@
  *
  * The background plugin publishes an optional third-party registry at
  * `window.__DSH_BACKGROUND_GLASS__` and announces it with a DOM event.
- * Registering the review toolbar, file tree and diff pane gives those
- * surfaces the same wet-glass sheen + shared backdrop-filter chain the
- * built-in surfaces get while the wallpaper glass is on. Everything here
+ * Registering the review toolbar, file tree, diff pane, graph column and its
+ * sticky header gives those surfaces the same wet-glass sheen + shared
+ * backdrop-filter chain the built-in surfaces get while the wallpaper glass
+ * is on. Everything here
  * is zero-dependency and degrades to the ordinary (unchanged) UI when the
  * background plugin is not installed: no global, no event, no
  * registration, no effect.

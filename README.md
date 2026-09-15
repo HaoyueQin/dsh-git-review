@@ -13,7 +13,7 @@
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/v/dsh-git-review?style=flat-square" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/dt/dsh-git-review?style=flat-square" alt="npm downloads"></a>
   <img src="https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="dsh plugin">
-  <img src="https://img.shields.io/badge/dsh-0.1.2--rc.1..0.1.5--rc.1-4D6BFE?style=flat-square" alt="harness 0.1.2-rc.1 through 0.1.5-rc.1">
+  <img src="https://img.shields.io/badge/dsh-0.1.2--rc.1..0.1.6--alpha.1-4D6BFE?style=flat-square" alt="harness 0.1.2-rc.1 through 0.1.6-alpha.1">
   <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">
@@ -50,7 +50,7 @@ DSH Git Review registers a **Review** tab next to Chat and Trajectory in the ses
 - **Decide with history**: a lane commit graph with per-commit files and diffs, blame gutters, per-file history, and reading any file version from history.
 - **Act under guard**: stage / unstage / discard per file or per hunk, commit (plus amend, Ctrl+Enter), commit-and-push, and push; branches (create / switch / rename / delete / merge / track remotes) with fetch and pull; history operations (reset / revert / cherry-pick, per-commit actions from the graph); lightweight tags (create / delete / push); stash; and merge-conflict resolution (ours / theirs, continue / abort). Every write needs explicit confirmation, destructive ones ask twice, and everything locks while the agent is running.
 - **Close the loop**: comment on any diff line and drop it into the composer draft, mark files reviewed (auto-cleared when the file changes again), and keep comment drafts per workspace.
-- **Preview files**: markdown renders with the shell's own Markdown engine, HTML / images / SVG show inline, PDFs open sandboxed — every preview has a source view toggle, and office documents open in your external apps from the tree's right-click menu.
+- **Preview files**: markdown renders with the shell's own Markdown engine, HTML / images / SVG show inline, PDFs open sandboxed — a script-dependent HTML page gets a notice strip with an open-in-browser shortcut instead of sitting black — every preview has a source view toggle, and office documents open in your external apps from the tree's right-click menu.
 - **Picture diffs**: image changes (PNG / JPG / GIF / WebP / BMP / AVIF / ICO / SVG) render as pictures right inside the diff view — 2-up (side by side, or stacked in unified), swipe, onion skin and a difference blend, with the source diff one click away.
 
 Preferences (diff layout, default search scope, graph shape, matching, whitespace, syntax) live in the harness settings Plugins tab and sync instantly with the Review tab.
@@ -74,7 +74,7 @@ dsh plugin --profile web add ./dsh-git-review-<version>.tgz  # the exact filenam
 dsh web
 ```
 
-Requires DeepSeek Harness `0.1.2-rc.1` through `0.1.5-rc.1` (prerelease series are pinned one by one in `peerDependencies`) and git on the host PATH. Outside a git repository the tab offers file browsing with one-click `git init` instead of the review workbench — never a blank screen.
+Requires DeepSeek Harness `0.1.2-rc.1` through `0.1.6-alpha.1` (prerelease series are pinned one by one in `peerDependencies`) and git on the host PATH. Outside a git repository the tab offers file browsing with one-click `git init` instead of the review workbench — never a blank screen.
 
 ## Checks
 

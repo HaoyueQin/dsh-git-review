@@ -13,7 +13,7 @@
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/v/dsh-git-review?style=flat-square" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/dsh-git-review"><img src="https://img.shields.io/npm/dt/dsh-git-review?style=flat-square" alt="npm downloads"></a>
   <img src="https://img.shields.io/badge/dsh-plugin-4D6BFE?style=flat-square&logo=deepseek&logoColor=white" alt="dsh plugin">
-  <img src="https://img.shields.io/badge/dsh-0.1.2--rc.1..0.1.5--rc.1-4D6BFE?style=flat-square" alt="harness 0.1.2-rc.1 through 0.1.5-rc.1">
+  <img src="https://img.shields.io/badge/dsh-0.1.2--rc.1..0.1.6--alpha.1-4D6BFE?style=flat-square" alt="harness 0.1.2-rc.1 through 0.1.6-alpha.1">
   <img src="https://img.shields.io/badge/platform-web-8A9CF5?style=flat-square" alt="platform: web">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/i18n-zh%20%7C%20en-success?style=flat-square" alt="i18n: zh | en">
@@ -50,7 +50,7 @@ DSH Git Review 在会话视图里对话与轨迹旁边注册一个**审查**标�
 - **用历史做判断**：泳道提交图谱（每提交的文件与差异）、blame 边栏、单文件历史，可读历史中任意版本的文件全文。
 - **设防的操作**：按文件或按 hunk 暂存 / 取消暂存 / 放弃，提交（含 amend、Ctrl+Enter）、提交并推送与推送；分支（创建 / 切换 / 重命名 / 删除 / 合并 / 跟踪远端）带拉取与合并上游；历史操作（reset / revert / cherry-pick，可在图谱中对提交直接操作）；轻量标签（创建 / 删除 / 推送）；贮藏；以及合并冲突解决（ours / theirs，继续 / 中止）。每次写操作都要明确确认，破坏性操作确认两遍，agent 运行中全部上锁。
 - **审查闭环**：在任意差异行写评论并送入对话输入框，把文件标为已审（文件再改自动取消），评论草稿按工作区分存。
-- **文件预览**：markdown 用宿主自带的 Markdown 引擎渲染，HTML / 图片 / SVG 内联展示，PDF 沙箱打开——每种预览都有源码切换，办公文档请在文件树右键用外部应用打开。
+- **文件预览**：markdown 用宿主自带的 Markdown 引擎渲染，HTML / 图片 / SVG 内联展示，PDF 沙箱打开——依赖脚本的 HTML 页面会被提示条标注并给出「在浏览器打开」，而不是停留在一块黑屏；每种预览都有源码切换，办公文档请在文件树右键用外部应用打开。
 - **图片对比**：图片变更（PNG / JPG / GIF / WebP / BMP / AVIF / ICO / SVG）直接在差异视图里渲染成图——并排（双列左右、单列上下）、滑动、叠加、差异四种模式，源码 diff 一键切换。
 
 偏好（差异布局、默认搜索范围、图谱形态、匹配方式、空白、语法高亮）放在 harness 设置的插件标签页，与审查标签页即时互相同步。
@@ -72,7 +72,7 @@ dsh plugin --profile web add ./dsh-git-review-<version>.tgz  # 以 pnpm pack 实
 dsh web
 ```
 
-要求 DeepSeek Harness `0.1.2-rc.1` 至 `0.1.5-rc.1`（prerelease 系列在 `peerDependencies` 里逐个钉住），且宿主 PATH 里有 git。工作区不在 git 仓库内时，标签页提供文件浏览与一键初始化，而不是审查工作台——绝不白屏。
+要求 DeepSeek Harness `0.1.2-rc.1` 至 `0.1.6-alpha.1`（prerelease 系列在 `peerDependencies` 里逐个钉住），且宿主 PATH 里有 git。工作区不在 git 仓库内时，标签页提供文件浏览与一键初始化，而不是审查工作台——绝不白屏。
 
 ## 检查
 

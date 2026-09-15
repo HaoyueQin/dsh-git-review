@@ -186,10 +186,12 @@ async function loadFileContent(cwd: string, path: string, ref?: string | null): 
 
 /** Root-scoped panel selection, as ui-layout's global seat declares it. The
  *  seat arrives with the layout kit; a shell that predates it (the peer range
- *  still covers 0.1.2-rc.1 through 0.1.5-alpha.2) has no usePanelInfo, so the
- *  tab falls back to "the Conversation column is on screen". The fallback has
- *  the same call shape as the real Hook and runs every render, so the Hook
- *  order never depends on which shell is hosting the tab. */
+ *  still covers 0.1.2-rc.1 through 0.1.5-alpha.2 — re-checked on
+ *  0.1.6-alpha.1, where usePanelInfo is present and ui-layout itself is
+ *  untouched) has no usePanelInfo, so the tab falls back to "the Conversation
+ *  column is on screen". The fallback has the same call shape as the real Hook
+ *  and runs every render, so the Hook order never depends on which shell hosts
+ *  the tab. */
 const NO_PANEL_SELECTED: PanelInfo = { activePanelId: null }
 const ALWAYS_VISIBLE_PANEL = ((selector?: (info: PanelInfo) => unknown) =>
   selector === undefined ? NO_PANEL_SELECTED : selector(NO_PANEL_SELECTED)) as UsePanelInfo

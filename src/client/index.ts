@@ -16,10 +16,14 @@
  * land in one place and both surfaces follow.
  *
  * Kernel contract: DeepSeek Harness >= 0.1.2-rc.1. The conversation.view
- * slot and the session-scope runtime shares carry their rc.1 shapes
- * (re-verified unchanged through 0.1.5-rc.1 — re-verify per new rc, same
- * policy as dsh-diff-stat). Anchored on dsh-client-ui-layout for the optional
- * global panel Hook (0.1.5+) read through Partial<GlobalStandardProps>.
+ * slot, the session-scope runtime shares and the settings.plugin.item card
+ * carry their rc.1 shapes (re-verified unchanged through 0.1.6-alpha.1 —
+ * re-verify per new harness, same policy as dsh-diff-stat). The 0.1.6 diff
+ * moved composer-only types into ui-conversation's contract/draft-editor.ts
+ * and added the conversation.input.permission seat; neither is touched here,
+ * and no host DOM class name or structural selector is relied on anywhere in
+ * this plugin. Anchored on dsh-client-ui-layout for the optional global panel
+ * Hook (0.1.5+) read through Partial<GlobalStandardProps>.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'

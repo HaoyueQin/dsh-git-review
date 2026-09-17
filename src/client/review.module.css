@@ -2815,6 +2815,13 @@ body[data-dsh-bg-glass] .root {
   border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
+/* The ≥0.1.6-alpha.2 surface (Plugins page → a bundle's page): the host owns
+   the section container, its padding and dividers, so the panel body keeps
+   only the row rhythm of the card above and adds no second frame. */
+.pluginPanelBody {
+  padding: 2px 0 4px;
+}
+
 .pluginPrefRow {
   display: flex;
   align-items: center;

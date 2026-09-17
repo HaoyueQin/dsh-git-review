@@ -16,14 +16,22 @@
  * land in one place and both surfaces follow.
  *
  * Kernel contract: DeepSeek Harness >= 0.1.2-rc.1. The conversation.view
- * slot, the session-scope runtime shares and the settings.plugin.item card
- * carry their rc.1 shapes (re-verified unchanged through 0.1.6-alpha.1 —
- * re-verify per new harness, same policy as dsh-diff-stat). The 0.1.6 diff
- * moved composer-only types into ui-conversation's contract/draft-editor.ts
- * and added the conversation.input.permission seat; neither is touched here,
+ * slot, the session-scope runtime shares and the settings card carry their
+ * rc.1 shapes (re-verified unchanged through 0.1.6-alpha.2 — re-verify per
+ * new harness, same policy as dsh-diff-stat). The 0.1.6 diff moved
+ * composer-only types into ui-conversation's contract/draft-editor.ts and
+ * added the conversation.input.permission seat; neither is touched here,
  * and no host DOM class name or structural selector is relied on anywhere in
  * this plugin. Anchored on dsh-client-ui-layout for the optional global panel
  * Hook (0.1.5+) read through Partial<GlobalStandardProps>.
+ *
+ * 0.1.6-alpha.2 retired the `settings.plugin.item` slot (the settings modal's
+ * plugin-configuration cards) and moved plugin configuration to the Plugins
+ * page: ui-plugin-manager declares `plugins.bundle.config` (keyed by the
+ * bundle package name) and asks each entry for a `summary` line and a `page`
+ * form. Both registrations are kept — an absent slot only parks its inject
+ * callback — so one artifact serves either host (see the settingsScope
+ * block below).
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -38,7 +46,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { createElement } from 'react'
 import { ReviewView, type ReviewInjected } from './review-view.tsx'
-import { SettingsCard, type SettingsCardProps } from './settings-card.tsx'
+import { SettingsCard, SettingsPanel, type SettingsCardProps, type SettingsPanelProps } from './settings-card.tsx'
 import { createReviewSettings, type ReviewSettings, type ReviewSettingsBinderFace } from './review-settings.ts'
 import { en, NS, zh, type ReviewKey } from './locales.ts'
 import { subscribeGlassReady } from './glass.ts'
@@ -51,8 +59,16 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
     /** One plugin's card in the settings modal's plugins tab, keyed by the
      *  settings namespace it edits. Declared here because the declaring
-     *  ui-settings-plugins package is not in our dependency tree. */
+     *  ui-settings-plugins package is not in our dependency tree. Retired by
+     *  the host in 0.1.6-alpha.2 — the registration below still serves every
+     *  host up to that version. */
     'settings.plugin.item': { kind: 'keyed'; scope: 'root'; owner: { children?: never } }
+    /** A bundle's own configuration on the Plugins page, keyed by the bundle
+     *  package name; the owner asks for `summary` (the line under the title)
+     *  or `page` (the form body). Declared here for the same reason as the
+     *  row above — importing ui-plugin-manager would put it in the client
+     *  bundle's platform table, which no pre-alpha.2 host can satisfy. */
+    'plugins.bundle.config': { kind: 'keyed'; scope: 'root'; owner: { readonly view: 'summary' | 'page' } }
   }
 }
 
@@ -142,23 +158,39 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
       settings,
     }),
   }, ReviewView))
-  // Optional composition: bind the host-served preference namespace and claim
-  // its plugin-configuration card. A deployment without the settings surface
-  // never runs this callback — the tab keeps its localStorage fallback and
-  // the intersection filter leaves no card behind.
+  // Optional composition: bind the host-served preference namespace and
+  // publish the preference UI on whichever surface this host offers. A
+  // deployment without the settings surface never runs this callback — the
+  // tab keeps its localStorage fallback.
   // Registration rides the INJECTED scope (raw), not the outer ctx: a
-  // settingsScope that disappears later then takes the card with it instead
-  // of leaving it bound to a dead service.
+  // settingsScope that disappears later then takes the registration with it
+  // instead of leaving it bound to a dead service.
   ctx.inject(['settingsScope'], (raw) => {
     const scoped = raw as ClientContext & { settingsScope?: ReviewSettingsBinderFace }
     const binder = scoped.settingsScope
     if (binder === undefined) return
     scoped.effect(() => settings.attach(binder.bind({ namespace: SETTINGS_NAMESPACE })), 'dsh-git-review: settings scope')
+    // Two extension points, one artifact: the host declares at most one of
+    // them, and `slots.inject` on the absent one only parks its callback
+    // (owner unload cascades clear it). Both dispatch the same store, so the
+    // preference source never depends on which host generation is running.
+    //
+    // ≤ 0.1.6-alpha.1 — Settings → Plugins → Plugin configuration: a keyed
+    // card in the settings modal (declared by ui-settings-plugins).
     scoped.slots.inject('settings.plugin.item', () => scoped.slots.register({
       name: 'settings.plugin.item',
       key: SETTINGS_NAMESPACE,
       locale: NS,
       inject: () => ({ reviewSettings: settings.store, set: (field: Parameters<SettingsCardProps['set']>[0], value: string | boolean) => { settings.set(field, value) } }),
     }, props => createElement(SettingsCard, props as unknown as SettingsCardProps)))
+    // ≥ 0.1.6-alpha.2 — the Plugins page hosts configuration: the bundle's own
+    // page renders this entry between its description and its rows (declared
+    // by ui-plugin-manager, keyed by the bundle package name).
+    scoped.slots.inject('plugins.bundle.config', () => scoped.slots.register({
+      name: 'plugins.bundle.config',
+      key: SETTINGS_NAMESPACE,
+      locale: NS,
+      inject: () => ({ reviewSettings: settings.store, set: (field: Parameters<SettingsPanelProps['set']>[0], value: string | boolean) => { settings.set(field, value) } }),
+    }, props => createElement(SettingsPanel, props as unknown as SettingsPanelProps)))
   })
 }

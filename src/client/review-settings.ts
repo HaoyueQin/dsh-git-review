@@ -1,7 +1,9 @@
 /**
  * The review tab's preference store (browser half) — one observable snapshot
- * shared by the tab and the plugins-settings card, replacing the G-round
- * localStorage-only store plus CustomEvent bridge.
+ * shared by the tab and the plugin's preference surface (the settings card up
+ * to harness 0.1.6-alpha.1, `plugins.bundle.config` on the Plugins page from
+ * 0.1.6-alpha.2 on), replacing the G-round localStorage-only store plus
+ * CustomEvent bridge.
  *
  * Primary source: the host-served `dsh-git-review` settings namespace, bound
  * through ctx.settingsScope. The harness settings document persists the
@@ -10,7 +12,7 @@
  * scope round-trip), and writes are validated by the host schema.
  *
  * Degradation: a host without the settings seam (or a memory-mode browser)
- * never gets the namespace served — the settings card is not dispatched then,
+ * never gets the namespace served — the preference surface is not dispatched then,
  * and the tab falls back to the localStorage store (prefs.ts) with the same
  * instant-apply behavior. A legacy localStorage store is migrated into the
  * scope once, on the first ready section, and removed afterwards.
@@ -40,7 +42,7 @@ export interface ReviewSettingsBinderFace {
 /** What the store publishes and both consumers render. */
 export interface ReviewSettingsState {
   /** `ready` while the scope serves the section; `unavailable` falls back to
-   *  the localStorage store inside the tab (the card is not dispatched then). */
+   *  the localStorage store inside the tab (the preference surface is not dispatched then). */
   status: 'loading' | 'ready' | 'unavailable'
   prefs: ReviewPrefs
   /** Whether scope writes can land (memory-mode browsers are read-only). */
@@ -195,7 +197,7 @@ export function createReviewSettings(storage: PrefsStorage | undefined = typeof 
         return
       }
       // Fallback channel: tab-local persistence while no scope serves the
-      // section (the card is absent then, so no cross-surface sync is needed).
+      // section (no preference surface is dispatched then, so no cross-surface sync is needed).
       publish({ status: state.status, prefs: next, writable: state.writable })
       savePrefs(storage, next)
     },

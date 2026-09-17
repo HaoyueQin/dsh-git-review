@@ -1,12 +1,13 @@
 /**
  * The plugin's per-user preference namespace (host half).
  *
- * Registering this namespace through the harness settings seam is what makes
- * the plugin's card render inside the settings modal's "Plugins → Plugin
- * configuration" tab: that tab dispatches the intersection of host-served
- * namespaces and `settings.plugin.item` cards keyed by namespace, so the
- * host half must serve `dsh-git-review` for the browser half's card to show
- * (the G-round `settings.section` nav entry was replaced by that card).
+ * Registering this namespace through the harness settings seam is what lets
+ * the plugin's preference surface render at all: the browser half publishes
+ * that surface where the host offers plugin configuration — the Plugins
+ * page's entry for this bundle from harness 0.1.6-alpha.2 on
+ * (`plugins.bundle.config`), or the settings modal's plugin cards before that
+ * (`settings.plugin.item`, retired upstream in 0.1.6-alpha.2). So the host
+ * half must serve `dsh-git-review` either way.
  *
  * Every field is a display preference consumed in the browser (the host
  * never reads the section) — the host half only registers the schema. The

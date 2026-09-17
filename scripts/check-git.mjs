@@ -342,6 +342,11 @@ assert.ok(patch0 !== null && patch1 !== null)
   assert.equal(refs.ok, true)
   assert.ok(refs.refs.some(r => r.kind === 'branch' && r.name === 'main'))
   assert.ok(refs.refs.some(r => r.kind === 'tag' && r.name === 'v-test-1'))
+  // Natural tag order: two-digit runs must not compare as text — codepoint
+  // order listed v-test-10 between v-test-1 and v-test-2.
+  sh(repo, 'tag', 'v-test-2')
+  sh(repo, 'tag', 'v-test-10')
+  assert.deepEqual((await gitRefs(repo)).refs.filter(r => r.kind === 'tag').map(r => r.name), ['v-test-1', 'v-test-2', 'v-test-10'])
   const page0 = await gitLog(repo, 3, 0)
   assert.equal(page0.ok, true)
   assert.ok(page0.commits.length >= 1)
@@ -631,6 +636,11 @@ try {
   assert.equal(listed.ok, true)
   assert.ok(listed.entries.some(e => e.path === 'hello.txt' && e.kind === 'file'))
   assert.ok(listed.entries.some(e => e.path === 'sub' && e.kind === 'dir'))
+  // Natural entry order: dirs first, then names with digit runs by value.
+  writeFileSync(join(plain, 'f10.txt'), 'ten\n')
+  writeFileSync(join(plain, 'f9.txt'), 'nine\n')
+  const listedOrdered = await gitFsList(plain, undefined)
+  assert.deepEqual(listedOrdered.ok ? listedOrdered.entries.map(e => e.path) : [], ['sub', 'f9.txt', 'f10.txt', 'hello.txt'])
   const content = await gitFileContent(plain, 'hello.txt', undefined)
   assert.equal(content.ok, true)
   assert.equal(content.content, 'hi\n')
@@ -670,6 +680,19 @@ try {
   assert.ok(Array.isArray(lf.files))
   assert.ok(lf.files.includes('a.txt'))
   assert.equal(typeof lf.truncated, 'boolean')
+  // Natural path order end to end: git reports f10.txt before f9.txt in every
+  // feed (status, list-files, commit-files) — the host re-sorts all of them
+  // so the flat lists and the j/k file walk read 9 → 10.
+  writeFileSync(join(cov, 'f9.txt'), 'nine\n')
+  writeFileSync(join(cov, 'f10.txt'), 'ten\n')
+  const natStatus = await gitStatus(cov, null, null, false)
+  assert.deepEqual(natStatus.ok ? natStatus.files.map(file => file.path) : [], ['f9.txt', 'f10.txt'])
+  const natList = await gitListFiles(cov)
+  assert.deepEqual(natList.ok ? natList.files : [], ['a.txt', 'f9.txt', 'f10.txt'])
+  sh(cov, 'add', '-A')
+  sh(cov, 'commit', '-m', 'natural order fixtures')
+  const natCommit = await gitCommitFiles(cov, sh(cov, 'rev-parse', 'HEAD').trim())
+  assert.deepEqual(natCommit.ok ? natCommit.files.map(file => file.path) : [], ['f9.txt', 'f10.txt'])
   assert.equal((await gitOpenWith(cov, 'nope.txt', 'default', true)).ok, false)
   assert.equal((await gitOpenWith(cov, 'a.txt', 'evil-app', true)).ok, false)
   assert.equal((await gitOpenWith(cov, '.git', 'notepad', true)).ok, false, 'notepad refuses directories')

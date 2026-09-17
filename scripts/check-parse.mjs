@@ -18,6 +18,7 @@ import { collectMdAssets, defangRemoteImages, htmlFallbackForPreview, resolveMdA
 import { createViewedStore, parseViewed } from '../src/client/viewed.ts'
 import { createDraftBox, draftsKey, parseDrafts } from '../src/client/comment-drafts.ts'
 import { findBranchTip, isAncestorOrSelf, resolveRangeHash } from '../src/client/range-guard.ts'
+import { compareNatural } from '../src/natural-order.ts'
 
 // ── porcelain v1 -z ───────────────────────────────────────────────────────
 
@@ -1090,5 +1091,28 @@ assert.equal(needsScriptNotice('<noscript>enable JS</noscript>'), false)
 assert.equal(needsScriptNotice('<scriptless>not a tag</scriptless>'), false)
 assert.equal(needsScriptNotice('<style>@keyframes spin{to{transform:rotate(1turn)}}</style><svg><circle/></svg>'), false)
 assert.equal(needsScriptNotice(''), false)
+
+// 65. compareNatural: digit runs compare by VALUE (v0.3.2 < v0.3.10, file9 <
+//     file10), case/diacritics are ignored, and codepoint order settles the
+//     remaining ties. This is the order every ref list and every file tree
+//     ships — plain `<` put v0.3.10 before v0.3.2 in both tag popovers.
+const natural = (names) => [...names].sort(compareNatural)
+assert.deepEqual(
+  natural(['v0.3.10', 'v0.3.2', 'v0.3.1', 'v0.10.0', 'v0.9.0']),
+  ['v0.3.1', 'v0.3.2', 'v0.3.10', 'v0.9.0', 'v0.10.0'],
+)
+assert.deepEqual(natural(['file10.ts', 'file9.ts', 'file1.ts']), ['file1.ts', 'file9.ts', 'file10.ts'])
+assert.deepEqual(natural(['a.txt', 'A.txt', 'b.txt']), ['A.txt', 'a.txt', 'b.txt'], 'case-equal names tie-break on codepoints')
+assert.equal(compareNatural('x', 'x'), 0)
+assert.ok(compareNatural('v0.1.0-rc.1', 'v0.1.0') > 0, 'a prerelease follows its release')
+// 65b. The tree re-sorts its own rows with the same comparator (numeric
+//      names and case-equal names included), dirs still first.
+const natTree = buildFileTree([
+  { path: 'lib/f10.ts', x: ' ', y: 'M', added: 1, deleted: 0, binary: false, untracked: false },
+  { path: 'lib/F9.ts', x: ' ', y: 'M', added: 1, deleted: 0, binary: false, untracked: false },
+  { path: 'lib/f9.ts', x: ' ', y: 'M', added: 1, deleted: 0, binary: false, untracked: false },
+])
+const natLib = natTree.children[0]
+assert.deepEqual(natLib.kind === 'dir' ? natLib.children.map(c => c.name) : [], ['F9.ts', 'f9.ts', 'f10.ts'])
 
 console.log('check-parse: all assertions passed')

@@ -1,10 +1,12 @@
 /**
  * Changed-file tree building and status-badge derivation for the review tab.
  * The tree aggregates the flat porcelain file list by directory (dirs first,
- * plain codepoint order — deterministic across locales); filtering degrades
- * to a flat list, like Codex's file panel. No React — check-script friendly.
+ * names in natural order — `compareNatural`, so `file9` precedes `file10` and
+ * `v0.3.2` precedes `v0.3.10`); filtering degrades to a flat list, like
+ * Codex's file panel. No React — check-script friendly.
  */
 import type { ChangedFile } from '../contract.ts'
+import { compareNatural } from '../natural-order.ts'
 
 /** A directory node aggregating changed files beneath it. */
 export interface TreeDir {
@@ -30,12 +32,13 @@ export interface TreeFile {
 
 export type TreeEntry = TreeDir | TreeFile
 
-/** Sort dirs first, then files, each by name (plain codepoint order).
- *  Pure: returns a new array — callers assign the result back. */
+/** Sort dirs first, then files, each by name in natural order (numeric runs
+ *  by value — `v0.3.2` before `v0.3.10`). Pure: returns a new array —
+ *  callers assign the result back. */
 function sortChildren(children: TreeEntry[]): TreeEntry[] {
   return [...children].sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === 'dir' ? -1 : 1
-    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+    return compareNatural(a.name, b.name)
   })
 }
 

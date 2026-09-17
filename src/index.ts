@@ -93,6 +93,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { mergeStatus, numstatIndex, parseNumstatZ, parsePorcelainV1, parseStashLines } from './git-parse.ts'
 import { countMatches, EMPTY_TREE_ID, mergeDiffRows, normalizeBaseRef, OBJECT_ID_RE, parseBlamePorcelain, parseLogLines, parseNameStatusZ, refRange, sniffPreviewMime, splitDiffSections } from './git-parse.ts'
 import { GIT_TIMEOUT_MS, NETWORK_TIMEOUT_MS } from './action-timeouts.ts'
+import { compareNatural } from './natural-order.ts'
 import { installSettings } from './settings-schema.ts'
 import type { ChangedFile, GitBlamePayload, GitCommitFilesPayload, GitFileBytesPayload, GitFileContentPayload, GitFileDiffPayload, GitFileHistoryPayload, GitFsListPayload, GitLastCommitPayload, GitListFilesPayload, GitLogPayload, GitRefsPayload, GitSearchPayload, GitStashEntry, GitStatusPayload, GitWritePayload, OpenAppsPayload } from './contract.ts'
 import type { PreviewMime } from './git-parse.ts'
@@ -536,6 +537,8 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
       runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...wsFlags, ...range]),
     ])
     const files = mergeDiffRows(parseNameStatusZ(nameStatusRaw), numstatIndex(parseNumstatZ(numstatRaw)))
+    // Same natural re-sort as the worktree path below.
+    files.sort((a, b) => compareNatural(a.path, b.path))
     let added = 0
     let deleted = 0
     for (const file of files) {
@@ -607,6 +610,10 @@ export async function gitStatus(cwd: unknown, base: unknown, target: unknown, ws
     if (probe !== null) untrackedCounts.set(relPath, probe)
   })
   const files: ChangedFile[] = mergeStatus(finalEntries, numstat, untrackedCounts)
+  // git lists paths in codepoint order (f10.txt before f9.txt); re-sort them
+  // naturally so the flat file list and the j/k file walk agree with the tree
+  // the client builds from these same rows.
+  files.sort((a, b) => compareNatural(a.path, b.path))
   // Worktree blob hashes (the reviewed marker rides them): one hash-object
   // process covers every existing worktree file; deleted rows have no file
   // and stay blob-less, which the client renders as "not viewable".
@@ -1134,7 +1141,8 @@ export async function gitFileHistory(cwd: unknown, path: unknown): Promise<GitFi
 /** Entry cap for the all-files tree (a review tab is not a file manager). */
 const LIST_FILES_CAP = 20_000
 
-/** One `list-files` answer: tracked + untracked repository files, sorted, deduped. */
+/** One `list-files` answer: tracked + untracked repository files, naturally
+ *  sorted, deduped. */
 export async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
   if (typeof cwd !== 'string' || cwd === '') throw new Error('cwd is required')
   const repoRoot = await resolveRepository(cwd)
@@ -1157,7 +1165,7 @@ export async function gitListFiles(cwd: unknown): Promise<GitListFilesPayload> {
   const files = new Set<string>()
   for (const chunk of tokens(tracked.stdout, tracked.truncated)) if (chunk !== '') files.add(chunk)
   for (const chunk of tokens(others.stdout, others.truncated)) if (chunk !== '') files.add(chunk)
-  const sorted = [...files].sort()
+  const sorted = [...files].sort(compareNatural)
   return { ok: true, files: sorted.slice(0, LIST_FILES_CAP), truncated: tracked.truncated || others.truncated || sorted.length > LIST_FILES_CAP }
 }
 
@@ -1200,7 +1208,7 @@ export async function gitFsList(cwd: unknown, relPath: unknown): Promise<GitFsLi
       entries.push({ path: p, name: entry.name, kind: 'file', ...(size !== undefined ? { size } : {}) })
     }
   }
-  entries.sort((a, b) => a.kind !== b.kind ? (a.kind === 'dir' ? -1 : 1) : (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+  entries.sort((a, b) => a.kind !== b.kind ? (a.kind === 'dir' ? -1 : 1) : compareNatural(a.name, b.name))
   const truncated = entries.length > FS_LIST_CAP
   return { ok: true, root: workspaceRoot, path: normalizedDir, entries: entries.slice(0, FS_LIST_CAP), truncated }
 }
@@ -1260,9 +1268,12 @@ export async function gitRefs(cwd: unknown): Promise<GitRefsPayload> {
     refs.push(entry)
   }
   const order = { branch: 0, remote: 1, tag: 2 } as const
+  // Grouped branch → remote → tag, each group in natural name order: tags
+  // like v0.3.2 must precede v0.3.10 (plain codepoint order put v0.3.10
+  // first — what the branch popover and the compare picker used to list).
   refs.sort((a, b) => order[a.kind] !== order[b.kind]
     ? order[a.kind] - order[b.kind]
-    : a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+    : compareNatural(a.name, b.name))
   return { ok: true, refs: refs.slice(0, REFS_CAP), truncated: refs.length > REFS_CAP }
 }
 
@@ -1331,6 +1342,9 @@ export async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<Git
     runGit(repoRoot, ['diff', '--name-status', '-z', '--no-color', '-M', ...range]),
   ])
   const files = mergeDiffRows(parseNameStatusZ(nameStatusRaw), numstatIndex(parseNumstatZ(numstatRaw)))
+  // Same natural re-sort as `status`: git's codepoint path order would put
+  // f10.txt before f9.txt in the graph's flat file list.
+  files.sort((a, b) => compareNatural(a.path, b.path))
   let added = 0
   let deleted = 0
   for (const file of files) {
@@ -1343,7 +1357,9 @@ export async function gitCommitFiles(cwd: unknown, commit: unknown): Promise<Git
 /** One `search` answer: case-insensitive per-file match counts over the full
  *  worktree-vs-HEAD diff (or a ref-range diff when `target` is given) plus
  *  untracked file content (bounded, worktree mode only). The response sorts
- *  loudest-first so the tree's top hit is the most-changed file. */
+ *  loudest-first so the tree's top hit is the most-changed file; equal counts
+ *  fall back to the naturally ordered path (git's own output order is an
+ *  implementation detail, not a ranking). */
 /** Regex source cap for the in-process matcher: a pathological pattern
  *  ((a+)+$ on 20k rows) backtracks inside ONE exec call, which no iteration
  *  cap can stop — and the host loop is shared by the whole harness. Overlong
@@ -1415,7 +1431,7 @@ export async function gitSearch(cwd: unknown, query: unknown, base: unknown, tar
       if (result.code !== 0) {
         throw new Error(result.stderr.trim() || result.stdout.trim() || 'git grep failed')
       }
-      return { ok: true, matches: parseGrepCounts(result.stdout, targetCommit).sort((a, b) => b.count - a.count), truncated: false }
+      return { ok: true, matches: parseGrepCounts(result.stdout, targetCommit).sort((a, b) => b.count - a.count || compareNatural(a.path, b.path)), truncated: false }
     }
     const result = await runGitCapture(repoRoot, grepArgs)
     if (result.code !== 0 && result.code !== 1) {
@@ -1426,7 +1442,7 @@ export async function gitSearch(cwd: unknown, query: unknown, base: unknown, tar
     const truncated = await scanUntrackedMatches(repoRoot, counts, needle, options)
     const matches = [...counts.entries()]
       .map(([path, count]) => ({ path, count }))
-      .sort((a, b) => b.count - a.count)
+      .sort((a, b) => b.count - a.count || compareNatural(a.path, b.path))
     return { ok: true, matches, truncated }
   }
 
@@ -1466,12 +1482,12 @@ export async function gitSearch(cwd: unknown, query: unknown, base: unknown, tar
     const count = safeCount(section.body, needle, options)
     if (count > 0) counts.set(section.path, count)
   }
-  if (refsMode) return { ok: true, matches: [...counts.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count), truncated: searchCut }
+  if (refsMode) return { ok: true, matches: [...counts.entries()].map(([path, count]) => ({ path, count })).sort((a, b) => b.count - a.count || compareNatural(a.path, b.path)), truncated: searchCut }
   // Untracked content never appears in `git diff` — scan bounded prefixes.
   const truncated = await scanUntrackedMatches(repoRoot, counts, needle, options)
   const matches = [...counts.entries()]
     .map(([path, count]) => ({ path, count }))
-    .sort((a, b) => b.count - a.count)
+    .sort((a, b) => b.count - a.count || compareNatural(a.path, b.path))
   return { ok: true, matches, truncated: searchCut || truncated }
 }
 

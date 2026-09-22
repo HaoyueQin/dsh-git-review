@@ -204,4 +204,83 @@ const hostNetworkActions = [...networkFns].map(fn => actionByFn.get(fn))
 assert.ok(hostNetworkActions.every(name => typeof name === 'string'), 'every network handler is dispatched by name')
 assert.deepEqual([...hostNetworkActions].sort(), [...declaredActions].sort(), 'host NETWORK_TIMEOUT_MS actions == NETWORK_ACTIONS')
 
+// 11. Settings seam generations (2026-09-23). The harness REPLACED this seam
+//     in 0.1.7-alpha.1 — `settings.register` became a plugin's own volatile
+//     Config plus `settings.configure` — and the loss is SILENT: the inject
+//     callback parks or throws with no log, the Plugins page drops the whole
+//     configuration section, and preferences fall back to localStorage. Three
+//     things therefore have to stay true in source:
+//       a) no direct `.settings.register(...)` — going through a local alias
+//          forces every call site through the capability probe;
+//       b) both capability probes exist (register for ≤0.1.6, configure for
+//          ≥0.1.7), so one generation can never be dropped silently;
+//       c) `.volatile()` is never called directly: it exists only from
+//          schemastery 3.18.4 (the 0.1.7 host). On a 0.1.5/0.1.6 host an
+//          unguarded call throws while the module is evaluated, which fails the
+//          whole plugin tree (the v0.1.3 accident); the `live()` helper is the
+//          only sanctioned caller, and it probes first.
+//     The namespace, the loader entry id and the package name are one key on
+//     every host generation (patch id ↔ package name is lock 3).
+const settingsSource = read('src/settings-schema.ts')
+const hostSources = new Map(readdirSync(join(ROOT, 'src'))
+  .filter(file => file.endsWith('.ts'))
+  .map(file => [file, read(join('src', file)).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')]))
+const directRegister = [...hostSources].filter(([, source]) => /\.settings\s*\.\s*register\s*\(/.test(source)).map(([file]) => file)
+assert.deepEqual(directRegister, [], 'direct settings.register call sites (probe the capability through an alias instead): ' + directRegister.join(', '))
+assert.ok(/typeof\s+register\s*===\s*'function'/.test(settingsSource), 'the ≤0.1.6 register probe is present')
+assert.ok(/typeof\s+configure\s*===\s*'function'/.test(settingsSource), 'the ≥0.1.7 configure probe is present')
+assert.ok(/VolatileCapable/.test(settingsSource) && /typeof\s+marker\s*===\s*'function'/.test(settingsSource), 'the .volatile() capability probe is present')
+const sourceFiles = []
+const walkSource = (dir) => {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) { walkSource(full); continue }
+    if (/\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith('.d.ts')) sourceFiles.push(full)
+  }
+}
+walkSource(join(ROOT, 'src'))
+const volatileCalls = sourceFiles.filter((file) => {
+  // Comments describe the trap (and this lock), so they are stripped first —
+  // the same discipline lock 8 uses.
+  const source = readFileSync(file, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+  return /\.volatile\s*\(/.test(source)
+})
+assert.deepEqual(volatileCalls, [], 'unguarded .volatile() call sites (use the live() helper): ' + volatileCalls.map(f => f.slice(ROOT.length + 1)).join(', '))
+const namespaceLiteral = settingsSource.match(/SETTINGS_NAMESPACE\s*=\s*'([^']+)'/)?.[1]
+assert.equal(namespaceLiteral, pkg.name, 'the settings namespace equals the package name (0.1.7 keys the config form by the entry id)')
+// 11d. The entry module must RE-EXPORT that schema: cordis reads plugin Config
+//      off the module, so a schema that only exists in a sibling file is never
+//      seen — the namespace silently drops out of the served set (no form, no
+//      error). Found exactly that way against a real 0.1.7-alpha.2 host.
+const entrySource = read('src/index.ts')
+assert.ok(
+  /export\s*\{[^}]*\bConfig\b[^}]*\}\s*from\s*'\.\/settings-schema\.ts'/.test(entrySource),
+  'src/index.ts re-exports Config (0.1.7 reads the schema off the plugin module)',
+)
+
+// 12. Both settings generations reach the built CLIENT bundle. The client half
+//     binds `configForms` on 0.1.7+ and `settingsScope` up to 0.1.6, and
+//     publishes its preference UI on two slots (the ≤0.1.6-alpha.1 settings
+//     card and the ≥0.1.6-alpha.2 Plugins-page entry). A refactor that drops
+//     one leaves the other host generation with no preference surface at all
+//     and no error anywhere, so the artifact itself is asserted — rebuild lib/
+//     before trusting this lock.
+//
+//     The markers are the inject's service READS, not the bare names: the
+//     legacy branch probes `ctx.get('configForms')`, so asserting the string
+//     alone passed with the whole 0.1.7 path deleted (caught by deliberate
+//     sabotage, 2026-09-23 — the reason this lock reads property accesses).
+const clientBundle = read('lib/client.js')
+const BUNDLE_MARKERS = [
+  [/\w+\.configForms\b/, 'the ≥0.1.7 ctx.configForms binding'],
+  [/\w+\.settingsScope\b/, 'the ≤0.1.6 ctx.settingsScope binding'],
+  [/settings\.plugin\.item/, 'the settings-modal preference card slot'],
+  [/plugins\.bundle\.config/, 'the Plugins-page preference entry slot'],
+]
+for (const [pattern, label] of BUNDLE_MARKERS) {
+  assert.ok(pattern.test(clientBundle), 'built client bundle is missing ' + label + ' (rebuild lib/ after refactors)')
+}
+
 console.log('check-meta: all assertions passed (' + refs.size + ' css refs, ' + cssDef.size + ' css defs, ' + dynamicKeys.length + ' locale keys, ' + argKeys.length + ' actions)')

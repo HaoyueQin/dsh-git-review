@@ -39,6 +39,19 @@ export interface ReviewSettingsBinderFace {
   bind(spec: { namespace: string }): ReviewSettingsScopeLike
 }
 
+/** One harness 0.1.7 configuration form, as consumed (see
+ *  {@link configFormScope}). */
+export interface ReviewConfigFormLike {
+  getSnapshot(): { status: 'loading' | 'ready' | 'unavailable'; value: unknown; writable: boolean }
+  subscribe(listener: () => void): () => void
+  set(field: string, value: unknown): Promise<unknown>
+}
+
+/** The ctx.configForms face, as consumed. */
+export interface ReviewConfigFormsFace {
+  get(namespace: string): ReviewConfigFormLike | undefined
+}
+
 /** What the store publishes and both consumers render. */
 export interface ReviewSettingsState {
   /** `ready` while the scope serves the section; `unavailable` falls back to
@@ -73,6 +86,37 @@ export function prefsFromSection(value: unknown): ReviewPrefs {
 export function sectionIsDefault(value: unknown): boolean {
   const prefs = normalizePrefs(value)
   return prefsEqual(prefs, DEFAULT_PREFS)
+}
+
+/**
+ * Adapt one harness 0.1.7 configuration form onto the scope face the store
+ * consumes.
+ *
+ * 0.1.7 replaced `ctx.settingsScope` with `ctx.configForms`: the plugin's own
+ * `Config` (its `.volatile()` fields) is served per profile entry id, the
+ * snapshot carries `{ status, value, base, user, revision, writable, mode }`,
+ * and `set` resolves to whether the host accepted the write (a refusal is
+ * followed by a host-state re-read, which republishes the snapshot). The store
+ * reads only status/value/writable and writes one field at a time, so the
+ * mapping is thinning plus one guard: a `ready` snapshot whose section has not
+ * been accepted yet (`value === undefined`) is still `loading` here — the
+ * harness's own consumers ignore an undefined section the same way.
+ * @param form - the bound configuration form.
+ * @returns the scope face {@link ReviewSettings.attach} takes.
+ */
+export function configFormScope(form: ReviewConfigFormLike): ReviewSettingsScopeLike {
+  return {
+    getSnapshot() {
+      const snapshot = form.getSnapshot()
+      if (snapshot.status === 'unavailable') return { status: 'unavailable', value: undefined, writable: false }
+      if (snapshot.status !== 'ready' || snapshot.value === undefined) {
+        return { status: 'loading', value: undefined, writable: false }
+      }
+      return { status: 'ready', value: snapshot.value, writable: snapshot.writable }
+    },
+    subscribe: listener => form.subscribe(listener),
+    set: (field, value) => form.set(field, value).then(() => undefined),
+  }
 }
 
 /** The fields worth carrying over from a legacy localStorage store, or null

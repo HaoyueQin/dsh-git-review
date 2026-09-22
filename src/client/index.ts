@@ -30,8 +30,14 @@
  * page: ui-plugin-manager declares `plugins.bundle.config` (keyed by the
  * bundle package name) and asks each entry for a `summary` line and a `page`
  * form. Both registrations are kept — an absent slot only parks its inject
- * callback — so one artifact serves either host (see the settingsScope
- * block below).
+ * callback — so one artifact serves either host.
+ *
+ * 0.1.7-alpha.1 REPLACED the settings seam itself: `ctx.settingsScope` became
+ * `ctx.configForms` (the plugin's own volatile `Config`, keyed by the profile
+ * entry id), and the host half's `settings.register` became
+ * `settings.configure`. Both generations are served here — the binding funnel
+ * below picks whichever service this host provides (see the block before the
+ * registrations).
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -47,7 +53,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { createElement } from 'react'
 import { ReviewView, type ReviewInjected } from './review-view.tsx'
 import { SettingsCard, SettingsPanel, type SettingsCardProps, type SettingsPanelProps } from './settings-card.tsx'
-import { createReviewSettings, type ReviewSettings, type ReviewSettingsBinderFace } from './review-settings.ts'
+import { createReviewSettings, configFormScope, type ReviewSettings, type ReviewSettingsBinderFace, type ReviewConfigFormsFace } from './review-settings.ts'
 import { en, NS, zh, type ReviewKey } from './locales.ts'
 import { subscribeGlassReady } from './glass.ts'
 
@@ -158,23 +164,25 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
       settings,
     }),
   }, ReviewView))
-  // Optional composition: bind the host-served preference namespace and
-  // publish the preference UI on whichever surface this host offers. A
-  // deployment without the settings surface never runs this callback — the
-  // tab keeps its localStorage fallback.
-  // Registration rides the INJECTED scope (raw), not the outer ctx: a
-  // settingsScope that disappears later then takes the registration with it
-  // instead of leaving it bound to a dead service.
-  ctx.inject(['settingsScope'], (raw) => {
-    const scoped = raw as ClientContext & { settingsScope?: ReviewSettingsBinderFace }
-    const binder = scoped.settingsScope
-    if (binder === undefined) return
-    scoped.effect(() => settings.attach(binder.bind({ namespace: SETTINGS_NAMESPACE })), 'dsh-git-review: settings scope')
-    // Two extension points, one artifact: the host declares at most one of
-    // them, and `slots.inject` on the absent one only parks its callback
-    // (owner unload cascades clear it). Both dispatch the same store, so the
-    // preference source never depends on which host generation is running.
-    //
+  // One preference source per host generation, bound once (both funnels feed
+  // the same store, so the tab and the preference surface never depend on
+  // which host generation is running):
+  //  - ≥ 0.1.7 — `configForms` serves this plugin's own Config (its volatile
+  //    fields) keyed by the profile entry id. `settingsScope` was REMOVED
+  //    upstream in 0.1.7, so a build that only knows the old service silently
+  //    loses the whole configuration section there (no error, no log — see
+  //    handover §12.5-54).
+  //  - ≤ 0.1.6 — `settingsScope` serves the namespace registered by the host
+  //    half. `configForms` does not exist yet, so that inject stays parked.
+  // Either way the binding and the registrations ride the INJECTED scope
+  // (raw): a settings service that disappears later then takes them with it
+  // instead of leaving them bound to a dead service.
+  let settingsBound = false
+  /** Publish the preference UI on whichever config surface this host declares;
+   *  both dispatch the same store, and an absent slot only parks its callback
+   *  (the owner's unload cascades the clear), so one artifact serves both
+   *  generations. */
+  const publishPreferenceSurface = (scoped: ClientContext): void => {
     // ≤ 0.1.6-alpha.1 — Settings → Plugins → Plugin configuration: a keyed
     // card in the settings modal (declared by ui-settings-plugins).
     scoped.slots.inject('settings.plugin.item', () => scoped.slots.register({
@@ -185,12 +193,37 @@ export function apply(ctx: ClientContext & { sessions: ISessions }): void {
     }, props => createElement(SettingsCard, props as unknown as SettingsCardProps)))
     // ≥ 0.1.6-alpha.2 — the Plugins page hosts configuration: the bundle's own
     // page renders this entry between its description and its rows (declared
-    // by ui-plugin-manager, keyed by the bundle package name).
+    // by ui-plugin-manager, keyed by the bundle package name). That page never
+    // passes a form (only `plugins.item` and `plugins.row.config` get one), so
+    // this entry reads the shared store exactly like the card above.
     scoped.slots.inject('plugins.bundle.config', () => scoped.slots.register({
       name: 'plugins.bundle.config',
       key: SETTINGS_NAMESPACE,
       locale: NS,
       inject: () => ({ reviewSettings: settings.store, set: (field: Parameters<SettingsPanelProps['set']>[0], value: string | boolean) => { settings.set(field, value) } }),
     }, props => createElement(SettingsPanel, props as unknown as SettingsPanelProps)))
+  }
+  ctx.inject(['configForms'], (raw) => {
+    if (settingsBound) return
+    const scoped = raw as ClientContext & { configForms?: ReviewConfigFormsFace }
+    const forms = scoped.configForms
+    if (forms === undefined || typeof forms.get !== 'function') return
+    const form = forms.get(SETTINGS_NAMESPACE)
+    if (form === undefined) return
+    settingsBound = true
+    scoped.effect(() => settings.attach(configFormScope(form)), 'dsh-git-review: config form')
+    publishPreferenceSurface(scoped)
+  })
+  ctx.inject(['settingsScope'], (raw) => {
+    // A host that already offers the 0.1.7 form service must not also bind the
+    // legacy namespace: that host no longer serves registered namespaces, so
+    // the modern path owns the binding there.
+    if (settingsBound || ctx.get('configForms') !== undefined) return
+    const scoped = raw as ClientContext & { settingsScope?: ReviewSettingsBinderFace }
+    const binder = scoped.settingsScope
+    if (binder === undefined) return
+    settingsBound = true
+    scoped.effect(() => settings.attach(binder.bind({ namespace: SETTINGS_NAMESPACE })), 'dsh-git-review: settings scope')
+    publishPreferenceSurface(scoped)
   })
 }

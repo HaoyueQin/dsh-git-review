@@ -105,6 +105,16 @@ const HASH_ONLY_RE = OBJECT_ID_RE
 
 export const name = 'dsh-git-review'
 
+/**
+ * The plugin's own editable configuration, re-exported because cordis reads the
+ * schema off the MODULE (harness ≥0.1.7 derives config forms from a plugin's
+ * exported `Config`, keyed by this entry id). Without this re-export the
+ * namespace is silently never served: no form, no error, preferences fall back
+ * to localStorage. The schema itself lives in src/settings-schema.ts, where the
+ * same object also serves the ≤0.1.6 settings seam.
+ */
+export { Config } from './settings-schema.ts'
+
 /** The webServer carrier hosts this plugin's fenced prefix route when present.
  *  Optional composition (harness 0.1.5-alpha.1 made the web carrier optional in
  *  ClientModuleRegistry): the route registers now if the service is already

@@ -97,3 +97,6 @@ pnpm build          # lib/index.js（node 端）+ lib/client.js（浏览器端 b
 </p>
 
 MIT © HaoyueQin
+
+插件图标复刻自 Jason Long 设计的 Git logo，依
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) 授权使用。

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git Review",
+    "description": "Workspace changes, diffs and a commit graph with guarded git operations, in a Review tab next to Chat."
+  }
+}

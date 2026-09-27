@@ -99,3 +99,6 @@ pnpm build          # lib/index.js (node) + lib/client.js (browser factory bundl
 </p>
 
 MIT © HaoyueQin
+
+The plugin icon reproduces the Git logo by Jason Long, licensed under the
+[Creative Commons Attribution 3.0 Unported License](https://creativecommons.org/licenses/by/3.0/).

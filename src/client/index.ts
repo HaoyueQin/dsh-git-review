@@ -17,7 +17,7 @@
  *
  * Kernel contract: DeepSeek Harness >= 0.1.2-rc.1. The conversation.view
  * slot, the session-scope runtime shares and the settings card carry their
- * rc.1 shapes (re-verified unchanged through 0.1.6-alpha.2 — re-verify per
+ * rc.1 shapes (re-verified unchanged through 0.2.0-rc.1 — re-verify per
  * new harness, same policy as dsh-diff-stat). The 0.1.6 diff moved
  * composer-only types into ui-conversation's contract/draft-editor.ts and
  * added the conversation.input.permission seat; neither is touched here,
@@ -38,6 +38,12 @@
  * `settings.configure`. Both generations are served here — the binding funnel
  * below picks whichever service this host provides (see the block before the
  * registrations).
+ *
+ * 0.2.0-rc.1 changed none of the seams this plugin consumes: the
+ * conversation.view slot row, ui-slots' registration API, the settings
+ * double seam, the webServer carrier and the platform module table are all
+ * unchanged — its diff is conversation-flow internals (composer, input hub,
+ * stop shortcut, window-drag recall), none consumed here.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
